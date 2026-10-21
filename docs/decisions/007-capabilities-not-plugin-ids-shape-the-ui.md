@@ -1,6 +1,6 @@
 # 007: Capabilities, not plugin ids, shape the UI
 
-Status: Accepted
+Status: Accepted. Amended by 019.
 
 ## Decision
 

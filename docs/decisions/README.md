@@ -29,3 +29,5 @@ started, not when it is merged.
 | 016 | [Plans and evidence are tracked](016-plans-and-evidence-are-tracked.md)                                                                   |
 | 017 | [Database values cross the wire as the database prints them](017-database-values-cross-the-wire-as-the-database-prints-them.md)           |
 | 018 | [The datasource comes from the environment until there is a list](018-the-datasource-comes-from-the-environment-until-there-is-a-list.md) |
+| 019 | [Connection forms are manifest data](019-connection-forms-are-manifest-data.md)                                                           |
+| 020 | [Secrets live in main and reach only their engine](020-secrets-live-in-main-and-reach-only-their-engine.md)                               |
