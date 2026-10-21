@@ -32,3 +32,4 @@ started, not when it is merged.
 | 019 | [Connection forms are manifest data](019-connection-forms-are-manifest-data.md)                                                           |
 | 020 | [Secrets live in main and reach only their engine](020-secrets-live-in-main-and-reach-only-their-engine.md)                               |
 | 021 | [Main stops engines, and Run reconnects](021-main-stops-engines-and-run-reconnects.md)                                                    |
+| 022 | [The schema is the unit of introspection](022-the-schema-is-the-unit-of-introspection.md)                                                 |
