@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { APP_ACTIONS } from "@table-craft/desktop/renderer/actions/appActions.js";
+import { ALL_ACTIONS } from "@table-craft/desktop/renderer/actions/allActions.js";
 import { createKeyDispatcher, findClashes } from "@table-craft/desktop/renderer/actions/keymap.js";
 import { createActionRegistry, defineAction } from "@table-craft/desktop/renderer/actions/registry.js";
 import { IDLE_CONTEXT, keydown } from "./support.js";
@@ -25,7 +25,7 @@ function dispatcherWith(enabled: boolean, paletteOpen = false) {
 
 describe("keymap", () => {
   it("givenRegisteredActions_whenShortcutsCompared_thenNoTwoShareAChord", () => {
-    expect(findClashes(APP_ACTIONS)).toEqual([]);
+    expect(findClashes(ALL_ACTIONS)).toEqual([]);
   });
 
   it("givenTwoActionsOnOneChord_whenCompared_thenClashNamesBoth", () => {

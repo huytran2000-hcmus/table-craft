@@ -1,0 +1,134 @@
+import { describe, expect, it } from "vitest";
+import {
+  datasourceKey,
+  namespaceKey,
+  objectGroupKey,
+  pathKey,
+  relationKey,
+  revealKeys,
+  type ExplorerRow,
+} from "@table-craft/desktop/renderer/model/explorerTree.js";
+import { AUDIT_PATH, LOADED_PG, outline, PUBLIC_PATH, rowsOf } from "./catalogFixtures.js";
+
+const DATABASE_KEY = namespaceKey("pg", ["table_craft"]);
+const PUBLIC_KEY = namespaceKey("pg", PUBLIC_PATH);
+const TABLES_KEY = objectGroupKey("pg", PUBLIC_PATH, "tables");
+const ORDERS_KEY = relationKey("pg", PUBLIC_PATH, "orders");
+
+function expanded(...keys: readonly string[]): ReadonlySet<string> {
+  return new Set([datasourceKey("pg"), ...keys]);
+}
+
+function row(rows: readonly ExplorerRow[], label: string): ExplorerRow | undefined {
+  return rows.find((candidate) => candidate.label === label);
+}
+
+describe("explorer tree", () => {
+  it("givenSystemSchemasHidden_whenTreeBuilt_thenSystemNamespacesAreAbsent", () => {
+    const hidden = outline(rowsOf({ expanded: expanded(DATABASE_KEY) }));
+    const shown = outline(rowsOf({ expanded: expanded(DATABASE_KEY), showSystem: true }));
+
+    expect(hidden).toEqual(["0 pg", "1 table_craft", "2 audit", "2 public"]);
+    expect(shown).toEqual(["0 pg", "1 table_craft", "2 audit", "2 information_schema", "2 pg_catalog", "2 public"]);
+  });
+
+  it("givenDescribedNamespace_whenExpanded_thenGroupsShowCountsAndOnlyWhenNonEmpty", () => {
+    const rows = rowsOf({ expanded: expanded(DATABASE_KEY, PUBLIC_KEY) });
+
+    expect(outline(rows).slice(3)).toEqual(["2 public", "3 tables", "3 views"]);
+    expect(
+      rows.filter((candidate) => candidate.node.kind === "objectGroup").map((candidate) => candidate.node),
+    ).toEqual([
+      expect.objectContaining({ group: "tables", count: 2 }),
+      expect.objectContaining({ group: "views", count: 1 }),
+    ]);
+  });
+
+  it("givenNamespaceNeverDescribed_whenExpanded_thenALoadingRowStandsInForItsObjects", () => {
+    const rows = rowsOf({ expanded: expanded(DATABASE_KEY, namespaceKey("pg", AUDIT_PATH)) });
+
+    expect(outline(rows)).toEqual(["0 pg", "1 table_craft", "2 audit", "3 loading…", "2 public"]);
+  });
+
+  it("givenCollapsedTable_whenTreeBuilt_thenColumnsAreNotRows", () => {
+    const rows = rowsOf({ expanded: expanded(DATABASE_KEY, PUBLIC_KEY, TABLES_KEY) });
+
+    expect(outline(rows).slice(5)).toEqual(["4 customers", "4 orders", "3 views"]);
+    expect(row(rows, "orders")).toMatchObject({ expandable: true, expanded: false });
+    expect(row(rows, "customer_id")).toBeUndefined();
+  });
+
+  it("givenExpandedOrders_whenTreeBuilt_thenItsGroupsAndColumnMarkersShow", () => {
+    const columnsKey = rowsOf({ expanded: expanded(DATABASE_KEY, PUBLIC_KEY, TABLES_KEY, ORDERS_KEY) }).find(
+      (candidate) => candidate.label === "columns",
+    )?.key;
+    const rows = rowsOf({ expanded: expanded(DATABASE_KEY, PUBLIC_KEY, TABLES_KEY, ORDERS_KEY, columnsKey ?? "") });
+
+    expect(outline(rows).slice(6, 15)).toEqual([
+      "4 orders",
+      "5 columns",
+      "6 id",
+      "6 customer_id",
+      "6 total",
+      "6 placed_at",
+      "5 keys",
+      "5 foreign keys",
+      "5 indexes",
+    ]);
+    expect(row(rows, "id")?.node).toMatchObject({ kind: "column", primary: true, foreign: false });
+    expect(row(rows, "customer_id")?.node).toMatchObject({ kind: "column", primary: false, foreign: true });
+  });
+
+  it("givenTableWithNoIndexes_whenTreeBuilt_thenNoIndexesGroup", () => {
+    const customers = relationKey("pg", PUBLIC_PATH, "customers");
+    const rows = rowsOf({ expanded: expanded(DATABASE_KEY, PUBLIC_KEY, TABLES_KEY, customers) });
+
+    expect(outline(rows).slice(6, 9)).toEqual(["5 columns", "5 keys", "4 orders"]);
+  });
+
+  it("givenDatasourceWithoutSchemaTree_whenTreeBuilt_thenItCannotExpand", () => {
+    const rows = rowsOf({ canExpand: () => false, expanded: expanded() });
+
+    expect(rows).toEqual([expect.objectContaining({ label: "pg", expandable: false, expanded: false })]);
+  });
+
+  it("givenListingFailed_whenDatasourceExpanded_thenAnErrorRowSaysWhy", () => {
+    const error = { code: "introspectionFailed" as const, message: "permission denied", hint: "Ask for access." };
+    const rows = rowsOf({
+      expanded: expanded(),
+      catalogs: { pg: { namespaces: null, loading: false, error, namespaceStates: {} } },
+    });
+
+    expect(rows[1]?.node).toEqual({ kind: "error", datasourceId: "pg", error });
+  });
+
+  it("givenDescribeFailed_whenNamespaceExpanded_thenAnErrorRowSaysWhyAndNoLoadingRow", () => {
+    const error = { code: "introspectionFailed" as const, message: "permission denied for schema audit", hint: "Ask." };
+    const rows = rowsOf({
+      expanded: expanded(DATABASE_KEY, namespaceKey("pg", AUDIT_PATH)),
+      catalogs: {
+        pg: {
+          ...LOADED_PG,
+          namespaceStates: { [pathKey(AUDIT_PATH)]: { described: null, loading: false, error } },
+        },
+      },
+    });
+
+    expect(outline(rows)).toEqual([
+      "0 pg",
+      "1 table_craft",
+      "2 audit",
+      "3 permission denied for schema audit",
+      "2 public",
+    ]);
+    expect(rows[3]?.node).toEqual({ kind: "error", datasourceId: "pg", error });
+  });
+
+  it("givenRelation_whenRevealed_thenEveryAncestorIsExpandedAndTheRelationIsLast", () => {
+    const keys = revealKeys("pg", PUBLIC_PATH, { name: "orders", kind: "table" });
+    const rows = rowsOf({ expanded: new Set(keys.slice(0, -1)) });
+
+    expect(keys[keys.length - 1]).toBe(ORDERS_KEY);
+    expect(rows.some((candidate) => candidate.key === ORDERS_KEY)).toBe(true);
+  });
+});

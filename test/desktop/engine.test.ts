@@ -4,9 +4,16 @@ import type { PluginLoadResult } from "@table-craft/core";
 import sqlite from "@table-craft/plugin-sqlite";
 import { createEngine, probeDatasource } from "@table-craft/desktop/engine/engine.js";
 import { createLifetime } from "@table-craft/desktop/engine/lifetime.js";
-import type { EngineResponse, ExecutedStatement, ResultWindow } from "@table-craft/desktop/engine/protocol.js";
+import type {
+  DescribedCatalog,
+  EngineResponse,
+  ExecutedStatement,
+  Namespace,
+  ResultWindow,
+} from "@table-craft/desktop/engine/protocol.js";
 import { RESULT_WINDOW_ROWS } from "@table-craft/desktop/engine/protocol.js";
 import { fakeManifest, SQLITE_MANIFEST } from "../support/manifests.js";
+import { seededSqliteFile } from "../support/sqliteFixture.js";
 
 const SQLITE_DIRECTORY = "plugins/sqlite";
 const LOADED_SQLITE: PluginLoadResult = {
@@ -186,7 +193,7 @@ describe("engine", () => {
   it("givenSessionOpened_whenAnswered_thenCarriesPluginNameAndCapabilities", async () => {
     const response = await connected().handle({ id: 1, type: "session.open" });
 
-    expect(resultOf(response)).toMatchObject({ pluginName: "SQLite", capabilities: ["sql"] });
+    expect(resultOf(response)).toMatchObject({ pluginName: "SQLite", capabilities: ["sql", "schemaTree"] });
   });
 
   it("givenSessionOpened_whenAnswered_thenCarriesServerVersion", async () => {
@@ -291,6 +298,93 @@ describe("engine", () => {
 
     expect(response).toEqual({ id: 2, type: "statement.cancel", result: null });
     expect(cancels()).toBe(0);
+  });
+});
+
+/** The seeded fixture, through a plugin that counts the sessions it opens and closes. */
+function countingSqlite(): { engine: ReturnType<typeof createEngine>; opened: () => number; closed: () => number } {
+  let opened = 0;
+  let closed = 0;
+  const plugin: DatasourcePlugin = {
+    ...sqlite,
+    connect: async (config, options) => {
+      opened += 1;
+      const session = await sqlite.connect(config, options);
+      return {
+        execute: (sql) => session.execute(sql),
+        introspector: session.introspector,
+        serverVersion: session.serverVersion,
+        close: () => {
+          closed += 1;
+          return session.close();
+        },
+      };
+    },
+  };
+  const engine = createEngine({
+    datasource: { id: "seeded", pluginId: "sqlite", config: { path: seededSqliteFile() }, readOnly: false },
+    plugins: [{ status: "loaded", directory: SQLITE_DIRECTORY, manifest: SQLITE_MANIFEST, plugin }],
+  });
+  return { engine, opened: () => opened, closed: () => closed };
+}
+
+describe("engine catalog", () => {
+  it("givenSchemaTreeDatasource_whenNamespacesRequested_thenMainIsCurrent", async () => {
+    const { engine } = countingSqlite();
+
+    const namespaces = resultOf<Namespace[]>(await engine.connect().handle({ id: 1, type: "catalog.namespaces" }));
+
+    expect(namespaces.filter((namespace) => namespace.current).map((namespace) => namespace.path)).toEqual([["main"]]);
+  });
+
+  it("givenTwoConnections_whenBothDescribe_thenOneIntrospectionSessionAndOneRead", async () => {
+    const { engine, opened } = countingSqlite();
+    const [first, second] = [engine.connect(), engine.connect()];
+
+    const [left, right] = await Promise.all([
+      first.handle({ id: 1, type: "catalog.describe", path: ["main"] }),
+      second.handle({ id: 1, type: "catalog.describe", path: ["main"] }),
+    ]);
+
+    expect(opened()).toBe(1);
+    expect(resultOf<DescribedCatalog>(left).introspectedAt).toBe(resultOf<DescribedCatalog>(right).introspectedAt);
+    expect(resultOf<DescribedCatalog>(left).catalog.relations.map((relation) => relation.name)).toContain("orders");
+  });
+
+  it("givenUnknownNamespace_whenDescribed_thenIntrospectionFailedWithHint", async () => {
+    const { engine } = countingSqlite();
+
+    const response = await engine.connect().handle({ id: 4, type: "catalog.describe", path: ["nowhere"] });
+
+    expect(response).toMatchObject({ id: 4, type: "engine.error", error: { code: "introspectionFailed" } });
+    expect(response.type === "engine.error" && response.error.hint).toMatch(/Synchronize/);
+  });
+
+  it("givenQualifiedNameRequest_whenAnswered_thenPluginQuotes", async () => {
+    const { engine } = countingSqlite();
+
+    const response = await engine
+      .connect()
+      .handle({ id: 5, type: "catalog.qualifiedName", path: ["main"], name: "orders" });
+
+    expect(resultOf<string>(response)).toBe('"main"."orders"');
+  });
+
+  it("givenIntrospectionSession_whenEngineClosed_thenItIsClosed", async () => {
+    const { engine, opened, closed } = countingSqlite();
+    await engine.connect().handle({ id: 1, type: "catalog.namespaces" });
+
+    await engine.close();
+
+    expect([opened(), closed()]).toEqual([1, 1]);
+  });
+
+  it("givenEmptyPath_whenDescribed_thenInvalidRequest", async () => {
+    const { engine } = countingSqlite();
+
+    const response = await engine.connect().handle({ id: 6, type: "catalog.describe", path: [] });
+
+    expect(response).toMatchObject({ id: 6, type: "engine.error", error: { code: "invalidRequest" } });
   });
 });
 

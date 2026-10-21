@@ -1,22 +1,31 @@
 import * as Dialog from "@radix-ui/react-dialog";
 import { useMemo, useRef, useState, type KeyboardEvent } from "react";
 import { currentPlatform, formatChord } from "@table-craft/desktop/renderer/actions/chords.js";
-import { registry } from "@table-craft/desktop/renderer/actions/index.js";
+import { ACTION_IDS } from "@table-craft/desktop/renderer/actions/appActions.js";
+import { invoke, registry } from "@table-craft/desktop/renderer/actions/index.js";
 import {
-  ALL_TAB,
   paletteResults,
   paletteTabs,
   type PaletteMode,
   type SearchItem,
   type SearchProvider,
 } from "@table-craft/desktop/renderer/model/palette.js";
-import { actionsProvider } from "@table-craft/desktop/renderer/palette/providers.js";
+import { ACTIONS_PROVIDER_ID, actionsProvider } from "@table-craft/desktop/renderer/palette/providers.js";
+import { tablesProvider } from "@table-craft/desktop/renderer/palette/tablesProvider.js";
 import { focusRegion } from "@table-craft/desktop/renderer/shell/focus.js";
+import { useCatalog } from "@table-craft/desktop/renderer/state/catalog.js";
+import { useDatasources } from "@table-craft/desktop/renderer/state/datasources.js";
 import { usePalette } from "@table-craft/desktop/renderer/state/palette.js";
 import { cn } from "@table-craft/desktop/renderer/ui/cn.js";
 
-/** Search Everywhere's providers; plan 005 appends the tables provider here. */
-const PROVIDERS: readonly SearchProvider[] = [actionsProvider(registry)];
+const PROVIDERS: readonly SearchProvider[] = [
+  actionsProvider(registry),
+  tablesProvider({
+    catalogs: () => useCatalog.getState().catalogs,
+    datasources: () => useDatasources.getState().datasources,
+    reveal: (args) => void invoke(ACTION_IDS.reveal, args),
+  }),
+];
 const MODE_TITLE: Readonly<Record<PaletteMode, string>> = {
   findAction: "Find Action",
   searchEverywhere: "Search Everywhere",
@@ -54,7 +63,7 @@ function Row({ item, selected, onRun }: { item: SearchItem; selected: boolean; o
 function Body({ mode, onRun }: { mode: PaletteMode; onRun: (item: SearchItem) => void }) {
   const [query, setQuery] = useState("");
   const [selected, setSelected] = useState(0);
-  const tab = usePalette((state) => (mode === "searchEverywhere" ? state.tab : ALL_TAB));
+  const tab = usePalette((state) => (mode === "searchEverywhere" ? state.tab : ACTIONS_PROVIDER_ID));
   const selectTab = usePalette((state) => state.selectTab);
   const recent = usePalette((state) => state.recent);
   const tabs = useMemo(() => paletteTabs(PROVIDERS), []);

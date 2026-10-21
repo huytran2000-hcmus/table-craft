@@ -35,6 +35,39 @@ The active editor tab is `bg-canvas` with a 2 px `border-accent` underline; inac
 `text-ink-muted` on the strip's `bg-panel` and show their close button on hover. Disabled actions,
 in the palette and on toolbar buttons, are `text-ink-muted` at reduced opacity.
 
+## Database explorer
+
+Plan 005. Catalog rows reuse the shell's row height (`h-row`), icon size and colours, and add two
+tokens.
+
+| Token (`appearance/tokens.ts`) | CSS variable        | Tailwind          | Dark      | Used by                                          |
+| ------------------------------ | ------------------- | ----------------- | --------- | ------------------------------------------------ |
+| `colors.searchMatch`           | `--tc-search-match` | `bg-search-match` | `#6b5a1e` | The characters speed search matched, as `<mark>` |
+| `colors.keyIcon`               | `--tc-key-icon`     | `text-key-icon`   | `#d9a343` | A primary-key column, a key node                 |
+
+Node icons are Phosphor glyphs named in `renderer/ui/icons.ts`, drawn by `panes/explorerLabels.tsx`:
+
+| Node                        | Icon (`ui/icons.ts`)                                          | Colour                                 |
+| --------------------------- | ------------------------------------------------------------- | -------------------------------------- |
+| database namespace          | `DatabaseIcon` (Database)                                     | `text-ink-muted`; `text-danger` failed |
+| schema namespace            | `SchemaIcon` (TreeStructure)                                  | `text-ink-muted`; `text-danger` failed |
+| group                       | `FolderIcon`                                                  | `text-ink-muted`                       |
+| table, view, materialized   | `TableIcon`, `ViewIcon` (Eye), `MaterializedViewIcon` (Stack) | `text-accent`                          |
+| column                      | `ColumnIcon` (Columns)                                        | `text-ink-muted`                       |
+| primary-key column, key     | `KeyIcon`                                                     | `text-key-icon`                        |
+| foreign-key column, FK node | `KeyIcon`                                                     | `text-accent`                          |
+| index                       | `IndexIcon` (ListDashes)                                      | `text-ink-muted`                       |
+| routine, sequence           | `RoutineIcon` (Function), `SequenceIcon` (ListNumbers)        | `text-ink-muted`                       |
+| NOT NULL, after the type    | `NotNullIcon` (Asterisk), 12 px                               | `text-ink-muted`                       |
+| loading, synchronizing      | `SpinnerIcon`, spinning                                       | `text-ink-muted`                       |
+| error row                   | `WarningIcon`                                                 | `text-danger`                          |
+
+A row's name keeps its width and truncates last; the detail after it (type, count, columns, hint)
+is `text-ink-muted` and gives way first. A failed namespace and its error row are `text-danger`.
+The speed search field floats at the tree's top right, `border-line` on `bg-raised`, and turns
+`border-danger text-danger` when nothing matches. Synchronize, Collapse All and Copy use the
+Phosphor `ArrowsClockwise`, `ArrowsInLineVertical` and `CopySimple` glyphs.
+
 ## Datasource colours
 
 Plan 004. A datasource stores its colour by name (decision 011); the theme gives the value. The

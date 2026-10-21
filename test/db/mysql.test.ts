@@ -13,4 +13,5 @@ runPluginContract(mysql, {
     sleep: (seconds) => `SELECT SLEEP(${String(seconds)})`,
   },
   typeProbe: { expected: TYPE_PROBE_EXPECTED },
+  catalog: { path: ["table_craft"], quoted: { name: "odd `name`", qualified: "`table_craft`.`odd ``name```" } },
 });

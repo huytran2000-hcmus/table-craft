@@ -11,6 +11,13 @@ CREATE TABLE orders (
   placed_at TIMESTAMP NOT NULL
 );
 
+CREATE INDEX orders_placed_at_idx ON orders (placed_at);
+
+CREATE VIEW customer_totals AS
+  SELECT c.id AS customer_id, c.name, COALESCE(SUM(o.total), 0) AS total
+  FROM customers c LEFT JOIN orders o ON o.customer_id = c.id
+  GROUP BY c.id, c.name;
+
 CREATE TABLE type_probe (
   id INTEGER PRIMARY KEY,
   small_int SMALLINT,

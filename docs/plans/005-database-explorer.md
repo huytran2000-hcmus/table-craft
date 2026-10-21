@@ -1,6 +1,21 @@
 # Plan: Browse every schema in the Database pane
 
-Status: not started
+Status: done. The Database pane now opens every datasource into its catalog, the way DataGrip
+does. plugin-api is `0.4.0` with a `schemaTree` capability: each built-in plugin's
+`introspect.ts` lists namespaces, describes one into relations, columns, keys, foreign keys,
+indexes, routines and sequences, and quotes a qualified name, all checked by the contract suite
+against the fixture's new `customer_totals` view and `orders_placed_at_idx` index. The engine
+introspects on its own session and caches by namespace in core's `CatalogCache`; the renderer keeps
+a copy per datasource that dies on any detach, and draws one virtualized tree with DataGrip's groups
+and counts, speed search, Synchronize (`⌥⌘Y`), Collapse All, Show System Schemas, Copy Qualified
+Name, a `Tables` tab in Search Everywhere and the last synchronization in the status bar. All twelve
+live-test rows pass, including 500 tables described in about 60 ms. The screenshots exposed six
+bugs (speed search marking `cus`+`t`, a console connect leaving the tree shut, a failed schema
+showing nothing under it, column names squeezed to an ellipsis, a pane that grew to its content and
+so rendered every row, and a long sync message truncating the datasource's status), each fixed
+with a test. Reality differed mostly in the edges: a failed schema shows its error as a row and in
+the status bar, not only a tooltip; the tree opens on any connect, console included; and Select in
+Database View became an action of its own so the `Tables` tab goes through the registry.
 
 ## The issue
 
@@ -166,20 +181,20 @@ Every phase ends with `bun run typecheck` and `bun run test` both green; phases 
 Captured at 1200×800 into `docs/evidence/005/` by `test/e2e/explorer.smoke.test.ts`, regenerated
 with `TABLE_CRAFT_EVIDENCE_DIR=docs/evidence/005 bun run test:smoke:db`.
 
-| #   | Scenario                                                                                                                                          | Database | Result | Evidence                       |
-| --- | ------------------------------------------------------------------------------------------------------------------------------------------------- | -------- | ------ | ------------------------------ |
-| 1   | Connect; `public` is described and expanded automatically, showing `tables 3`, `views 1`                                                          | postgres |        | `postgres-auto-expanded.png`   |
-| 2   | Expand `orders`: `columns 4`, `keys`, `foreign keys`, `indexes`; column rows show types and PK/FK icons                                           | postgres |        | `postgres-orders-expanded.png` |
-| 3   | Same tree on MySQL, database `table_craft`                                                                                                        | mysql    |        | `mysql-tree.png`               |
-| 4   | Same tree on SQLite, `main`                                                                                                                       | sqlite   |        | `sqlite-tree.png`              |
-| 5   | Toggle system schemas on: `pg_catalog` and `information_schema` appear; off again: gone                                                           | postgres |        | `system-schemas.png`           |
-| 6   | Speed search `cust` highlights `customers` and `customer_totals`; ↓ moves to the second                                                           | postgres |        | `speed-search.png`             |
-| 7   | Search Everywhere `Tables` tab, query `ord`; Enter reveals `orders` in the tree                                                                   | mysql    |        | `search-everywhere-tables.png` |
-| 8   | Create a table from a console, Synchronize (⌥⌘Y), it appears; status bar shows the new sync time                                                  | postgres |        | `synchronized.png`             |
-| 9   | A user without access to one schema: that namespace fails with message and hint, others load                                                      | postgres |        | `introspection-failed.png`     |
-| 10  | Wide schema: 500 tables × 10 columns in a separate schema created by the test, described in under 2 s; tree scrolls to the end without blank rows | postgres |        | `wide-schema.png`              |
-| 11  | Disconnect (⌘F2): catalog nodes disappear; expand again: reconnects and reloads                                                                   | mysql    |        | `reconnect-reload.png`         |
-| 12  | Copy qualified name of `orders` on each database; clipboard holds the plugin's quoting                                                            | all      |        | `copy-name.png`                |
+| #   | Scenario                                                                                                                                          | Database | Result                                                                                                                                                                                                         | Evidence                       |
+| --- | ------------------------------------------------------------------------------------------------------------------------------------------------- | -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------ |
+| 1   | Connect; `public` is described and expanded automatically, showing `tables 3`, `views 1`                                                          | postgres | Pass. `pg › table_craft › public` opens on connect with `tables 3` and `views 1`; the status bar reads `public synchronized (… ms) · just now`                                                                 | `postgres-auto-expanded.png`   |
+| 2   | Expand `orders`: `columns 4`, `keys`, `foreign keys`, `indexes`; column rows show types and PK/FK icons                                           | postgres | Pass. `columns 4`, `keys 1`, `foreign keys 1`, `indexes 2`; `id integer` with the gold key, `customer_id integer` with the blue key, `placed_at timestamp without time zone`, NOT NULL marks                   | `postgres-orders-expanded.png` |
+| 3   | Same tree on MySQL, database `table_craft`                                                                                                        | mysql    | Pass. `table_craft` opens with `tables 3`, `views 1`; `orders` has `columns 4`, `keys 1`, `foreign keys 1`, `indexes 3` (MySQL indexes the FK column itself)                                                   | `mysql-tree.png`               |
+| 4   | Same tree on SQLite, `main`                                                                                                                       | sqlite   | Pass. `main` opens with `tables 3`, `views 1`; `orders` has `columns 4`, `keys 1`, `foreign keys 1`, `indexes 1`                                                                                               | `sqlite-tree.png`              |
+| 5   | Toggle system schemas on: `pg_catalog` and `information_schema` appear; off again: gone                                                           | postgres | Pass. Show System Schemas (Find Action) adds `information_schema`, `pg_catalog` and `pg_toast`; toggled again, they are gone                                                                                   | `system-schemas.png`           |
+| 6   | Speed search `cust` highlights `customers` and `customer_totals`; ↓ moves to the second                                                           | postgres | Pass after fix (Deviation 7). `cust` is marked in both names, `customers` is selected, ↓ selects `customer_totals`, Esc keeps it                                                                               | `speed-search.png`             |
+| 7   | Search Everywhere `Tables` tab, query `ord`; Enter reveals `orders` in the tree                                                                   | mysql    | Pass. The tab lists `orders  mysql › table_craft`; Enter opens the path and selects and focuses `orders`                                                                                                       | `search-everywhere-tables.png` |
+| 8   | Create a table from a console, Synchronize (⌥⌘Y), it appears; status bar shows the new sync time                                                  | postgres | Pass. After `CREATE TABLE explorer_new`, ⌥⌘Y turns `tables 3` into `tables 4` and the status bar into a fresh `public synchronized (… ms) · just now`                                                          | `synchronized.png`             |
+| 9   | A user without access to one schema: that namespace fails with message and hint, others load                                                      | postgres | Pass after fix (Deviation 8). `explorer_restricted` turns red with `permission denied for schema explorer_restricted` and the Synchronize hint under it and in the status bar; `public` still shows `tables 3` | `introspection-failed.png`     |
+| 10  | Wide schema: 500 tables × 10 columns in a separate schema created by the test, described in under 2 s; tree scrolls to the end without blank rows | postgres | Pass after fix (Deviation 10). `explorer_wide` is described in about 60 ms; End and ↑ reach `t500` with the toolbar in place, fewer than 500 rows rendered, no blank rows                                      | `wide-schema.png`              |
+| 11  | Disconnect (⌘F2): catalog nodes disappear; expand again: reconnects and reloads                                                                   | mysql    | Pass. ⌘F2 removes `table_craft` and collapses the datasource; expanding reconnects and shows `tables 3` again                                                                                                  | `reconnect-reload.png`         |
+| 12  | Copy qualified name of `orders` on each database; clipboard holds the plugin's quoting                                                            | all      | Pass. `"public"."orders"`, `` `table_craft`.`orders` `` and `"main"."orders"`; the last is pasted into a console for the screenshot                                                                            | `copy-name.png`                |
 
 Bugs found by the live test are fixed in the same plan, each with a regression test, and listed
 under Deviations.
@@ -187,6 +202,59 @@ under Deviations.
 ---
 
 ## Deviations taken while implementing
+
+1. **Select in Database View is an action of its own (`explorer.reveal`).** The `Tables` provider
+   could have expanded the tree and set the selection itself, but decision 015 routes every command
+   through `invoke`, so the provider runs the action with `{ datasourceId, path, name, kind }`. It
+   opens the Database tool window, expands the path, selects the relation and focuses the tree;
+   without arguments it selects the active datasource.
+2. **PostgreSQL refuses to describe a schema the user lacks `USAGE` on.** `pg_catalog` is readable
+   by everyone, so without the check row 9's schema would describe as empty rather than fail. The
+   introspector asks `has_schema_privilege` first and rejects `introspectionFailed` with
+   `permission denied for schema …`. Temporary schemas (`pg_temp_N`, `pg_toast_temp_N`) are not
+   listed, `pg_toast` is a system schema, and overloaded routines are listed once by name.
+3. **The introspection session belongs to the engine, which gained `close()`.** Sessions otherwise
+   belong to a port; this one outlives ports so the cache does, and `engine/main.ts` closes it
+   before exiting. A failed open is forgotten, so the next request tries again.
+4. **The contract fixture gained `catalog { path, quoted }`.** The suite could not guess the
+   namespace path or a dialect's quoting, so each run names them; the quoted name (`odd "name`)
+   needs escaping in every dialect. Two cases beyond the plan's: the introspector is present
+   exactly when `schemaTree` is declared, and a session still runs statements after introspecting.
+5. **SQLite names its keys as DataGrip does.** SQLite keeps no constraint names, so the plugin
+   writes `orders_pk` and `orders_customers_id_fk`; `temp` is its system namespace.
+6. **The tree opens on any connect, not only the tree's own.** Live-test bug: connecting through a
+   console left the datasource collapsed. `followAttaches` in `state/wiring.ts` now expands a
+   `schemaTree` datasource whenever it attaches, which lists its namespaces and describes the
+   current one. Regression: `givenConsoleConnectsDatasource_whenAttached_thenTreeOpensOnTheCurrentNamespace`.
+7. **Live-test bug: speed search marked `cus` and the `t` of `totals`.** The palette's fuzzy scorer
+   prefers word starts, which is right for Search Everywhere and wrong for speed search. Speed search
+   now marks a contiguous run when there is one and falls back to the fuzzy positions
+   (`fuzzy.match`, added for this). Regression in `test/renderer/speedSearch.test.ts`.
+8. **Live-test bug: a failed namespace showed nothing under it,** and its hint lived only in a
+   tooltip. An expanded failed namespace now has an error row (message, hint beside it), and the
+   status bar shows `explorer_restricted failed: … Check that this user may read the schema…` while
+   it is selected. Regressions:
+   `givenDescribeFailed_whenNamespaceExpanded_thenAnErrorRowSaysWhyAndNoLoadingRow` and the
+   `syncFailedText` case.
+9. **Live-test bug: column names were squeezed to `c…`** by their types, and wide rows scrolled
+   sideways. The name keeps its width and the detail truncates first; the tree never scrolls
+   sideways. The live test also widens the Database pane by 160 px, since its default width cannot
+   show `timestamp without time zone`; the smoke suite asserts a name's width.
+10. **Live-test bug: the Database pane grew to its content.** The tool window body is a block that
+    scrolls, so `flex-1` gave the pane no height: the virtualizer rendered every row and End
+    scrolled the toolbar away. The pane is `h-full`; the smoke suite asserts the toolbar stays in
+    view and fewer than 500 rows are rendered.
+11. **Live-test bug: a long sync message truncated the datasource's status** (`PostgreSQL 17.1…`).
+    The sync item takes only the space left (`basis-0`).
+12. **The live test drops what it creates after every scenario.** Row 8's `explorer_new` broke later
+    rows' `tables 3` on the first run. Role `explorer_limited` is created idempotently and left in
+    place, since dropping a role that owns grants would need more cleanup than it is worth.
+13. **Collapse All also collapses folders,** as DataGrip's does, and moves the selection to the top
+    node. Its chord is written `Mod+-` (the keymap dispatches by `Minus`).
+14. **Esc in speed search closes the field, not Back to Editor.** `ActionContext` gained
+    `speedSearching`, and `focus.editor` stands aside while it is true.
+15. **Show System Schemas lives in `table-craft.layout.v1`** as an optional field that defaults to
+    off; a layout saved before this plan loads unchanged, so the key keeps its version.
 
 ---
 

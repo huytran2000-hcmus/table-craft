@@ -1,11 +1,13 @@
 import type { Capability } from "@table-craft/desktop/engine/protocol.js";
 import type { DatasourceView } from "@table-craft/desktop/preload/bridge.js";
+import { useCatalog } from "@table-craft/desktop/renderer/state/catalog.js";
 import { useConsoles, type ConsoleSession } from "@table-craft/desktop/renderer/state/consoles.js";
 import { useDataSourcesDialog } from "@table-craft/desktop/renderer/state/dataSourcesDialog.js";
 import {
   capabilitiesOf,
   connectionOf,
   datasourceById,
+  selectedDatasourceId,
   useDatasources,
   type Connection,
   type TreeSelection,
@@ -47,6 +49,8 @@ export interface ActionContext {
   readonly toolWindows: Readonly<Record<ToolWindowId, boolean>>;
   /** The palette or any dialog is open; it owns the keyboard. */
   readonly paletteOpen: boolean;
+  /** The Database pane's speed search field is open; Escape closes it rather than leaving the pane. */
+  readonly speedSearching: boolean;
 }
 
 function regionOf(element: Element | null | undefined): FocusRegion {
@@ -88,7 +92,7 @@ export function currentContext(): ActionContext {
   const datasources = useDatasources.getState();
   const console = active?.kind === "console" ? (consoles[active.id] ?? null) : null;
   const focus = focusedRegion();
-  const selected = datasources.selection?.kind === "datasource" ? datasources.selection.id : null;
+  const selected = selectedDatasourceId(datasources.selection);
   const inTree = focus === "database" || (focus === "other" && lastRegion === "database");
   const targetId = inTree ? selected : (console?.datasourceId ?? selected);
   const target = datasourceById(datasources, targetId);
@@ -113,5 +117,6 @@ export function currentContext(): ActionContext {
     focus,
     toolWindows: useLayout.getState().layout.visible,
     paletteOpen: modalOpen(),
+    speedSearching: useCatalog.getState().speedSearch !== null,
   };
 }

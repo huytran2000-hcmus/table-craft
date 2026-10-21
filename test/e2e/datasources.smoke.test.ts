@@ -197,7 +197,10 @@ describe.runIf(DATABASES_ENABLED)("datasources live test", () => {
       }
 
       const rows: string[] = [];
-      for (const item of await toolWindow(page, "Database").getByRole("treeitem").all()) {
+      const datasourceRows = toolWindow(page, "Database").locator(
+        '[role="treeitem"]:is([data-kind="folder"], [data-kind="datasource"])',
+      );
+      for (const item of await datasourceRows.all()) {
         rows.push(`${(await item.getAttribute("aria-level")) ?? ""} ${(await item.getAttribute("aria-label")) ?? ""}`);
       }
       expect(rows).toEqual([

@@ -13,4 +13,8 @@ runPluginContract(postgres, {
     sleep: (seconds) => `SELECT pg_sleep(${String(seconds)})`,
   },
   typeProbe: { expected: TYPE_PROBE_EXPECTED },
+  catalog: {
+    path: ["table_craft", "public"],
+    quoted: { name: 'odd "name"', qualified: '"public"."odd ""name"""' },
+  },
 });

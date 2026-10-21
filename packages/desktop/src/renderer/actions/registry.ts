@@ -19,7 +19,10 @@ export type ActionIcon =
   | "delete"
   | "connect"
   | "disconnect"
-  | "folder";
+  | "folder"
+  | "synchronize"
+  | "collapseAll"
+  | "copy";
 
 export interface Action<A = void> {
   readonly id: string;

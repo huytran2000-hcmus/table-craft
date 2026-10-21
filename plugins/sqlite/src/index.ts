@@ -9,15 +9,17 @@ import {
   type ConnectOptions,
   type DatasourcePlugin,
   type ExecuteResult,
+  type Introspector,
   type PluginErrorCode,
   type Row,
   type Session,
   type WireValue,
 } from "@table-craft/plugin-api";
+import { sqliteIntrospector } from "./introspect.js";
 
 const PLUGIN_ID = "sqlite";
 /** No `cancel`: node:sqlite runs a statement synchronously, so nothing could deliver the request. */
-const CAPABILITIES: readonly Capability[] = ["sql"];
+const CAPABILITIES: readonly Capability[] = ["sql", "schemaTree"];
 
 const connectionSchema = z.strictObject({
   /** A file path, or `:memory:` for a private in-memory database. */
@@ -85,9 +87,11 @@ const READ_ONLY_SQL = "PRAGMA query_only = ON";
 class SqliteSession implements Session {
   readonly #database: DatabaseSync;
   readonly serverVersion: string | null;
+  readonly introspector: Introspector;
 
   constructor(config: SqliteConfig, options: ConnectOptions) {
     this.#database = new DatabaseSync(config.path);
+    this.introspector = sqliteIntrospector(this.#database);
     if (options.readOnly) this.#database.exec(READ_ONLY_SQL);
     const row = this.#database.prepare(VERSION_SQL).get();
     this.serverVersion = typeof row?.version === "string" ? row.version : null;

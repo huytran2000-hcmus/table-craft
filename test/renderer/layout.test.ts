@@ -51,4 +51,20 @@ describe("layout", () => {
 
     expect(store.getState().layout.sizes.database).toBe(80);
   });
+
+  it("givenSystemSchemasShown_whenRelaunched_thenStillShown", () => {
+    const storage = memoryStorage();
+    expect(createLayoutStore(storage).getState().layout.showSystemSchemas).toBe(false);
+    createLayoutStore(storage).getState().toggleSystemSchemas();
+
+    expect(createLayoutStore(storage).getState().layout.showSystemSchemas).toBe(true);
+  });
+
+  it("givenLayoutSavedBeforePlan005_whenLoaded_thenSystemSchemasHidden", () => {
+    const storage = memoryStorage();
+    const { showSystemSchemas: _dropped, ...old } = DEFAULT_LAYOUT;
+    storage.setItem(LAYOUT_STORAGE_KEY, JSON.stringify(old));
+
+    expect(loadLayout(storage).showSystemSchemas).toBe(false);
+  });
 });

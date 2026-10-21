@@ -15,12 +15,15 @@ export interface Layout {
   readonly sizes: Readonly<Record<ToolWindowId, number>>;
   /** What `hideAll` closed, so pressing it again brings them back; `null` when nothing is hidden by it. */
   readonly hidden: Readonly<Record<ToolWindowId, boolean>> | null;
+  /** Whether the Database pane lists system namespaces such as `pg_catalog` (plan 005). */
+  readonly showSystemSchemas: boolean;
 }
 
 export const DEFAULT_LAYOUT: Layout = {
   visible: { database: true, services: true },
   sizes: { database: 22, services: 28 },
   hidden: null,
+  showSystemSchemas: false,
 };
 
 const MIN_SIZE_PERCENT = 5;
@@ -49,9 +52,14 @@ export function loadLayout(storage: Pick<Storage, "getItem">): Layout {
     return DEFAULT_LAYOUT;
   }
   if (typeof saved !== "object" || saved === null) return DEFAULT_LAYOUT;
-  const { visible, sizes, hidden } = saved as Record<string, unknown>;
+  const { visible, sizes, hidden, showSystemSchemas } = saved as Record<string, unknown>;
   if (!isRecordOf(visible, isBoolean) || !isRecordOf(sizes, isSize)) return DEFAULT_LAYOUT;
-  return { visible, sizes, hidden: isRecordOf(hidden, isBoolean) ? hidden : null };
+  return {
+    visible,
+    sizes,
+    hidden: isRecordOf(hidden, isBoolean) ? hidden : null,
+    showSystemSchemas: showSystemSchemas === true,
+  };
 }
 
 export function saveLayout(storage: Pick<Storage, "setItem">, layout: Layout): void {
@@ -81,6 +89,7 @@ export interface LayoutState {
   readonly toggle: (id: ToolWindowId) => void;
   readonly hideAll: () => void;
   readonly resize: (id: ToolWindowId, percent: number) => void;
+  readonly toggleSystemSchemas: () => void;
 }
 
 /** A layout store over `storage`; the app passes `localStorage`, tests a map. */
@@ -96,6 +105,7 @@ export function createLayoutStore(storage: LayoutStorage) {
       toggle: (id) => update(toggled(get().layout, id)),
       hideAll: () => update(hiddenAll(get().layout)),
       resize: (id, percent) => update(resized(get().layout, id, percent)),
+      toggleSystemSchemas: () => update({ ...get().layout, showSystemSchemas: !get().layout.showSystemSchemas }),
     };
   });
 }

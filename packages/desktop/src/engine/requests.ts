@@ -4,6 +4,7 @@ import type { EngineRequest } from "@table-craft/desktop/engine/protocol.js";
 const requestId = z.number().int().nonnegative();
 const handle = z.string().min(1);
 const sessionId = z.string().min(1);
+const namespacePath = z.array(z.string()).min(1);
 
 /** The renderer is untrusted input: every request is parsed before it is routed. */
 export const engineRequestSchema = z.discriminatedUnion("type", [
@@ -24,6 +25,19 @@ export const engineRequestSchema = z.discriminatedUnion("type", [
     limit: z.number().int().positive(),
   }),
   z.strictObject({ id: requestId, type: z.literal("result.release"), handle }),
+  z.strictObject({ id: requestId, type: z.literal("catalog.namespaces"), refresh: z.boolean().optional() }),
+  z.strictObject({
+    id: requestId,
+    type: z.literal("catalog.describe"),
+    path: namespacePath,
+    refresh: z.boolean().optional(),
+  }),
+  z.strictObject({
+    id: requestId,
+    type: z.literal("catalog.qualifiedName"),
+    path: namespacePath,
+    name: z.string().min(1),
+  }),
 ]) satisfies z.ZodType<EngineRequest>;
 
 const idOnly = z.object({ id: requestId });

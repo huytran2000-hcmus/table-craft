@@ -17,6 +17,10 @@ export interface ColorTokens {
   readonly gridStripe: string;
   /** The pressed stripe button and the hovered row; one step above `panel`. */
   readonly selection: string;
+  /** Behind the characters speed search matched in a tree row. */
+  readonly searchMatch: string;
+  /** A primary or unique key's glyph in the Database pane; foreign keys use `accent`. */
+  readonly keyIcon: string;
   /** The tints a datasource can carry (decision 011): its swatch, tab and console border. */
   readonly datasource: Readonly<Record<DatasourceTint, string>>;
 }
@@ -74,6 +78,8 @@ export const DARK_COLORS: ColorTokens = {
   success: "#5fb865",
   gridStripe: "#26282b",
   selection: "#2e436e",
+  searchMatch: "#6b5a1e",
+  keyIcon: "#d9a343",
   datasource: {
     red: "#c75450",
     orange: "#d08b46",

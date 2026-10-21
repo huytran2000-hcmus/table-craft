@@ -1,3 +1,4 @@
+export { CatalogCache, type CachedCatalog } from "./catalog/cache.js";
 export { CoreError, type CoreErrorCode } from "./errors.js";
 export {
   discoverPlugins,

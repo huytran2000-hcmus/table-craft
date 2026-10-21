@@ -30,7 +30,24 @@ export const DISCONNECTED: Connection = { status: "disconnected", error: null, s
 
 /** What the Database pane can have selected. */
 export type TreeSelection =
-  { readonly kind: "datasource"; readonly id: string } | { readonly kind: "folder"; readonly path: string };
+  | { readonly kind: "datasource"; readonly id: string }
+  | { readonly kind: "folder"; readonly path: string }
+  /** A node below a datasource (plan 005); `id` is the datasource's. */
+  | {
+      readonly kind: "catalog";
+      readonly id: string;
+      /** The row's key in `model/explorerTree`. */
+      readonly key: string;
+      /** The namespace the node is in, or is. */
+      readonly path: readonly string[];
+      /** The relation, routine or sequence the node is or belongs to; null on namespaces and groups. */
+      readonly name: string | null;
+    };
+
+/** The datasource a selection is on or under. */
+export function selectedDatasourceId(selection: TreeSelection | null): string | null {
+  return selection === null || selection.kind === "folder" ? null : selection.id;
+}
 
 export interface SecretRequest {
   readonly datasource: DatasourceView;
@@ -193,7 +210,7 @@ export function createDatasourcesStore(dependencies: DatasourcesDependencies) {
           warning: list.warning ?? get().warning,
           connections,
           emptyFolders: get().emptyFolders.filter((path) => !usedFolders.has(path)),
-          selection: selection?.kind === "datasource" && !known.has(selection.id) ? null : selection,
+          selection: selection !== null && selection.kind !== "folder" && !known.has(selection.id) ? null : selection,
         });
         for (const id of removed) detach(id, null);
         if (removed.length > 0) for (const listener of removedListeners) listener(removed);

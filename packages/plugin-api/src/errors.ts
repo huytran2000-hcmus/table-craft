@@ -1,5 +1,5 @@
 /** Failures the host tells apart; anything else a plugin throws is reported as `statementFailed`. */
-export const PLUGIN_ERROR_CODES = ["cancelled", "connectionFailed", "statementFailed"] as const;
+export const PLUGIN_ERROR_CODES = ["cancelled", "connectionFailed", "statementFailed", "introspectionFailed"] as const;
 
 export type PluginErrorCode = (typeof PLUGIN_ERROR_CODES)[number];
 

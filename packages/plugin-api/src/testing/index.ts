@@ -7,6 +7,9 @@ import {
   type DatasourcePlugin,
   type PluginErrorCode,
   type PluginManifest,
+  type Introspector,
+  type NamespaceCatalog,
+  type Relation,
   type Row,
   type Session,
 } from "@table-craft/plugin-api";
@@ -31,6 +34,13 @@ export interface ContractFixture {
     /** The rows of `SELECT * FROM type_probe ORDER BY id`, as wire values. */
     readonly expected: readonly Row[];
   };
+  /** Required when the plugin declares `schemaTree`. */
+  readonly catalog?: {
+    /** The namespace the fixture tables live in, which is also the connection's current one. */
+    readonly path: readonly string[];
+    /** An identifier that needs quoting, and what `qualifiedName(path, name)` must return for it. */
+    readonly quoted: { readonly name: string; readonly qualified: string };
+  };
 }
 
 /** The table every fixture database carries, one column per value rule the contract pins. */
@@ -48,6 +58,16 @@ export const TYPE_PROBE_COLUMNS = [
   "day",
   "moment",
 ] as const;
+
+/** The relations every fixture database carries, sorted by name as `describe` returns them. */
+export const FIXTURE_RELATIONS = [
+  { name: "customer_totals", kind: "view" },
+  { name: "customers", kind: "table" },
+  { name: "orders", kind: "table" },
+  { name: TYPE_PROBE_TABLE, kind: "table" },
+] as const;
+
+const MISSING_NAMESPACE = "table_craft_no_such_namespace";
 
 const PROBE_TABLE = "table_craft_contract_probe";
 const PROBE_ROWS = 2;
@@ -166,6 +186,13 @@ export function runPluginContract(plugin: DatasourcePlugin, fixture: ContractFix
       });
     });
 
+    it("givenSession_whenInspected_thenHasIntrospectorExactlyWhenSchemaTreeDeclared", async () => {
+      await withSession(plugin, fixture, (session) => {
+        expect(session.introspector !== undefined).toBe(plugin.capabilities.includes("schemaTree"));
+        return Promise.resolve();
+      });
+    });
+
     it.runIf(fixture.wrongPasswordConfig !== undefined)(
       "givenWrongPassword_whenConnecting_thenRejectsWithConnectionFailed",
       async () => {
@@ -270,6 +297,113 @@ export function runPluginContract(plugin: DatasourcePlugin, fixture: ContractFix
             expect((await iterator.next()).done).toBe(false);
           }
           await iterator.return?.();
+          expect(await collect((await session.execute("SELECT 1 AS one")).rows)).toEqual([[1]]);
+        });
+      });
+    });
+
+    describe.runIf(plugin.capabilities.includes("schemaTree"))("schemaTree", () => {
+      function catalogFixture(): NonNullable<ContractFixture["catalog"]> {
+        if (fixture.catalog === undefined) {
+          throw new Error("A plugin that declares schemaTree needs fixture.catalog.");
+        }
+        return fixture.catalog;
+      }
+
+      async function withIntrospector(use: (introspector: Introspector) => Promise<void>): Promise<void> {
+        await withSession(plugin, fixture, async (session) => {
+          const introspector = session.introspector;
+          if (introspector === undefined) throw new Error("A schemaTree session needs an introspector.");
+          await use(introspector);
+        });
+      }
+
+      async function describeFixture(): Promise<NamespaceCatalog> {
+        let described: NamespaceCatalog | undefined;
+        await withIntrospector(async (introspector) => {
+          described = await introspector.describe(catalogFixture().path);
+        });
+        if (described === undefined) throw new Error("describe resolved nothing.");
+        return described;
+      }
+
+      function relation(catalog: NamespaceCatalog, name: string): Relation {
+        const found = catalog.relations.find((candidate) => candidate.name === name);
+        if (found === undefined) throw new Error(`The fixture namespace has no relation ${name}.`);
+        return found;
+      }
+
+      it("givenSchemaTreePlugin_whenNamespacesListed_thenCurrentNamespaceIsMarked", async () => {
+        await withIntrospector(async (introspector) => {
+          const namespaces = await introspector.namespaces();
+          const current = namespaces.filter((namespace) => namespace.current);
+          expect(current.map((namespace) => namespace.path)).toEqual([catalogFixture().path]);
+          expect(current[0]?.system).toBe(false);
+          expect(current[0]?.name).toBe(catalogFixture().path.at(-1));
+        });
+      });
+
+      it("givenFixture_whenDescribed_thenCustomersOrdersTypeProbeAndCustomerTotalsArePresent", async () => {
+        const catalog = await describeFixture();
+        expect(catalog.path).toEqual(catalogFixture().path);
+        const names = catalog.relations.map((candidate) => candidate.name);
+        expect(names).toEqual([...names].sort());
+        expect(catalog.relations.map(({ name, kind }) => ({ name, kind }))).toEqual(
+          expect.arrayContaining(FIXTURE_RELATIONS.map((expected) => ({ ...expected }))),
+        );
+        const probe = relation(catalog, TYPE_PROBE_TABLE);
+        expect(probe.columns.map((column) => column.name)).toEqual(TYPE_PROBE_COLUMNS);
+        expect(probe.columns.map((column) => column.position)).toEqual(TYPE_PROBE_COLUMNS.map((_, index) => index + 1));
+        for (const column of probe.columns) expect(column.type).toMatch(/\S/);
+      });
+
+      it("givenOrders_whenDescribed_thenForeignKeyTargetsCustomersId", async () => {
+        const orders = relation(await describeFixture(), "orders");
+        expect(orders.foreignKeys).toHaveLength(1);
+        expect(orders.foreignKeys[0]).toMatchObject({
+          columns: ["customer_id"],
+          target: { path: catalogFixture().path, relation: "customers", columns: ["id"] },
+        });
+        expect(orders.foreignKeys[0]?.onDelete).toMatch(/\S/);
+        const customerId = orders.columns.find((column) => column.name === "customer_id");
+        expect(customerId?.nullable).toBe(false);
+      });
+
+      it("givenOrders_whenDescribed_thenIndexOrdersPlacedAtIdxIsListed", async () => {
+        const orders = relation(await describeFixture(), "orders");
+        expect(orders.indexes).toContainEqual({
+          name: "orders_placed_at_idx",
+          columns: ["placed_at"],
+          unique: false,
+          primary: false,
+        });
+      });
+
+      it("givenCustomers_whenDescribed_thenIdIsPrimaryKeyAndEmailIsUnique", async () => {
+        const customers = relation(await describeFixture(), "customers");
+        expect(customers.primaryKey?.columns).toEqual(["id"]);
+        expect(customers.uniqueKeys.map((key) => key.columns)).toEqual([["email"]]);
+        expect(customers.columns.find((column) => column.name === "email")?.nullable).toBe(false);
+      });
+
+      it("givenUnknownNamespace_whenDescribed_thenRejectsWithIntrospectionFailed", async () => {
+        const missing = [...catalogFixture().path.slice(0, -1), MISSING_NAMESPACE];
+        await withIntrospector(async (introspector) => {
+          expect(await rejectionCode(introspector.describe(missing))).toBe("introspectionFailed");
+        });
+      });
+
+      it("givenIdentifierNeedingQuotes_whenQualified_thenPluginQuotesIt", async () => {
+        const { path, quoted } = catalogFixture();
+        await withIntrospector((introspector) => {
+          expect(introspector.qualifiedName(path, quoted.name)).toBe(quoted.qualified);
+          return Promise.resolve();
+        });
+      });
+
+      it("givenIntrospection_whenStatementRunAfter_thenSessionStillWorks", async () => {
+        await withSession(plugin, fixture, async (session) => {
+          await session.introspector?.describe(catalogFixture().path);
           expect(await collect((await session.execute("SELECT 1 AS one")).rows)).toEqual([[1]]);
         });
       });

@@ -2,9 +2,9 @@
   "id": "mysql",
   "name": "MySQL",
   "version": "0.0.0",
-  "apiVersion": "0.3.0",
+  "apiVersion": "0.4.0",
   "entry": "index.js",
-  "capabilities": ["sql", "cancel"],
+  "capabilities": ["sql", "cancel", "schemaTree"],
   "highlight": "mysql",
   "connection": {
     "fields": [

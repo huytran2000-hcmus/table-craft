@@ -1,11 +1,12 @@
 import type { z } from "zod";
+import type { Introspector } from "./catalog.js";
 import type { WireValue } from "./values.js";
 
 /**
  * What a plugin can do. The UI branches on these, never on a plugin id (decision 007), and a
  * capability without contract-suite coverage cannot be declared (decision 013).
  */
-export const CAPABILITIES = ["sql", "cancel"] as const;
+export const CAPABILITIES = ["sql", "cancel", "schemaTree"] as const;
 
 export type Capability = (typeof CAPABILITIES)[number];
 
@@ -37,6 +38,8 @@ export interface Session {
    * then rejects with `cancelled`, and leaves the session usable; a no-op when nothing runs.
    */
   cancel?(): Promise<void>;
+  /** Present exactly when the plugin declares `schemaTree`. */
+  readonly introspector?: Introspector;
   close(): Promise<void>;
   /** What the server reports about itself, such as `17.4`; null when it reports nothing. */
   readonly serverVersion: string | null;

@@ -1,3 +1,17 @@
+export {
+  byName,
+  type ColumnMeta,
+  type ForeignKey,
+  type Index,
+  type Introspector,
+  type Key,
+  type Namespace,
+  type NamespaceCatalog,
+  type Relation,
+  type RelationKind,
+  type Routine,
+  type Sequence,
+} from "./catalog.js";
 export { isPluginError, PLUGIN_ERROR_CODES, PluginError, type PluginErrorCode } from "./errors.js";
 export {
   CONNECTION_FIELD_GROUPS,

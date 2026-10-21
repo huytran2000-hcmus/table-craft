@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { score } from "@table-craft/desktop/renderer/model/fuzzy.js";
+import { match, score } from "@table-craft/desktop/renderer/model/fuzzy.js";
 
 function ranked(query: string, titles: readonly string[]): readonly string[] {
   return titles
@@ -34,5 +34,14 @@ describe("fuzzy score", () => {
 
   it("givenEmptyQuery_whenScored_thenEverythingMatchesEqually", () => {
     expect(score("", "Anything")).toBe(0);
+  });
+
+  it("givenWordStarts_whenMatched_thenPositionsFollowTheBestScore", () => {
+    expect(match("ord", "orders")?.positions).toEqual([0, 1, 2]);
+    expect(match("ct", "customer_totals")?.positions).toEqual([0, 9]);
+  });
+
+  it("givenNoMatch_whenMatched_thenNull", () => {
+    expect(match("zz", "orders")).toBeNull();
   });
 });

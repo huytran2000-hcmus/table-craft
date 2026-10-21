@@ -38,7 +38,96 @@ export interface Column {
 }
 
 /** Mirrors `Capability` in plugin-api. The renderer branches on these, never on a plugin id (decision 007). */
-export type Capability = "sql" | "cancel";
+export type Capability = "sql" | "cancel" | "schemaTree";
+
+/** Mirrors `Namespace` in plugin-api. */
+export interface Namespace {
+  readonly path: readonly string[];
+  readonly name: string;
+  readonly kind: "database" | "schema";
+  readonly system: boolean;
+  readonly current: boolean;
+}
+
+/** Mirrors `ColumnMeta` in plugin-api. */
+export interface ColumnMeta {
+  readonly name: string;
+  readonly position: number;
+  readonly type: string;
+  readonly nullable: boolean;
+  readonly default: string | null;
+  readonly comment: string | null;
+  readonly autoIncrement: boolean;
+}
+
+/** Mirrors `Key` in plugin-api. */
+export interface Key {
+  readonly name: string;
+  readonly columns: readonly string[];
+}
+
+/** Mirrors `ForeignKey` in plugin-api. */
+export interface ForeignKey {
+  readonly name: string;
+  readonly columns: readonly string[];
+  readonly target: {
+    readonly path: readonly string[];
+    readonly relation: string;
+    readonly columns: readonly string[];
+  };
+  readonly onDelete: string;
+  readonly onUpdate: string;
+}
+
+/** Mirrors `Index` in plugin-api. */
+export interface Index {
+  readonly name: string;
+  readonly columns: readonly string[];
+  readonly unique: boolean;
+  readonly primary: boolean;
+}
+
+/** Mirrors `RelationKind` in plugin-api. */
+export type RelationKind = "table" | "view" | "materializedView";
+
+/** Mirrors `Relation` in plugin-api. */
+export interface Relation {
+  readonly name: string;
+  readonly kind: RelationKind;
+  readonly comment: string | null;
+  readonly columns: readonly ColumnMeta[];
+  readonly primaryKey: Key | null;
+  readonly uniqueKeys: readonly Key[];
+  readonly foreignKeys: readonly ForeignKey[];
+  readonly indexes: readonly Index[];
+}
+
+/** Mirrors `Routine` in plugin-api. */
+export interface Routine {
+  readonly name: string;
+  readonly kind: "function" | "procedure";
+}
+
+/** Mirrors `Sequence` in plugin-api. */
+export interface Sequence {
+  readonly name: string;
+}
+
+/** Mirrors `NamespaceCatalog` in plugin-api. */
+export interface NamespaceCatalog {
+  readonly path: readonly string[];
+  readonly relations: readonly Relation[];
+  readonly routines: readonly Routine[];
+  readonly sequences: readonly Sequence[];
+}
+
+/** Mirrors `CachedCatalog` in core: a catalog and when, and how fast, it was read. */
+export interface DescribedCatalog {
+  readonly catalog: NamespaceCatalog;
+  /** Epoch milliseconds. */
+  readonly introspectedAt: number;
+  readonly elapsedMs: number;
+}
 
 /**
  * The one datasource an engine host serves. Main assembles it from `datasources.json` and the
@@ -115,6 +204,18 @@ export interface EngineCalls {
     result: ResultWindow;
   };
   "result.release": { params: { readonly handle: string }; result: null };
+  /**
+   * The datasource's namespaces, from the engine's cache unless `refresh`; the first call opens the
+   * engine's introspection session (decision 022). Needs `schemaTree`.
+   */
+  "catalog.namespaces": { params: { readonly refresh?: boolean }; result: readonly Namespace[] };
+  /** One namespace's objects, from the engine's cache unless `refresh`. Needs `schemaTree`. */
+  "catalog.describe": {
+    params: { readonly path: readonly string[]; readonly refresh?: boolean };
+    result: DescribedCatalog;
+  };
+  /** `name` inside `path`, quoted by the plugin (decision 008). Needs `schemaTree`. */
+  "catalog.qualifiedName": { params: { readonly path: readonly string[]; readonly name: string }; result: string };
 }
 
 export type EngineMethod = keyof EngineCalls;
@@ -139,6 +240,7 @@ export type EngineErrorCode =
   | "connectionFailed"
   | "statementFailed"
   | "cancelled"
+  | "introspectionFailed"
   | "invalidRequest"
   | "timedOut"
   | "internal";

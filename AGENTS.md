@@ -53,7 +53,8 @@ packages/plugin-api/       @table-craft/plugin-api: the plugin contract and noth
                            Types, Zod schemas, API_VERSION, capability names, and the
                            contract test suite under `testing/`. Depends only on zod
 packages/core/             @table-craft/core: plugin loader, session manager, result-set
-                           store, edit batches, history. Knows nothing about Electron
+                           store, edit batches, history, and the catalog cache
+                           (`catalog/`). Knows nothing about Electron
 packages/desktop/          @table-craft/desktop, the Electron app
   src/main/                lifecycle, the window, menus, one engine host per datasource,
                            the datasource list and secrets, the invoke channels (`ipc.ts`)
@@ -66,7 +67,8 @@ packages/desktop/          @table-craft/desktop, the Electron app
                            `panes/`, `palette/` the DataGrip-shaped window
 plugins/<id>/              built-in plugins (@table-craft/plugin-<id>): postgres, mysql,
                            sqlite. Each depends on plugin-api and its driver alone, and
-                           ships a `table-craft-plugin.json` beside `src/`
+                           ships a `table-craft-plugin.json` beside `src/`; its
+                           `introspect.ts` answers `schemaTree`
 test/                      Vitest suites, `givenX_whenY_thenZ`
   db/                      compose.yml, the fixture schema per dialect, contract runs per database
   e2e/                     Playwright `_electron` suites and the shared harness

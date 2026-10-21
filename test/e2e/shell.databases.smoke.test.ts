@@ -58,7 +58,7 @@ describe.runIf(DATABASES_ENABLED)("shell live test", () => {
       const page = await launchPostgres();
 
       await expect.poll(() => datasourceStatus(page).textContent()).toMatch(/^postgres · connected · PostgreSQL \d/);
-      const node = toolWindow(page, "Database").getByRole("treeitem");
+      const node = toolWindow(page, "Database").locator('[role="treeitem"][data-kind="datasource"]');
       expect(await node.getAttribute("data-state")).toBe("connected");
       expect(await editorTabs(page).allTextContents()).toEqual(["console [postgres]"]);
       expect(await toolWindow(page, "Services").getByRole("option").allTextContents()).toHaveLength(1);

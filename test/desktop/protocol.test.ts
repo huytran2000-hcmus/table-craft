@@ -1,6 +1,21 @@
 import { describe, expect, expectTypeOf, it } from "vitest";
-import { RESULT_FETCH_CAP, RESULT_WINDOW_ROWS, type CoreErrorCode, type ResultSummary } from "@table-craft/core";
-import { MANIFEST_FILE, type Capability, type Column, type WireValue } from "@table-craft/plugin-api";
+import {
+  RESULT_FETCH_CAP,
+  RESULT_WINDOW_ROWS,
+  type CachedCatalog,
+  type CoreErrorCode,
+  type ResultSummary,
+} from "@table-craft/core";
+import {
+  CAPABILITIES,
+  MANIFEST_FILE,
+  type Capability,
+  type Column,
+  type Namespace,
+  type NamespaceCatalog,
+  type PluginErrorCode,
+  type WireValue,
+} from "@table-craft/plugin-api";
 import * as protocol from "@table-craft/desktop/engine/protocol.js";
 
 describe("engine protocol", () => {
@@ -13,6 +28,21 @@ describe("engine protocol", () => {
     expectTypeOf<protocol.WireValue>().toEqualTypeOf<WireValue>();
     expectTypeOf<protocol.Column>().toEqualTypeOf<Column>();
     expectTypeOf<protocol.Capability>().toEqualTypeOf<Capability>();
+  });
+
+  it("givenNewCapability_whenProtocolCompared_thenMatchesPluginApi", () => {
+    expectTypeOf<protocol.Capability>().toEqualTypeOf<(typeof CAPABILITIES)[number]>();
+    expect(CAPABILITIES).toContain("schemaTree");
+  });
+
+  it("givenCatalogTypes_whenComparedWithPluginApiAndCore_thenIdentical", () => {
+    expectTypeOf<protocol.Namespace>().toEqualTypeOf<Namespace>();
+    expectTypeOf<protocol.NamespaceCatalog>().toEqualTypeOf<NamespaceCatalog>();
+    expectTypeOf<protocol.DescribedCatalog>().toEqualTypeOf<CachedCatalog>();
+  });
+
+  it("givenPluginErrorCodes_whenComparedWithEngineErrorCodes_thenEveryOneIsCovered", () => {
+    expectTypeOf<PluginErrorCode>().toExtend<protocol.EngineErrorCode>();
   });
 
   it("givenExecutedStatement_whenComparedWithCoreSummary_thenCarriesEveryField", () => {

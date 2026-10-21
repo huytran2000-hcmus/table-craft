@@ -10,13 +10,15 @@ import {
   type ConnectOptions,
   type DatasourcePlugin,
   type ExecuteResult,
+  type Introspector,
   type Row,
   type Session,
   type WireValue,
 } from "@table-craft/plugin-api";
+import { postgresIntrospector } from "./introspect.js";
 
 const PLUGIN_ID = "postgres";
-const CAPABILITIES: readonly Capability[] = ["sql", "cancel"];
+const CAPABILITIES: readonly Capability[] = ["sql", "cancel", "schemaTree"];
 
 const DEFAULT_PORT = 5432;
 const MAX_PORT = 65_535;
@@ -172,6 +174,7 @@ class PostgresSession implements Session {
   #cancelling: Promise<void> = Promise.resolve();
 
   readonly serverVersion: string | null;
+  readonly introspector: Introspector;
 
   constructor(
     config: PostgresConfig,
@@ -183,6 +186,7 @@ class PostgresSession implements Session {
     this.#client = client;
     this.#typeNames = typeNames;
     this.serverVersion = serverVersion;
+    this.introspector = postgresIntrospector(client);
     client.on("error", (error) => {
       this.#broken = error;
     });

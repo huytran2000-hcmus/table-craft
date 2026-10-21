@@ -19,7 +19,7 @@ its own MessagePort (decision 002).
 
 A plugin is a directory with `table-craft-plugin.json` and an ESM entry exporting a
 `DatasourcePlugin` (decisions 005 to 008). The contract lives in `@table-craft/plugin-api`.
-`API_VERSION` is `0.3.0`; while it is `0.x` the contract is unstable and every minor is a break.
+`API_VERSION` is `0.4.0`; while it is `0.x` the contract is unstable and every minor is a break.
 
 ### Discovery
 
@@ -67,10 +67,11 @@ dialog lists every plugin, an unavailable one with its reason. A connection fiel
 
 ### Capabilities
 
-| Capability | Promises                                                       | Contract cases                                                                                                                                                                        |
-| ---------- | -------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `sql`      | `Session.execute` runs one statement                           | select literals, statement without rows, rows affected, invalid SQL rejects `statementFailed`, session usable after a failure, `type_probe` cells, unshifted timestamps, early return |
-| `cancel`   | `Session.cancel` stops the running statement from another call | idle cancel is a no-op, a sleeping statement rejects `cancelled` well before it ends, the session runs the next statement                                                             |
+| Capability   | Promises                                                                        | Contract cases                                                                                                                                                                                                                                                                                                                                          |
+| ------------ | ------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `sql`        | `Session.execute` runs one statement                                            | select literals, statement without rows, rows affected, invalid SQL rejects `statementFailed`, session usable after a failure, `type_probe` cells, unshifted timestamps, early return                                                                                                                                                                   |
+| `cancel`     | `Session.cancel` stops the running statement from another call                  | idle cancel is a no-op, a sleeping statement rejects `cancelled` well before it ends, the session runs the next statement                                                                                                                                                                                                                               |
+| `schemaTree` | `Session.introspector` lists namespaces, describes one, quotes a qualified name | the current namespace is marked, the fixture's tables and `customer_totals` view are described, `orders` has its foreign key and `orders_placed_at_idx`, `customers` has its primary and unique keys, an unknown namespace rejects `introspectionFailed`, `qualifiedName` quotes an awkward identifier, the session runs statements after introspecting |
 
 Every plugin, whatever it declares, is checked for a valid schema; for its manifest's connection
 fields agreeing with `connectionSchema` (each field a key the schema accepts, every required key
@@ -82,14 +83,15 @@ staying usable.
 `runPluginContract(plugin, fixture)` from `@table-craft/plugin-api/testing` registers the cases for
 each declared capability (decision 013). The fixture carries what the suite cannot write portably:
 
-| Field                 | Meaning                                                                                |
-| --------------------- | -------------------------------------------------------------------------------------- |
-| `manifest`            | The plugin's parsed `table-craft-plugin.json`                                          |
-| `config`              | A config for a database seeded from `test/db/schema/<dialect>.sql`                     |
-| `wrongPasswordConfig` | Optional; the same database with a password it refuses                                 |
-| `statements.sleep(s)` | Optional; a statement that sleeps `s` seconds, required to exercise `cancel`           |
-| `statements.write`    | Optional; an idempotent write (`TYPE_PROBE_WRITE`) for the read-only case              |
-| `typeProbe.expected`  | The `type_probe` rows as wire values; every dialect shares `test/support/typeProbe.ts` |
+| Field                 | Meaning                                                                                                                                      |
+| --------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| `manifest`            | The plugin's parsed `table-craft-plugin.json`                                                                                                |
+| `config`              | A config for a database seeded from `test/db/schema/<dialect>.sql`                                                                           |
+| `wrongPasswordConfig` | Optional; the same database with a password it refuses                                                                                       |
+| `statements.sleep(s)` | Optional; a statement that sleeps `s` seconds, required to exercise `cancel`                                                                 |
+| `statements.write`    | Optional; an idempotent write (`TYPE_PROBE_WRITE`) for the read-only case                                                                    |
+| `typeProbe.expected`  | The `type_probe` rows as wire values; every dialect shares `test/support/typeProbe.ts`                                                       |
+| `catalog`             | Required with `schemaTree`: the fixture's namespace path, and an awkward identifier with its expected quoting (`quoted { name, qualified }`) |
 
 ### DatasourcePlugin and Session
 
@@ -109,11 +111,18 @@ interface Session {
   readonly serverVersion: string | null; // "17.4", "8.4.3", "3.53.4"
   execute(sql: string): Promise<ExecuteResult>; // one at a time; rejects with a PluginError
   cancel?(): Promise<void>; // present exactly when `cancel` is declared; no-op when idle
+  readonly introspector?: Introspector; // present exactly when `schemaTree` is declared
   close(): Promise<void>;
 }
 
+interface Introspector {
+  namespaces(): Promise<readonly Namespace[]>; // sorted by name
+  describe(path: readonly string[]): Promise<NamespaceCatalog>; // rejects `introspectionFailed`
+  qualifiedName(path: readonly string[], name: string): string; // quoted as the dialect quotes
+}
+
 class PluginError extends Error {
-  readonly code: "cancelled" | "connectionFailed" | "statementFailed";
+  readonly code: "cancelled" | "connectionFailed" | "statementFailed" | "introspectionFailed";
 }
 
 interface ExecuteResult {
@@ -136,6 +145,29 @@ so the host recognises a `PluginError` with `isPluginError` (by name and code), 
 usable. A read-only session is set up by the plugin as it connects: PostgreSQL
 `SET SESSION CHARACTERISTICS AS TRANSACTION READ ONLY`, MySQL `SET SESSION TRANSACTION READ ONLY`,
 SQLite `PRAGMA query_only = ON`.
+
+### Catalog
+
+The namespace is the unit of introspection (decision 022). A `Namespace` is
+`{ path, name, kind: "database" | "schema", system, current }`:
+
+| Plugin     | Namespaces                                                       | `qualifiedName(path, "orders")` |
+| ---------- | ---------------------------------------------------------------- | ------------------------------- |
+| PostgreSQL | the connected database `[db]`, then its schemas `[db, schema]`   | `"public"."orders"`             |
+| MySQL      | each database as `[db]`, kind `schema`                           | `` `table_craft`.`orders` ``    |
+| SQLite     | `main`, `temp` and attached databases as `[name]`, kind `schema` | `"main"."orders"`               |
+
+System namespaces are `pg_catalog`, `information_schema` and `pg_toast`; `information_schema`,
+`mysql`, `performance_schema` and `sys`; and SQLite's `temp`. `describe(path)` answers a
+`NamespaceCatalog { path, relations, routines, sequences }`. A `Relation` is a table, view or
+materialized view with its comment, `columns` (`name`, `position`, `type` as the database writes
+it, `nullable`, `default` as database text, `comment`, `autoIncrement`), `primaryKey`,
+`uniqueKeys`, `foreignKeys` (`target { path, relation, columns }`, `onDelete`, `onUpdate`) and
+`indexes` (`unique`, `primary`). Lists are sorted by name, columns by position. Triggers, checks,
+partitions, users and grants are not described. PostgreSQL describes a schema the user lacks
+`USAGE` on as `introspectionFailed` ("permission denied for schema …"), since `pg_catalog` itself
+would answer. SQLite has no constraint names, so the plugin names keys as DataGrip does
+(`orders_pk`, `orders_customers_id_fk`).
 
 ### Wire values
 
@@ -191,16 +223,25 @@ A request is `{ id, type, ...params }`; the engine answers `{ id, type, result }
 `id` and `type`, or `engine.error`. Requests are parsed before routing. Sessions and result
 handles belong to the port that created them and are released when it closes.
 
-| Request             | Params                      | Result                                                                |
-| ------------------- | --------------------------- | --------------------------------------------------------------------- |
-| `session.open`      | none                        | `{ sessionId, pluginName, capabilities, serverVersion }`              |
-| `statement.execute` | `sessionId`, `sql`          | `{ handle, columns, rowCount, truncated, rowsAffected, firstWindow }` |
-| `statement.cancel`  | `sessionId`                 | `null`; stops the running statement, a no-op when idle                |
-| `result.window`     | `handle`, `offset`, `limit` | `{ offset, rows }`, at most `RESULT_WINDOW_ROWS` rows                 |
-| `result.release`    | `handle`                    | `null`; releasing twice is not an error                               |
-| `session.close`     | `sessionId`                 | `null`; releases the session's handles, then closes it                |
+| Request                 | Params                      | Result                                                                |
+| ----------------------- | --------------------------- | --------------------------------------------------------------------- |
+| `session.open`          | none                        | `{ sessionId, pluginName, capabilities, serverVersion }`              |
+| `statement.execute`     | `sessionId`, `sql`          | `{ handle, columns, rowCount, truncated, rowsAffected, firstWindow }` |
+| `statement.cancel`      | `sessionId`                 | `null`; stops the running statement, a no-op when idle                |
+| `result.window`         | `handle`, `offset`, `limit` | `{ offset, rows }`, at most `RESULT_WINDOW_ROWS` rows                 |
+| `result.release`        | `handle`                    | `null`; releasing twice is not an error                               |
+| `session.close`         | `sessionId`                 | `null`; releases the session's handles, then closes it                |
+| `catalog.namespaces`    | `refresh?`                  | `Namespace[]`                                                         |
+| `catalog.describe`      | `path`, `refresh?`          | `{ catalog, introspectedAt, elapsedMs }`                              |
+| `catalog.qualifiedName` | `path`, `name`              | the plugin's quoting, e.g. `"public"."orders"`                        |
 
 A statement still running when its session closes is answered with `unknownSession`.
+
+The `catalog.*` requests need `schemaTree` and run on one introspection session per engine, opened
+on first use and closed with the engine, never on a console's session. The engine caches the
+namespace list and each described catalog (`core/catalog/cache.ts`) with when it was introspected
+and how long it took; `refresh` asks again, and a second describe of a path in flight joins the
+first. The cache dies with the engine, so a disconnect or an engine exit forgets it.
 
 | Constant             | Value  | Meaning                                                   |
 | -------------------- | ------ | --------------------------------------------------------- |
@@ -212,19 +253,20 @@ A statement still running when its session closes is answered with `unknownSessi
 `{ id, type: "engine.error", error: { code, message, hint } }`. `id` is `null` only when the request
 was unreadable. `hint` says what to do next.
 
-| Code                | Raised when                                                          |
-| ------------------- | -------------------------------------------------------------------- |
-| `unknownPlugin`     | No plugin has the datasource's `pluginId`                            |
-| `pluginUnavailable` | The plugin exists but failed to load; the message carries the reason |
-| `invalidConfig`     | The datasource config fails the plugin's `connectionSchema`          |
-| `unknownSession`    | `sessionId` is not open on this port                                 |
-| `unknownHandle`     | The handle was released, or belongs to another port                  |
-| `connectionFailed`  | The plugin could not connect; the message is the driver's            |
-| `statementFailed`   | The database rejected the statement; the message is the driver's     |
-| `cancelled`         | `statement.cancel` stopped the statement                             |
-| `timedOut`          | Test Connection got no answer within `PROBE_TIMEOUT_MS`              |
-| `invalidRequest`    | The request did not parse, or cancels on a plugin without `cancel`   |
-| `internal`          | Anything else; a bug                                                 |
+| Code                  | Raised when                                                             |
+| --------------------- | ----------------------------------------------------------------------- |
+| `unknownPlugin`       | No plugin has the datasource's `pluginId`                               |
+| `pluginUnavailable`   | The plugin exists but failed to load; the message carries the reason    |
+| `invalidConfig`       | The datasource config fails the plugin's `connectionSchema`             |
+| `unknownSession`      | `sessionId` is not open on this port                                    |
+| `unknownHandle`       | The handle was released, or belongs to another port                     |
+| `connectionFailed`    | The plugin could not connect; the message is the driver's               |
+| `statementFailed`     | The database rejected the statement; the message is the driver's        |
+| `cancelled`           | `statement.cancel` stopped the statement                                |
+| `introspectionFailed` | The database refused to describe a namespace; the hint says Synchronize |
+| `timedOut`            | Test Connection got no answer within `PROBE_TIMEOUT_MS`                 |
+| `invalidRequest`      | The request did not parse, or cancels on a plugin without `cancel`      |
+| `internal`            | Anything else; a bug                                                    |
 
 ## Shell and actions
 
@@ -240,38 +282,43 @@ tabs and its console's border; a read-only one shows a lock. The Database tool w
 datasource list (see Datasources and secrets); Services lists the open consoles as idle, running or
 failed with the last statement's duration. The status bar shows the active console's datasource,
 or the selected tree node's, as "pg · connected · PostgreSQL 17.4", or the connect error's message,
-on the left and a running indicator on the right; later plans add items to its slot list
-(`renderer/shell/statusItems.tsx`).
+and the namespace's last synchronization (see Database explorer) on the left, and a running
+indicator on the right; later plans add items to its slot list (`renderer/shell/statusItems.tsx`).
 
 Every command is an action in one registry (decision 015, `renderer/actions/`). Buttons, the
 keymap, the palette and the native menu all call `invoke(id, args?)`, which answers `ran`,
 `disabled` or `unknown`. An action's `when(context)` decides whether it is enabled from a snapshot
 of the stores; a disabled action shows greyed and does not run.
 
-| Action id                    | Title                   | macOS   | Windows / Linux  |
-| ---------------------------- | ----------------------- | ------- | ---------------- |
-| `console.run`                | Run                     | `⌘↩`    | `Ctrl+Enter`     |
-| `console.cancel`             | Cancel                  |         |                  |
-| `console.new`                | New Console             | `⇧⌘L`   | `Ctrl+Shift+L`   |
-| `tab.close`                  | Close Tab               | `⌘W`    | `Ctrl+W`         |
-| `tab.closeOthers`            | Close Other Tabs        |         |                  |
-| `tab.closeAll`               | Close All Tabs          |         |                  |
-| `tab.next`                   | Select Next Tab         | `⇧⌘]`   | `Ctrl+Shift+]`   |
-| `tab.previous`               | Select Previous Tab     | `⇧⌘[`   | `Ctrl+Shift+[`   |
-| `toolWindow.database.toggle` | Database                | `⌘1`    | `Ctrl+1`         |
-| `toolWindow.services.toggle` | Services                | `⌘8`    | `Ctrl+8`         |
-| `toolWindow.hideAll`         | Hide All Tool Windows   | `⇧⌘F12` | `Ctrl+Shift+F12` |
-| `focus.editor`               | Back to Editor          | `⎋`     | `Esc`            |
-| `palette.findAction`         | Find Action…            | `⇧⌘A`   | `Ctrl+Shift+A`   |
-| `palette.searchEverywhere`   | Search Everywhere       | `⇧⇧`    | Double Shift     |
-| `datasource.new`             | New Data Source…        | `⌘N` ¹  | `Ctrl+N` ¹       |
-| `datasource.properties`      | Data Source Properties… | `⌘;`    | `Ctrl+;`         |
-| `datasource.duplicate`       | Duplicate Data Source   | `⌘D` ¹  | `Ctrl+D` ¹       |
-| `datasource.delete`          | Delete Data Source      | `⌦` ¹   | `Delete` ¹       |
-| `datasource.connect`         | Connect                 |         |                  |
-| `datasource.disconnect`      | Disconnect              | `⌘F2`   | `Ctrl+F2`        |
-| `datasource.newFolder`       | New Folder…             |         |                  |
-| `datasource.moveToFolder`    | Move to Folder…         |         |                  |
+| Action id                      | Title                   | macOS    | Windows / Linux      |
+| ------------------------------ | ----------------------- | -------- | -------------------- |
+| `console.run`                  | Run                     | `⌘↩`     | `Ctrl+Enter`         |
+| `console.cancel`               | Cancel                  |          |                      |
+| `console.new`                  | New Console             | `⇧⌘L`    | `Ctrl+Shift+L`       |
+| `tab.close`                    | Close Tab               | `⌘W`     | `Ctrl+W`             |
+| `tab.closeOthers`              | Close Other Tabs        |          |                      |
+| `tab.closeAll`                 | Close All Tabs          |          |                      |
+| `tab.next`                     | Select Next Tab         | `⇧⌘]`    | `Ctrl+Shift+]`       |
+| `tab.previous`                 | Select Previous Tab     | `⇧⌘[`    | `Ctrl+Shift+[`       |
+| `toolWindow.database.toggle`   | Database                | `⌘1`     | `Ctrl+1`             |
+| `toolWindow.services.toggle`   | Services                | `⌘8`     | `Ctrl+8`             |
+| `toolWindow.hideAll`           | Hide All Tool Windows   | `⇧⌘F12`  | `Ctrl+Shift+F12`     |
+| `focus.editor`                 | Back to Editor          | `⎋`      | `Esc`                |
+| `palette.findAction`           | Find Action…            | `⇧⌘A`    | `Ctrl+Shift+A`       |
+| `palette.searchEverywhere`     | Search Everywhere       | `⇧⇧`     | Double Shift         |
+| `datasource.new`               | New Data Source…        | `⌘N` ¹   | `Ctrl+N` ¹           |
+| `datasource.properties`        | Data Source Properties… | `⌘;`     | `Ctrl+;`             |
+| `datasource.duplicate`         | Duplicate Data Source   | `⌘D` ¹   | `Ctrl+D` ¹           |
+| `datasource.delete`            | Delete Data Source      | `⌦` ¹    | `Delete` ¹           |
+| `datasource.connect`           | Connect                 |          |                      |
+| `datasource.disconnect`        | Disconnect              | `⌘F2`    | `Ctrl+F2`            |
+| `datasource.newFolder`         | New Folder…             |          |                      |
+| `datasource.moveToFolder`      | Move to Folder…         |          |                      |
+| `database.synchronize`         | Synchronize             | `⌥⌘Y`    | `Ctrl+Alt+Y`         |
+| `explorer.collapseAll`         | Collapse All            | `⌘-` ¹   | `Ctrl+-` ¹           |
+| `explorer.toggleSystemSchemas` | Show System Schemas     |          |                      |
+| `explorer.copyName`            | Copy Qualified Name     | `⌥⇧⌘C` ¹ | `Ctrl+Alt+Shift+C` ¹ |
+| `explorer.reveal`              | Select in Database View |          |                      |
 
 ¹ Only with focus in the Database tool window (`shortcutRegion`); elsewhere the key reaches the
 focused element. The datasource actions act on the selected tree node with focus in the Database
@@ -284,13 +331,14 @@ is open the keymap stands aside. Hide All Tool Windows restores what it hid when
 nothing open. Back to Editor applies only with focus in a tool window.
 
 Find Action (`⇧⌘A`) and Search Everywhere (`⇧⇧`) are one palette. Search Everywhere has scope tabs,
-`All` and `Actions`, fed by `SearchProvider`s (`renderer/palette/providers.ts`); `Tab` moves between
+`All`, `Actions` and `Tables`, fed by `SearchProvider`s (`renderer/palette/providers.ts`); `Tab` moves between
 them. Results are ranked by an in-house fuzzy scorer, and with an empty query the most recently
 run actions come first.
 
 The native menu is declared in `preload/menu.ts` and built by main: File (New Data Source…, New
-Console; Data Source Properties…, Disconnect; Close Tab),
-Edit (role), View (Tool Windows ▸ Database, Services; Hide All Tool Windows; Find Action…; Search
+Console; Data Source Properties…, Disconnect, Synchronize; Close Tab),
+Edit (role), View (Tool Windows ▸ Database, Services; Hide All Tool Windows; Show System Schemas;
+Find Action…; Search
 Everywhere; Toggle Developer Tools), Window (role, macOS only), Help (Find Action…). An item shows its
 action's accelerator with `registerAccelerator: false` and, when clicked, sends the action id to
 the renderer on `table-craft:invoke-action`; main never decides whether an action is enabled.
@@ -380,9 +428,47 @@ window holds one port per connected datasource.
 Datasources sit in folders, folders first, each level sorted by name. A node shows the plugin
 icon, the name, the colour swatch, a lock when read-only, and its state: disconnected,
 connecting, connected, failed with the error, or "failed: engine exited". A toolbar carries New
-Data Source, Properties, Connect, Disconnect and New Console; each node's context menu carries the
-datasource actions. Enter or a double-click opens a console. With no datasources the window shows
-"No data sources." and a New Data Source button.
+Data Source, Properties, Synchronize, Connect, Disconnect, New Console and Collapse All; each node's
+context menu carries the datasource actions. Enter or a double-click opens a console. With no
+datasources the window shows "No data sources." and a New Data Source button.
+
+### Database explorer
+
+A datasource whose plugin declares `schemaTree` expands into its catalog (plan 005,
+`datagrip-inventory.md` §3). The tree is one flat, virtualized list built by
+`renderer/model/explorerTree.ts` from the datasource list and `renderer/state/catalog.ts`:
+
+| Node                    | Children                                                                 | Shows                                              |
+| ----------------------- | ------------------------------------------------------------------------ | -------------------------------------------------- |
+| datasource              | its namespaces, hierarchical by path                                     | as above                                           |
+| namespace (database)    | its schemas                                                              | the name                                           |
+| namespace (schema)      | groups `tables`, `views`, `materialized views`, `routines`, `sequences`  | the name; a spinner while synchronizing            |
+| group                   | its objects; a group exists only when non-empty                          | `tables 3`                                         |
+| table, view             | `columns N`, `keys`, `foreign keys`, `indexes`, each only when non-empty | the name                                           |
+| column                  | none                                                                     | `name  type`, key icon for PK or FK, NOT NULL mark |
+| key, foreign key, index | none                                                                     | the name and its columns; `(a) → t(b)`; `unique`   |
+| `loading…`, error       | none                                                                     | a spinner; the error's message, hint beside it     |
+
+Expanding a disconnected datasource connects it; whenever a datasource attaches, by the tree or by a
+console, its namespaces are listed and the current one is described and expanded. Expanding a
+schema describes it once; Synchronize (`⌥⌘Y`) describes the selected namespace again, or relists
+namespaces on a datasource node. A namespace that fails to describe turns the danger colour, shows
+the error under it, and leaves its siblings alone; Synchronize retries it. Detaching a datasource
+for any reason clears its catalog. System namespaces are hidden unless Show System Schemas is on,
+which the window's layout remembers.
+
+With the tree focused, typing opens speed search over loaded rows only: matched characters are
+marked, the selection jumps to the first match, `↑`/`↓` step between matches and wrap, Enter keeps
+the selection, Esc closes; no match turns the field the danger colour. A contiguous run is marked
+before a fuzzy match, so `cust` marks `cust` in `customer_totals`. Search Everywhere's `Tables` tab
+lists every loaded relation as `orders` with `pg › table_craft › public` beside it; choosing one
+runs Select in Database View, which opens the tool window, expands the path and selects it. Copy
+Qualified Name puts the plugin's quoting on the clipboard (`catalog.qualifiedName`).
+
+The status bar's `sync` item reads `public synchronized (38 ms) · 2 min ago` for the selected
+namespace of the active datasource, else its current one, refreshed every minute
+(`SYNC_LABEL_TICK_MS`), or `explorer_restricted failed: …` with the hint when the selected one
+failed.
 
 The Data Sources dialog follows DataGrip: the list on the left with add, duplicate and remove; the
 form on the right with Name, Folder, Comment, the plugin's General fields, its Advanced fields,

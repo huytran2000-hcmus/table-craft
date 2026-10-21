@@ -52,6 +52,7 @@ export const APPLICATION_MENU: readonly MenuEntry[] = [
         accelerator: "CmdOrCtrl+;",
       },
       { kind: "action", label: "Disconnect", actionId: "datasource.disconnect", accelerator: "CmdOrCtrl+F2" },
+      { kind: "action", label: "Synchronize", actionId: "database.synchronize", accelerator: "CmdOrCtrl+Alt+Y" },
       SEPARATOR,
       { kind: "action", label: "Close Tab", actionId: "tab.close", accelerator: "CmdOrCtrl+W" },
     ],
@@ -75,6 +76,7 @@ export const APPLICATION_MENU: readonly MenuEntry[] = [
         actionId: "toolWindow.hideAll",
         accelerator: "CmdOrCtrl+Shift+F12",
       },
+      { kind: "action", label: "Show System Schemas", actionId: "explorer.toggleSystemSchemas" },
       SEPARATOR,
       { kind: "action", label: "Find Action…", actionId: "palette.findAction", accelerator: "CmdOrCtrl+Shift+A" },
       // No accelerator: Electron cannot express a double Shift.

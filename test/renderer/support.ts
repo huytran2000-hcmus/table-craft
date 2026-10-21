@@ -12,6 +12,7 @@ export const IDLE_CONTEXT: ActionContext = {
   focus: "editor",
   toolWindows: { database: true, services: true },
   paletteOpen: false,
+  speedSearching: false,
 };
 
 export interface FakeKey extends KeyEventLike {

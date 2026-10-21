@@ -14,6 +14,8 @@
   --color-success: var(--tc-success);
   --color-grid-stripe: var(--tc-grid-stripe);
   --color-selection: var(--tc-selection);
+  --color-search-match: var(--tc-search-match);
+  --color-key-icon: var(--tc-key-icon);
   --color-ds-red: var(--tc-ds-red);
   --color-ds-orange: var(--tc-ds-orange);
   --color-ds-yellow: var(--tc-ds-yellow);

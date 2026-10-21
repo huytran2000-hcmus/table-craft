@@ -2,9 +2,9 @@
   "id": "sqlite",
   "name": "SQLite",
   "version": "0.0.0",
-  "apiVersion": "0.3.0",
+  "apiVersion": "0.4.0",
   "entry": "index.js",
-  "capabilities": ["sql"],
+  "capabilities": ["sql", "schemaTree"],
   "highlight": "sqlite",
   "connection": {
     "fields": [

@@ -1,0 +1,280 @@
+import type mysql from "mysql2";
+import {
+  byName,
+  PluginError,
+  type ColumnMeta,
+  type ForeignKey,
+  type Index,
+  type Introspector,
+  type Key,
+  type Namespace,
+  type NamespaceCatalog,
+  type Relation,
+  type Routine,
+} from "@table-craft/plugin-api";
+
+const SYSTEM_DATABASES: ReadonlySet<string> = new Set(["information_schema", "mysql", "performance_schema", "sys"]);
+
+const VIEW_TYPES: ReadonlySet<string> = new Set(["VIEW", "SYSTEM VIEW"]);
+const AUTO_INCREMENT = /\bauto_increment\b/i;
+const PRIMARY_INDEX = "PRIMARY";
+const PRIMARY_KEY = "PRIMARY KEY";
+const UNIQUE_KEY = "UNIQUE";
+const FOREIGN_KEY = "FOREIGN KEY";
+const PROCEDURE = "PROCEDURE";
+const DEFAULT_ACTION = "NO ACTION";
+
+const NAMESPACES_SQL = `
+  SELECT SCHEMA_NAME AS name, DATABASE() AS current
+  FROM information_schema.SCHEMATA
+  ORDER BY SCHEMA_NAME`;
+
+const DATABASE_SQL = "SELECT SCHEMA_NAME AS name FROM information_schema.SCHEMATA WHERE SCHEMA_NAME = ?";
+
+const RELATIONS_SQL = `
+  SELECT TABLE_NAME AS name, TABLE_TYPE AS kind, TABLE_COMMENT AS comment
+  FROM information_schema.TABLES
+  WHERE TABLE_SCHEMA = ?`;
+
+const COLUMNS_SQL = `
+  SELECT TABLE_NAME AS relation, COLUMN_NAME AS name, COLUMN_TYPE AS type, IS_NULLABLE AS nullable,
+    COLUMN_DEFAULT AS dflt, COLUMN_COMMENT AS comment, EXTRA AS extra
+  FROM information_schema.COLUMNS
+  WHERE TABLE_SCHEMA = ?
+  ORDER BY TABLE_NAME, ORDINAL_POSITION`;
+
+const CONSTRAINTS_SQL = `
+  SELECT tc.TABLE_NAME AS relation, tc.CONSTRAINT_NAME AS name, tc.CONSTRAINT_TYPE AS type,
+    k.COLUMN_NAME AS col, k.REFERENCED_TABLE_SCHEMA AS target_schema,
+    k.REFERENCED_TABLE_NAME AS target_relation, k.REFERENCED_COLUMN_NAME AS target_col,
+    rc.DELETE_RULE AS on_delete, rc.UPDATE_RULE AS on_update
+  FROM information_schema.TABLE_CONSTRAINTS tc
+  JOIN information_schema.KEY_COLUMN_USAGE k
+    ON k.CONSTRAINT_SCHEMA = tc.CONSTRAINT_SCHEMA AND k.CONSTRAINT_NAME = tc.CONSTRAINT_NAME
+    AND k.TABLE_NAME = tc.TABLE_NAME
+  LEFT JOIN information_schema.REFERENTIAL_CONSTRAINTS rc
+    ON rc.CONSTRAINT_SCHEMA = tc.CONSTRAINT_SCHEMA AND rc.CONSTRAINT_NAME = tc.CONSTRAINT_NAME
+    AND rc.TABLE_NAME = tc.TABLE_NAME
+  WHERE tc.TABLE_SCHEMA = ? AND tc.CONSTRAINT_TYPE IN ('${PRIMARY_KEY}', '${UNIQUE_KEY}', '${FOREIGN_KEY}')
+  ORDER BY tc.TABLE_NAME, tc.CONSTRAINT_NAME, k.ORDINAL_POSITION`;
+
+/** A functional index part has no column; `EXPRESSION` carries it instead. */
+const INDEXES_SQL = `
+  SELECT TABLE_NAME AS relation, INDEX_NAME AS name, NON_UNIQUE AS non_unique,
+    COALESCE(COLUMN_NAME, EXPRESSION) AS col
+  FROM information_schema.STATISTICS
+  WHERE TABLE_SCHEMA = ?
+  ORDER BY TABLE_NAME, INDEX_NAME, SEQ_IN_INDEX`;
+
+const ROUTINES_SQL = `
+  SELECT ROUTINE_NAME AS name, ROUTINE_TYPE AS kind
+  FROM information_schema.ROUTINES
+  WHERE ROUTINE_SCHEMA = ?`;
+
+/** information_schema hands some columns over in a binary collation, which mysql2 reads as bytes. */
+type Text = string | Buffer | null;
+
+interface NamespaceRow {
+  readonly name: Text;
+  readonly current: Text;
+}
+
+interface RelationRow {
+  readonly name: Text;
+  readonly kind: Text;
+  readonly comment: Text;
+}
+
+interface ColumnRow {
+  readonly relation: Text;
+  readonly name: Text;
+  readonly type: Text;
+  readonly nullable: Text;
+  readonly dflt: Text;
+  readonly comment: Text;
+  readonly extra: Text;
+}
+
+interface ConstraintRow {
+  readonly relation: Text;
+  readonly name: Text;
+  readonly type: Text;
+  readonly col: Text;
+  readonly target_schema: Text;
+  readonly target_relation: Text;
+  readonly target_col: Text;
+  readonly on_delete: Text;
+  readonly on_update: Text;
+}
+
+interface IndexRow {
+  readonly relation: Text;
+  readonly name: Text;
+  readonly non_unique: number | string;
+  readonly col: Text;
+}
+
+function text(value: Text): string {
+  if (value === null) return "";
+  return typeof value === "string" ? value : value.toString("utf8");
+}
+
+function optional(value: Text): string | null {
+  const read = text(value);
+  return read === "" ? null : read;
+}
+
+function quote(identifier: string): string {
+  return `\`${identifier.replaceAll("`", "``")}\``;
+}
+
+function messageOf(cause: unknown): string {
+  return cause instanceof Error ? cause.message : String(cause);
+}
+
+/** Rows of one relation's multi-row objects (a key's columns, an index's parts), in query order. */
+function grouped<T extends { readonly relation: Text; readonly name: Text }>(
+  rows: readonly T[],
+): Map<string, Map<string, T[]>> {
+  const relations = new Map<string, Map<string, T[]>>();
+  for (const row of rows) {
+    const relation = text(row.relation);
+    const objects = relations.get(relation) ?? new Map<string, T[]>();
+    relations.set(relation, objects);
+    const name = text(row.name);
+    const parts = objects.get(name);
+    if (parts === undefined) objects.set(name, [row]);
+    else parts.push(row);
+  }
+  return relations;
+}
+
+function toColumn(row: ColumnRow, index: number): ColumnMeta {
+  return {
+    name: text(row.name),
+    position: index + 1,
+    type: text(row.type),
+    nullable: text(row.nullable) === "YES",
+    default: row.dflt === null ? null : text(row.dflt),
+    comment: optional(row.comment),
+    autoIncrement: AUTO_INCREMENT.test(text(row.extra)),
+  };
+}
+
+/** Every query filters `information_schema` by `TABLE_SCHEMA = ?`, which MySQL answers without opening each table. */
+export function mysqlIntrospector(connection: mysql.Connection): Introspector {
+  function rows<T>(sql: string, values: string[] = []): Promise<T[]> {
+    return new Promise((resolve, reject) => {
+      connection.query(sql, values, (error, found) => {
+        if (error === null) resolve(found as T[]);
+        else reject(new PluginError("introspectionFailed", messageOf(error), { cause: error }));
+      });
+    });
+  }
+
+  return {
+    async namespaces(): Promise<readonly Namespace[]> {
+      const found = await rows<NamespaceRow>(NAMESPACES_SQL);
+      return found.map((row): Namespace => {
+        const name = text(row.name);
+        return {
+          path: [name],
+          name,
+          kind: "schema",
+          system: SYSTEM_DATABASES.has(name.toLowerCase()),
+          current: name === text(row.current),
+        };
+      });
+    },
+
+    async describe(path: readonly string[]): Promise<NamespaceCatalog> {
+      const [database] = path;
+      if (path.length !== 1 || database === undefined) {
+        throw new PluginError("introspectionFailed", `"${path.join(".")}" is not a MySQL database.`);
+      }
+      if ((await rows<NamespaceRow>(DATABASE_SQL, [database])).length === 0) {
+        throw new PluginError(
+          "introspectionFailed",
+          `Database "${database}" does not exist, or this user has no privileges on it.`,
+        );
+      }
+      const [relations, columns, constraints, indexes, routines] = await Promise.all([
+        rows<RelationRow>(RELATIONS_SQL, [database]),
+        rows<ColumnRow>(COLUMNS_SQL, [database]),
+        rows<ConstraintRow>(CONSTRAINTS_SQL, [database]),
+        rows<IndexRow>(INDEXES_SQL, [database]),
+        rows<{ name: Text; kind: Text }>(ROUTINES_SQL, [database]),
+      ]);
+      const columnsOf = new Map<string, ColumnRow[]>();
+      for (const column of columns) {
+        const relation = text(column.relation);
+        columnsOf.set(relation, [...(columnsOf.get(relation) ?? []), column]);
+      }
+      const constraintsOf = grouped(constraints);
+      const indexesOf = grouped(indexes);
+      const described = relations.map((row): Relation => {
+        const name = text(row.name);
+        const kind = text(row.kind);
+        const view = VIEW_TYPES.has(kind);
+        const keys = [...(constraintsOf.get(name) ?? new Map<string, ConstraintRow[]>()).entries()];
+        const ofType = (type: string): [string, ConstraintRow[]][] =>
+          keys.filter(([, parts]) => text(parts[0]?.type ?? null) === type);
+        const key = ([keyName, parts]: [string, ConstraintRow[]]): Key => ({
+          name: keyName,
+          columns: parts.map((part) => text(part.col)),
+        });
+        const primary = ofType(PRIMARY_KEY)[0];
+        return {
+          name,
+          kind: view ? "view" : "table",
+          // A view's TABLE_COMMENT is the word VIEW, not a comment anyone wrote.
+          comment: view ? null : optional(row.comment),
+          columns: (columnsOf.get(name) ?? []).map(toColumn),
+          primaryKey: primary === undefined ? null : key(primary),
+          uniqueKeys: byName(ofType(UNIQUE_KEY).map(key)),
+          foreignKeys: byName(
+            ofType(FOREIGN_KEY).map(([keyName, parts]): ForeignKey => {
+              const first = parts[0];
+              return {
+                name: keyName,
+                columns: parts.map((part) => text(part.col)),
+                target: {
+                  path: [text(first?.target_schema ?? null)],
+                  relation: text(first?.target_relation ?? null),
+                  columns: parts.map((part) => text(part.target_col)),
+                },
+                onDelete: optional(first?.on_delete ?? null) ?? DEFAULT_ACTION,
+                onUpdate: optional(first?.on_update ?? null) ?? DEFAULT_ACTION,
+              };
+            }),
+          ),
+          indexes: byName(
+            [...(indexesOf.get(name) ?? new Map<string, IndexRow[]>()).entries()].map(([indexName, parts]): Index => ({
+              name: indexName,
+              columns: parts.map((part) => text(part.col)),
+              unique: Number(parts[0]?.non_unique) === 0,
+              primary: indexName === PRIMARY_INDEX,
+            })),
+          ),
+        };
+      });
+      const routinesByName = new Map<string, Routine>();
+      for (const routine of routines) {
+        const name = text(routine.name);
+        if (!routinesByName.has(name)) {
+          routinesByName.set(name, { name, kind: text(routine.kind) === PROCEDURE ? "procedure" : "function" });
+        }
+      }
+      return {
+        path: [database],
+        relations: byName(described),
+        routines: byName(routinesByName.values()),
+        sequences: [],
+      };
+    },
+
+    qualifiedName(path: readonly string[], name: string): string {
+      return [...path, name].map(quote).join(".");
+    },
+  };
+}

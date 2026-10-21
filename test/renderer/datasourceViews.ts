@@ -38,7 +38,7 @@ export const POSTGRES_PLUGIN: PluginInfo = {
   id: "postgres",
   name: "PostgreSQL",
   unavailableReason: null,
-  capabilities: ["sql", "cancel"],
+  capabilities: ["sql", "cancel", "schemaTree"],
   fields: POSTGRES_FIELDS,
 };
 

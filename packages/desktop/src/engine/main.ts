@@ -1,6 +1,11 @@
 import type { MessagePortMain, ParentPort } from "electron";
 import { loadPlugins, type PluginLoadResult } from "@table-craft/core";
-import { createEngine, probeDatasource, type EngineConnection } from "@table-craft/desktop/engine/engine.js";
+import {
+  createEngine,
+  probeDatasource,
+  type Engine,
+  type EngineConnection,
+} from "@table-craft/desktop/engine/engine.js";
 import { createLifetime } from "@table-craft/desktop/engine/lifetime.js";
 import {
   ENGINE_BOOT_MESSAGE,
@@ -19,6 +24,7 @@ process.setSourceMapsEnabled(true);
 
 const parentPort = (process as unknown as UtilityProcess).parentPort;
 let booted: Promise<EngineConnectionFactory> | null = null;
+let engine: Engine | null = null;
 const connections = new Set<Promise<EngineConnection>>();
 
 type EngineConnectionFactory = () => EngineConnection;
@@ -35,14 +41,16 @@ async function exitAfterClosing(): Promise<never> {
   const open = [...connections];
   connections.clear();
   await Promise.allSettled(open.map(async (connection) => (await connection).close()));
+  await engine?.close();
   process.exit(0);
 }
 
 const lifetime = createLifetime(() => void exitAfterClosing());
 
 async function serve(message: EngineBoot): Promise<EngineConnectionFactory> {
-  const engine = createEngine({ datasource: message.datasource, plugins: await plugins(message) });
-  return () => engine.connect();
+  const served = createEngine({ datasource: message.datasource, plugins: await plugins(message) });
+  engine = served;
+  return () => served.connect();
 }
 
 async function probe(message: EngineBoot): Promise<never> {

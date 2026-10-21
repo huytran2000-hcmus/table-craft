@@ -38,6 +38,11 @@ export const ACTION_IDS = {
   disconnect: "datasource.disconnect",
   newFolder: "datasource.newFolder",
   moveToFolder: "datasource.moveToFolder",
+  synchronize: "database.synchronize",
+  collapseAll: "explorer.collapseAll",
+  toggleSystemSchemas: "explorer.toggleSystemSchemas",
+  copyName: "explorer.copyName",
+  reveal: "explorer.reveal",
 } as const;
 
 /** Names a tab when an action runs on one other than the active tab, as the tab menu does. */
@@ -182,7 +187,7 @@ export const APP_ACTIONS: readonly AnyAction[] = [
     title: "Back to Editor",
     category: "Navigation",
     shortcut: "Escape",
-    when: (context) => context.focus === "database" || context.focus === "services",
+    when: (context) => (context.focus === "database" || context.focus === "services") && !context.speedSearching,
     run: () => focusRegion("editor"),
   }),
   defineAction({

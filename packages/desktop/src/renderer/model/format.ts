@@ -1,3 +1,4 @@
+import type { EngineError } from "@table-craft/desktop/engine/protocol.js";
 import type { DatasourceView } from "@table-craft/desktop/preload/bridge.js";
 import type { ConsoleSession } from "@table-craft/desktop/renderer/state/consoles.js";
 import { ENGINE_EXITED_HINT, type Connection } from "@table-craft/desktop/renderer/state/datasources.js";
@@ -49,6 +50,30 @@ export function datasourceText(datasource: DatasourceView, pluginName: string | 
   const parts = [datasource.name, connectionText(connection)];
   if (server !== null) parts.push(server);
   return parts.join(" · ");
+}
+
+const MS_PER_MINUTE = 60_000;
+const MINUTES_PER_HOUR = 60;
+const HOURS_PER_DAY = 24;
+
+/** `just now`, `2 min ago`, `3 h ago`, `2 d ago`; coarse, because the status bar ticks once a minute. */
+export function relativeTime(at: number, now: number): string {
+  const minutes = Math.floor(Math.max(0, now - at) / MS_PER_MINUTE);
+  if (minutes < 1) return "just now";
+  if (minutes < MINUTES_PER_HOUR) return `${minutes} min ago`;
+  const hours = Math.floor(minutes / MINUTES_PER_HOUR);
+  if (hours < HOURS_PER_DAY) return `${hours} h ago`;
+  return `${Math.floor(hours / HOURS_PER_DAY)} d ago`;
+}
+
+/** The status bar's sync item: `public synchronized (38 ms) · 2 min ago`. */
+export function syncText(namespace: string, introspectedAt: number, elapsedMs: number, now: number): string {
+  return `${namespace} synchronized (${formatDuration(elapsedMs)}) · ${relativeTime(introspectedAt, now)}`;
+}
+
+/** The status bar's sync item for a namespace that failed: what went wrong, then what to do. */
+export function syncFailedText(namespace: string, error: EngineError): string {
+  return `${namespace} failed: ${error.message} ${error.hint}`;
 }
 
 /** A console tab's label (plan 004): `console [pg]`. */

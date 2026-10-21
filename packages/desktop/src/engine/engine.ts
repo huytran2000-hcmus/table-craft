@@ -1,4 +1,4 @@
-import { CoreError, openSession, ResultStore, type PluginLoadResult } from "@table-craft/core";
+import { CatalogCache, CoreError, openSession, ResultStore, type PluginLoadResult } from "@table-craft/core";
 import { isPluginError, type Capability, type Session } from "@table-craft/plugin-api";
 import type {
   DatasourceConfig,
@@ -27,6 +27,8 @@ export interface EngineConnection {
 
 export interface Engine {
   connect(): EngineConnection;
+  /** Closes what the engine holds for every connection: the introspection session. */
+  close(): Promise<void>;
 }
 
 class EngineFailure extends Error {
@@ -72,6 +74,18 @@ function statementFailed(cause: unknown, readOnly: boolean): EngineFailure {
     message: messageOf(cause),
     hint: readOnly ? READ_ONLY_STATEMENT_HINT : STATEMENT_HINT,
   });
+}
+
+const INTROSPECTION_HINT = "Check that this user may read the schema, then choose Synchronize (⌥⌘Y) to try again.";
+
+function introspectionFailed(cause: unknown): unknown {
+  if (!isPluginError(cause) || cause.code !== "introspectionFailed") return cause;
+  return new EngineFailure({ code: "introspectionFailed", message: cause.message, hint: INTROSPECTION_HINT });
+}
+
+interface Introspection {
+  readonly session: Session;
+  readonly cache: CatalogCache;
 }
 
 interface OpenSession {
@@ -124,6 +138,42 @@ export async function probeDatasource(options: EngineOptions, now: () => number 
 export function createEngine(options: EngineOptions): Engine {
   const results = new ResultStore();
   let nextSession = 1;
+  /** One session for every connection's catalog calls, opened on first use (decision 022). */
+  let introspection: Promise<Introspection> | null = null;
+
+  async function openIntrospection(): Promise<Introspection> {
+    const session = await connectDatasource(options);
+    if (session.introspector === undefined) {
+      await session.close().catch(() => undefined);
+      throw new EngineFailure({
+        code: "invalidRequest",
+        message: "This datasource's plugin does not declare the schemaTree capability.",
+        hint: BUG_HINT,
+      });
+    }
+    return { session, cache: new CatalogCache(session.introspector) };
+  }
+
+  /** A failed open is forgotten, so the next catalog call connects again. */
+  function catalog(): Promise<Introspection> {
+    if (introspection === null) {
+      const opening = openIntrospection();
+      introspection = opening;
+      opening.catch(() => {
+        if (introspection === opening) introspection = null;
+      });
+    }
+    return introspection;
+  }
+
+  async function introspect<T>(read: (open: Introspection) => Promise<T> | T): Promise<T> {
+    const open = await catalog();
+    try {
+      return await read(open);
+    } catch (cause) {
+      throw introspectionFailed(cause);
+    }
+  }
 
   function connect(): EngineConnection {
     const sessions = new Map<string, OpenSession>();
@@ -220,6 +270,10 @@ export function createEngine(options: EngineOptions): Engine {
         if (handles.delete(handle)) results.release(handle);
         return Promise.resolve(null);
       },
+      "catalog.namespaces": ({ refresh }) => introspect(({ cache }) => cache.namespaces(refresh)),
+      "catalog.describe": ({ path, refresh }) => introspect(({ cache }) => cache.describe(path, refresh)),
+      "catalog.qualifiedName": ({ path, name }) =>
+        introspect(({ session }) => session.introspector?.qualifiedName(path, name) ?? name),
     };
 
     async function route<M extends EngineMethod>(request: RequestOf<M>): Promise<EngineResponse> {
@@ -258,5 +312,12 @@ export function createEngine(options: EngineOptions): Engine {
     };
   }
 
-  return { connect };
+  async function close(): Promise<void> {
+    const open = introspection;
+    introspection = null;
+    if (open === null) return;
+    await open.then((entry) => entry.session.close()).catch(() => undefined);
+  }
+
+  return { connect, close };
 }

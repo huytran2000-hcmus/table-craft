@@ -16,6 +16,8 @@ export function appearanceVariables(appearance: Appearance): Readonly<Record<str
     "--tc-success": colors.success,
     "--tc-grid-stripe": colors.gridStripe,
     "--tc-selection": colors.selection,
+    "--tc-search-match": colors.searchMatch,
+    "--tc-key-icon": colors.keyIcon,
     ...Object.fromEntries(Object.entries(colors.datasource).map(([name, value]) => [`--tc-ds-${name}`, value])),
     "--tc-font-ui": fonts.ui.family,
     "--tc-font-ui-size": `${fonts.ui.sizePx}px`,

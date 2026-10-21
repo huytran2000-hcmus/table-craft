@@ -10,13 +10,15 @@ import {
   type ConnectOptions,
   type DatasourcePlugin,
   type ExecuteResult,
+  type Introspector,
   type Row,
   type Session,
   type WireValue,
 } from "@table-craft/plugin-api";
+import { mysqlIntrospector } from "./introspect.js";
 
 const PLUGIN_ID = "mysql";
-const CAPABILITIES: readonly Capability[] = ["sql", "cancel"];
+const CAPABILITIES: readonly Capability[] = ["sql", "cancel", "schemaTree"];
 
 const DEFAULT_PORT = 3306;
 const MAX_PORT = 65_535;
@@ -225,11 +227,13 @@ class MysqlSession implements Session {
   #cancelling: Promise<void> = Promise.resolve();
 
   readonly serverVersion: string | null;
+  readonly introspector: Introspector;
 
   constructor(config: MysqlConfig, connection: mysql.Connection, serverVersion: string | null) {
     this.#config = config;
     this.#connection = connection;
     this.serverVersion = serverVersion;
+    this.introspector = mysqlIntrospector(connection);
     connection.on("error", (error: Error) => {
       this.#broken = error;
     });

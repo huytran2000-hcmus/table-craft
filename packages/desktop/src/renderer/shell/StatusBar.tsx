@@ -10,7 +10,7 @@ export function StatusBar() {
       aria-label="Status bar"
       className="flex h-status-bar shrink-0 items-center justify-between gap-gap border-t border-line bg-panel px-gap text-ink-muted"
     >
-      <div className="flex min-w-0 items-center gap-gap">
+      <div className="flex min-w-0 flex-1 items-center gap-gap">
         <Items items={STATUS_ITEMS.filter((item) => item.side === "left")} />
       </div>
       <div className="flex items-center gap-gap">

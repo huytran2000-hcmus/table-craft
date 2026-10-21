@@ -1,7 +1,8 @@
 import { useSyncExternalStore } from "react";
-import { APP_ACTIONS } from "@table-craft/desktop/renderer/actions/appActions.js";
+import { ALL_ACTIONS } from "@table-craft/desktop/renderer/actions/allActions.js";
 import { currentContext } from "@table-craft/desktop/renderer/actions/context.js";
 import { createActionRegistry, type InvokeOutcome } from "@table-craft/desktop/renderer/actions/registry.js";
+import { useCatalog } from "@table-craft/desktop/renderer/state/catalog.js";
 import { useConsoles } from "@table-craft/desktop/renderer/state/consoles.js";
 import { useDataSourcesDialog } from "@table-craft/desktop/renderer/state/dataSourcesDialog.js";
 import { useDatasources } from "@table-craft/desktop/renderer/state/datasources.js";
@@ -15,7 +16,7 @@ import { useTabs } from "@table-craft/desktop/renderer/state/tabs.js";
 export const registry = createActionRegistry(currentContext, (id, cause) => {
   console.error(`Action "${id}" failed.`, cause);
 });
-registry.register(APP_ACTIONS);
+registry.register(ALL_ACTIONS);
 
 export function invoke(id: string, args?: unknown): InvokeOutcome {
   return registry.invoke(id, args);
@@ -25,6 +26,7 @@ const STORES = [
   useTabs,
   useConsoles,
   useDatasources,
+  useCatalog,
   useLayout,
   usePalette,
   useDataSourcesDialog,
