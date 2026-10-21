@@ -104,10 +104,16 @@ function isDatasourcePlugin(value: unknown): value is DatasourcePlugin {
   );
 }
 
-/** `language` is how the console splits and classifies (decision 008); a SQL plugin cannot run without it. */
+const LANGUAGE_METHODS = ["split", "classify", "quoteIdentifier", "literal"] as const;
+type LanguageMethod = (typeof LANGUAGE_METHODS)[number];
+
+/**
+ * `language` is how the console splits and classifies and how Copy writes SQL (decision 008); a
+ * SQL plugin cannot run without it.
+ */
 function hasLanguage(plugin: DatasourcePlugin): boolean {
-  const language = plugin.language as Partial<Record<"split" | "classify", unknown>> | undefined;
-  return typeof language?.split === "function" && typeof language.classify === "function";
+  const language = plugin.language as Partial<Record<LanguageMethod, unknown>> | undefined;
+  return LANGUAGE_METHODS.every((method) => typeof language?.[method] === "function");
 }
 
 function sameCapabilities(manifest: PluginManifest, plugin: DatasourcePlugin): boolean {
@@ -139,7 +145,9 @@ async function importPlugin(directory: string, manifest: PluginManifest): Promis
     return unavailable("capabilities in the manifest and the entry's export differ; make them match.");
   }
   if (plugin.capabilities.includes("sql") && !hasLanguage(plugin)) {
-    return unavailable("declares sql but exports no language with split and classify; add one (plugin-api/sql helps).");
+    return unavailable(
+      "declares sql but exports no language with split, classify, quoteIdentifier and literal; add one (plugin-api/sql helps).",
+    );
   }
   return { status: "loaded", directory, manifest, plugin };
 }

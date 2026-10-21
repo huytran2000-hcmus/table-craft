@@ -15,6 +15,10 @@ export interface ColorTokens {
   /** A healthy state: the connected datasource's dot. */
   readonly success: string;
   readonly gridStripe: string;
+  /** Behind the grid's selected cells; stronger than `selection`, which marks hover. */
+  readonly gridSelection: string;
+  /** A NULL cell's `<null>`, set in italics so it never reads as the string (plan 007 decision 16). */
+  readonly gridNull: string;
   /** The pressed stripe button and the hovered row; one step above `panel`. */
   readonly selection: string;
   /** Behind the characters speed search matched in a tree row. */
@@ -60,6 +64,8 @@ export interface DensityTokens {
   readonly cellPaddingPx: number;
   readonly gapPx: number;
   readonly gridColumnMaxWidthPx: number;
+  /** The result grid's value panel, beside its rows. */
+  readonly valuePanelWidthPx: number;
   readonly consoleHeightPx: number;
   /** The tool-window stripes at either edge of the window. */
   readonly stripeWidthPx: number;
@@ -96,6 +102,8 @@ export const DARK_COLORS: ColorTokens = {
   danger: "#f75464",
   success: "#5fb865",
   gridStripe: "#26282b",
+  gridSelection: "#214283",
+  gridNull: "#7c7f87",
   selection: "#2e436e",
   searchMatch: "#6b5a1e",
   keyIcon: "#d9a343",
@@ -132,6 +140,7 @@ export const COMFORTABLE_DENSITY: DensityTokens = {
   cellPaddingPx: 8,
   gapPx: 8,
   gridColumnMaxWidthPx: 320,
+  valuePanelWidthPx: 360,
   consoleHeightPx: 128,
   stripeWidthPx: 36,
   tabHeightPx: 32,

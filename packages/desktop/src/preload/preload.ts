@@ -48,6 +48,7 @@ const bridge: TableCraftBridge = {
   connectEngine: (datasourceId, secrets) => invoke(INVOKE_CHANNELS.connectEngine, { datasourceId, secrets }),
   disconnectEngine: (datasourceId) => invoke(INVOKE_CHANNELS.disconnectEngine, { datasourceId }),
   chooseFile: (title) => invoke(INVOKE_CHANNELS.chooseFile, { title }),
+  saveFile: (title, defaultName) => invoke(INVOKE_CHANNELS.saveFile, { title, defaultName }),
   listConsoles: (datasourceId) => invoke(INVOKE_CHANNELS.listConsoles, { datasourceId }),
   readConsole: (datasourceId, name) => invoke(INVOKE_CHANNELS.readConsole, { datasourceId, name }),
   writeConsole: (datasourceId, name, text) => invoke(INVOKE_CHANNELS.writeConsole, { datasourceId, name, text }),

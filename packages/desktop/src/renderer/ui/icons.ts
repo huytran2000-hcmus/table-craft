@@ -1,5 +1,20 @@
 import {
+  ArrowClockwise,
   ArrowCounterClockwise,
+  ArrowDown,
+  ArrowLineDown,
+  ArrowUp,
+  Binary,
+  BracketsCurly,
+  Calendar,
+  EyeSlash,
+  Export,
+  Hash,
+  SidebarSimple,
+  SortAscending,
+  SortDescending,
+  TextAa,
+  ToggleLeft,
   ArrowsClockwise,
   ArrowsInLineVertical,
   Asterisk,
@@ -63,7 +78,19 @@ export {
   FunctionGlyph as RoutineIcon,
   ListNumbers as SequenceIcon,
   Asterisk as NotNullIcon,
+  ArrowUp as SortAscendingMark,
+  ArrowDown as SortDescendingMark,
 };
+
+/** The header's type glyph per column class (plan 007 decision 7); temporal reads as a date. */
+export const TYPE_GLYPHS = {
+  number: Hash,
+  text: TextAa,
+  date: Calendar,
+  bool: ToggleLeft,
+  json: BracketsCurly,
+  bytes: Binary,
+} as const satisfies Readonly<Record<string, Icon>>;
 
 export const ACTION_ICONS: Readonly<Record<ActionIcon, Icon>> = {
   run: Play,
@@ -87,4 +114,12 @@ export const ACTION_ICONS: Readonly<Record<ActionIcon, Icon>> = {
   synchronize: ArrowsClockwise,
   collapseAll: ArrowsInLineVertical,
   copy: CopySimple,
+  fetchNextPage: ArrowDown,
+  fetchAll: ArrowLineDown,
+  rerun: ArrowClockwise,
+  export: Export,
+  valuePanel: SidebarSimple,
+  sortAscending: SortAscending,
+  sortDescending: SortDescending,
+  hide: EyeSlash,
 };

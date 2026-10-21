@@ -19,7 +19,7 @@ its own MessagePort (decision 002).
 
 A plugin is a directory with `table-craft-plugin.json` and an ESM entry exporting a
 `DatasourcePlugin` (decisions 005 to 008). The contract lives in `@table-craft/plugin-api`.
-`API_VERSION` is `0.5.0`; while it is `0.x` the contract is unstable and every minor is a break.
+`API_VERSION` is `0.6.0`; while it is `0.x` the contract is unstable and every minor is a break.
 
 ### Discovery
 
@@ -67,12 +67,12 @@ dialog lists every plugin, an unavailable one with its reason. A connection fiel
 
 ### Capabilities
 
-| Capability     | Promises                                                                        | Contract cases                                                                                                                                                                                                                                                                                                                                          |
-| -------------- | ------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `sql`          | `Session.execute` runs one statement; the plugin exports `language`             | select literals, statement without rows, rows affected, invalid SQL rejects `statementFailed`, session usable after a failure, `type_probe` cells, unshifted timestamps, early return; `language` splits the shared and fixture scripts into the expected statements, each of which executes, and classifies kinds and the destructive cases            |
-| `transactions` | `Session.transactions` switches auto and manual commit, commits, rolls back     | manual insert then rollback leaves no row and `open` false, manual insert then commit is visible to a second session only after the commit, auto mode tracks an explicit `BEGIN`, switching to auto while open rejects `statementFailed` and stays open, commit and rollback with nothing open are no-ops                                               |
-| `cancel`       | `Session.cancel` stops the running statement from another call                  | idle cancel is a no-op, a sleeping statement rejects `cancelled` well before it ends, the session runs the next statement                                                                                                                                                                                                                               |
-| `schemaTree`   | `Session.introspector` lists namespaces, describes one, quotes a qualified name | the current namespace is marked, the fixture's tables and `customer_totals` view are described, `orders` has its foreign key and `orders_placed_at_idx`, `customers` has its primary and unique keys, an unknown namespace rejects `introspectionFailed`, `qualifiedName` quotes an awkward identifier, the session runs statements after introspecting |
+| Capability     | Promises                                                                        | Contract cases                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| -------------- | ------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `sql`          | `Session.execute` runs one statement; the plugin exports `language`             | select literals, statement without rows, rows affected, invalid SQL rejects `statementFailed`, session usable after a failure, `type_probe` cells, unshifted timestamps, early return; `language` splits the shared and fixture scripts into the expected statements, each of which executes, and classifies kinds and the destructive cases; an awkward identifier quotes and reads back, and each `type_probe` row written as `INSERT` literals into `type_probe_copy` reads back equal |
+| `transactions` | `Session.transactions` switches auto and manual commit, commits, rolls back     | manual insert then rollback leaves no row and `open` false, manual insert then commit is visible to a second session only after the commit, auto mode tracks an explicit `BEGIN`, switching to auto while open rejects `statementFailed` and stays open, commit and rollback with nothing open are no-ops                                                                                                                                                                                 |
+| `cancel`       | `Session.cancel` stops the running statement from another call                  | idle cancel is a no-op, a sleeping statement rejects `cancelled` well before it ends, the session runs the next statement                                                                                                                                                                                                                                                                                                                                                                 |
+| `schemaTree`   | `Session.introspector` lists namespaces, describes one, quotes a qualified name | the current namespace is marked, the fixture's tables and `customer_totals` view are described, `orders` has its foreign key and `orders_placed_at_idx`, `customers` has its primary and unique keys, an unknown namespace rejects `introspectionFailed`, `qualifiedName` quotes an awkward identifier, the session runs statements after introspecting                                                                                                                                   |
 
 Every plugin, whatever it declares, is checked for a valid schema; for its manifest's connection
 fields agreeing with `connectionSchema` (each field a key the schema accepts, every required key
@@ -109,6 +109,8 @@ interface DatasourcePlugin {
 interface SqlLanguage {
   split(text: string): readonly StatementSpan[]; // { from, to, sql }, UTF-16 offsets, empties dropped
   classify(sql: string): StatementClass; // { kind, destructive: reason | null }
+  quoteIdentifier(name: string): string; // "x" or `x`, the quote doubled inside
+  literal(value: WireValue, columnType: string | null): string; // reads back as the same value
 }
 
 interface ConnectOptions {
@@ -167,13 +169,14 @@ SQLite `PRAGMA query_only = ON`.
 
 `@table-craft/plugin-api/sql` offers the tokenizer the built-ins share (decision 023):
 `sqlSplitter(options)`, `classifyTokens(sql, options)` and `transactionEffect(sql, options)`, which
-answers `begin`, `end` or `null`. Each built-in passes its dialect options:
+answers `begin`, `end` or `null`, and for the copy extractor `quoteIdentifierWith(quote)` and
+`sqlLiteral(value, options)`. Each built-in passes its dialect options:
 
-| Plugin     | Options                                                            |
-| ---------- | ------------------------------------------------------------------ |
-| PostgreSQL | dollar quotes, nested block comments, `BEGIN … END` bodies         |
-| MySQL      | backslash escapes, `DELIMITER`, `#` comments, `BEGIN … END` bodies |
-| SQLite     | `BEGIN … END` bodies                                               |
+| Plugin     | Options                                                                                                          |
+| ---------- | ---------------------------------------------------------------------------------------------------------------- |
+| PostgreSQL | dollar quotes, nested block comments, `BEGIN … END` bodies; `"x"`, `'\x…'::bytea`                                |
+| MySQL      | backslash escapes, `DELIMITER`, `#` comments, `BEGIN … END` bodies; `` `x` ``, `X'…'`, backslash-escaped strings |
+| SQLite     | `BEGIN … END` bodies; `"x"`, `X'…'`                                                                              |
 
 A span runs from the statement's first token to its last, so comments around it stay out. A
 `BEGIN … END` body opens only inside `CREATE TRIGGER`, `FUNCTION`, `PROCEDURE` or `EVENT`, so
@@ -265,22 +268,32 @@ A request is `{ id, type, ...params }`; the engine answers `{ id, type, result }
 `id` and `type`, or `engine.error`. Requests are parsed before routing. Sessions and result
 handles belong to the port that created them and are released when it closes.
 
-| Request                 | Params                      | Result                                                                                 |
-| ----------------------- | --------------------------- | -------------------------------------------------------------------------------------- |
-| `session.open`          | none                        | `{ sessionId, pluginName, capabilities, serverVersion }`                               |
-| `script.split`          | `text`                      | `ClassifiedStatement[]`: `{ from, to, sql, kind, destructive }`                        |
-| `statement.execute`     | `sessionId`, `sql`          | `{ handle, columns, rowCount, truncated, rowsAffected, firstWindow, transactionOpen }` |
-| `transaction.setMode`   | `sessionId`, `mode`         | `{ mode, transactionOpen }`                                                            |
-| `transaction.commit`    | `sessionId`                 | `{ mode, transactionOpen }`; a no-op when nothing is open                              |
-| `transaction.rollback`  | `sessionId`                 | `{ mode, transactionOpen }`; a no-op when nothing is open                              |
-| `statement.cancel`      | `sessionId`                 | `null`; stops the running statement, a no-op when idle                                 |
-| `result.window`         | `handle`, `offset`, `limit` | `{ offset, rows }`, at most `RESULT_WINDOW_ROWS` rows                                  |
-| `result.release`        | `handle`                    | `null`; releasing twice is not an error                                                |
-| `session.close`         | `sessionId`                 | `null`; releases the session's handles, then closes it                                 |
-| `catalog.namespaces`    | `refresh?`                  | `Namespace[]`                                                                          |
-| `catalog.describe`      | `path`, `refresh?`          | `{ catalog, introspectedAt, elapsedMs }`                                               |
-| `catalog.qualifiedName` | `path`, `name`              | the plugin's quoting, e.g. `"public"."orders"`                                         |
+| Request                 | Params                                                   | Result                                                                                                         |
+| ----------------------- | -------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
+| `session.open`          | none                                                     | `{ sessionId, pluginName, capabilities, serverVersion }`                                                       |
+| `script.split`          | `text`                                                   | `ClassifiedStatement[]`: `{ from, to, sql, kind, destructive }`                                                |
+| `statement.execute`     | `sessionId`, `sql`                                       | `{ handle, columns, typeClasses, rowCount, complete, cursorOpen, rowsAffected, firstWindow, transactionOpen }` |
+| `transaction.setMode`   | `sessionId`, `mode`                                      | `{ mode, transactionOpen }`                                                                                    |
+| `transaction.commit`    | `sessionId`                                              | `{ mode, transactionOpen }`; a no-op when nothing is open                                                      |
+| `transaction.rollback`  | `sessionId`                                              | `{ mode, transactionOpen }`; a no-op when nothing is open                                                      |
+| `statement.cancel`      | `sessionId`                                              | `null`; stops the running statement, a no-op when idle                                                         |
+| `result.window`         | `handle`, `offset`, `limit`                              | `{ offset, rows }`, at most `RESULT_WINDOW_ROWS` rows                                                          |
+| `result.release`        | `handle`                                                 | `null`; releasing twice is not an error                                                                        |
+| `result.fetchMore`      | `handle`, `all`                                          | `ResultState { rowCount, complete, cursorOpen }`; one page, or up to `RESULT_FETCH_ALL_CAP`                    |
+| `result.stopFetch`      | `handle`                                                 | `ResultState`; stops a running fetch, the cursor stays open                                                    |
+| `result.sort`           | `handle`, `keys: { column, direction }[]`                | `ResultState`; windows read through the new order, `[]` restores it                                            |
+| `result.extract`        | `handle`, `extractor`, `rows: { from, to }[]`, `columns` | the text, rows in sorted order                                                                                 |
+| `result.export`         | `handle`, `extractor`, `path`, `columns`                 | `{ path, rows, bytes, elapsedMs }`; `path` must be absolute                                                    |
+| `session.close`         | `sessionId`                                              | `null`; releases the session's handles, then closes it                                                         |
+| `catalog.namespaces`    | `refresh?`                                               | `Namespace[]`                                                                                                  |
+| `catalog.describe`      | `path`, `refresh?`                                       | `{ catalog, introspectedAt, elapsedMs }`                                                                       |
+| `catalog.qualifiedName` | `path`, `name`                                           | the plugin's quoting, e.g. `"public"."orders"`                                                                 |
 
+A statement reads its first page and keeps the cursor open; the session's next statement, a
+commit, rollback or mode switch, `result.release`, `session.close` and the engine's exit close it
+first (decision 025). `result.fetchMore` calls on one handle run one after another; a cursor error
+closes it and answers `statementFailed`. `result.export` writes the held rows in sorted order, then
+drains the rest of the cursor uncapped, into `<path>.tmp` renamed into place, removed on failure.
 A statement still running when its session closes is answered with `unknownSession`.
 `script.split` needs no session; it runs the plugin's `language` in the engine, so the renderer
 never parses SQL (decision 008). `transactionOpen` is `false` on a plugin without `transactions`,
@@ -292,10 +305,11 @@ namespace list and each described catalog (`core/catalog/cache.ts`) with when it
 and how long it took; `refresh` asks again, and a second describe of a path in flight joins the
 first. The cache dies with the engine, so a disconnect or an engine exit forgets it.
 
-| Constant             | Value  | Meaning                                                   |
-| -------------------- | ------ | --------------------------------------------------------- |
-| `RESULT_WINDOW_ROWS` | 500    | Rows per window; `firstWindow` is the window at offset 0  |
-| `RESULT_FETCH_CAP`   | 10 000 | Rows kept per result; beyond it the result is `truncated` |
+| Constant               | Value   | Meaning                                                       |
+| ---------------------- | ------- | ------------------------------------------------------------- |
+| `RESULT_WINDOW_ROWS`   | 500     | Rows per window; `firstWindow` is the window at offset 0      |
+| `RESULT_PAGE_ROWS`     | 500     | Rows a statement and each Fetch Next Page read (decision 025) |
+| `RESULT_FETCH_ALL_CAP` | 100 000 | Rows Fetch All stops at; the cursor closes there              |
 
 ### engine.error
 
@@ -339,43 +353,56 @@ keymap, the palette and the native menu all call `invoke(id, args?)`, which answ
 `disabled` or `unknown`. An action's `when(context)` decides whether it is enabled from a snapshot
 of the stores; a disabled action shows greyed and does not run.
 
-| Action id                      | Title                                 | macOS    | Windows / Linux        |
-| ------------------------------ | ------------------------------------- | -------- | ---------------------- |
-| `console.run`                  | Run                                   | `⌘↩`     | `Ctrl+Enter`           |
-| `console.runAll`               | Run All                               | `⇧⌘↩`    | `Ctrl+Shift+Enter`     |
-| `console.cancel`               | Cancel                                |          |                        |
-| `console.new`                  | New Console                           | `⇧⌘L`    | `Ctrl+Shift+L`         |
-| `transaction.commit`           | Commit                                | `⌥⇧⌘↩`   | `Ctrl+Alt+Shift+Enter` |
-| `transaction.rollback`         | Rollback                              |          |                        |
-| `transaction.toggleMode`       | Toggle Transaction Mode (Auto/Manual) |          |                        |
-| `result.pin`                   | Pin Result Tab                        |          |                        |
-| `tab.close`                    | Close Tab                             | `⌘W`     | `Ctrl+W`               |
-| `tab.closeOthers`              | Close Other Tabs                      |          |                        |
-| `tab.closeAll`                 | Close All Tabs                        |          |                        |
-| `tab.next`                     | Select Next Tab                       | `⇧⌘]`    | `Ctrl+Shift+]`         |
-| `tab.previous`                 | Select Previous Tab                   | `⇧⌘[`    | `Ctrl+Shift+[`         |
-| `toolWindow.database.toggle`   | Database                              | `⌘1`     | `Ctrl+1`               |
-| `toolWindow.services.toggle`   | Services                              | `⌘8`     | `Ctrl+8`               |
-| `toolWindow.hideAll`           | Hide All Tool Windows                 | `⇧⌘F12`  | `Ctrl+Shift+F12`       |
-| `focus.editor`                 | Back to Editor                        | `⎋`      | `Esc`                  |
-| `palette.findAction`           | Find Action…                          | `⇧⌘A`    | `Ctrl+Shift+A`         |
-| `palette.searchEverywhere`     | Search Everywhere                     | `⇧⇧`     | Double Shift           |
-| `datasource.new`               | New Data Source…                      | `⌘N` ¹   | `Ctrl+N` ¹             |
-| `datasource.properties`        | Data Source Properties…               | `⌘;`     | `Ctrl+;`               |
-| `datasource.duplicate`         | Duplicate Data Source                 | `⌘D` ¹   | `Ctrl+D` ¹             |
-| `datasource.delete`            | Delete Data Source                    | `⌦` ¹    | `Delete` ¹             |
-| `datasource.connect`           | Connect                               |          |                        |
-| `datasource.disconnect`        | Disconnect                            | `⌘F2`    | `Ctrl+F2`              |
-| `datasource.newFolder`         | New Folder…                           |          |                        |
-| `datasource.moveToFolder`      | Move to Folder…                       |          |                        |
-| `database.synchronize`         | Synchronize                           | `⌥⌘Y`    | `Ctrl+Alt+Y`           |
-| `explorer.collapseAll`         | Collapse All                          | `⌘-` ¹   | `Ctrl+-` ¹             |
-| `explorer.toggleSystemSchemas` | Show System Schemas                   |          |                        |
-| `explorer.copyName`            | Copy Qualified Name                   | `⌥⇧⌘C` ¹ | `Ctrl+Alt+Shift+C` ¹   |
-| `explorer.reveal`              | Select in Database View               |          |                        |
+| Action id                                | Title                                 | macOS    | Windows / Linux        |
+| ---------------------------------------- | ------------------------------------- | -------- | ---------------------- |
+| `console.run`                            | Run                                   | `⌘↩`     | `Ctrl+Enter`           |
+| `console.runAll`                         | Run All                               | `⇧⌘↩`    | `Ctrl+Shift+Enter`     |
+| `console.cancel`                         | Cancel                                |          |                        |
+| `console.new`                            | New Console                           | `⇧⌘L`    | `Ctrl+Shift+L`         |
+| `transaction.commit`                     | Commit                                | `⌥⇧⌘↩`   | `Ctrl+Alt+Shift+Enter` |
+| `transaction.rollback`                   | Rollback                              |          |                        |
+| `transaction.toggleMode`                 | Toggle Transaction Mode (Auto/Manual) |          |                        |
+| `result.pin`                             | Pin Result Tab                        |          |                        |
+| `grid.fetchNextPage`                     | Fetch Next Page                       |          |                        |
+| `grid.fetchAll`                          | Fetch All                             |          |                        |
+| `grid.cancelFetch`                       | Cancel Fetch                          |          |                        |
+| `grid.rerun`                             | Rerun                                 | `⌘R` ²   | `Ctrl+R` ²             |
+| `grid.copy`                              | Copy                                  | `⌘C` ²   | `Ctrl+C` ²             |
+| `grid.selectAll`                         | Select All Rows                       | `⌘A` ²   | `Ctrl+A` ²             |
+| `grid.export`                            | Export Data…                          |          |                        |
+| `grid.toggleValuePanel`                  | Value Panel                           | `⇧↵` ²   | `Shift+Enter` ²        |
+| `grid.setExtractor`                      | Choose Extractor                      |          |                        |
+| `grid.sort`, `grid.clearSort`            | Sort, Clear Sort                      |          |                        |
+| `grid.hideColumn`, `grid.showAllColumns` | Hide Column, Show All Columns         |          |                        |
+| `grid.copyColumnName`                    | Copy Column Name                      |          |                        |
+| `tab.close`                              | Close Tab                             | `⌘W`     | `Ctrl+W`               |
+| `tab.closeOthers`                        | Close Other Tabs                      |          |                        |
+| `tab.closeAll`                           | Close All Tabs                        |          |                        |
+| `tab.next`                               | Select Next Tab                       | `⇧⌘]`    | `Ctrl+Shift+]`         |
+| `tab.previous`                           | Select Previous Tab                   | `⇧⌘[`    | `Ctrl+Shift+[`         |
+| `toolWindow.database.toggle`             | Database                              | `⌘1`     | `Ctrl+1`               |
+| `toolWindow.services.toggle`             | Services                              | `⌘8`     | `Ctrl+8`               |
+| `toolWindow.hideAll`                     | Hide All Tool Windows                 | `⇧⌘F12`  | `Ctrl+Shift+F12`       |
+| `focus.editor`                           | Back to Editor                        | `⎋`      | `Esc`                  |
+| `palette.findAction`                     | Find Action…                          | `⇧⌘A`    | `Ctrl+Shift+A`         |
+| `palette.searchEverywhere`               | Search Everywhere                     | `⇧⇧`     | Double Shift           |
+| `datasource.new`                         | New Data Source…                      | `⌘N` ¹   | `Ctrl+N` ¹             |
+| `datasource.properties`                  | Data Source Properties…               | `⌘;`     | `Ctrl+;`               |
+| `datasource.duplicate`                   | Duplicate Data Source                 | `⌘D` ¹   | `Ctrl+D` ¹             |
+| `datasource.delete`                      | Delete Data Source                    | `⌦` ¹    | `Delete` ¹             |
+| `datasource.connect`                     | Connect                               |          |                        |
+| `datasource.disconnect`                  | Disconnect                            | `⌘F2`    | `Ctrl+F2`              |
+| `datasource.newFolder`                   | New Folder…                           |          |                        |
+| `datasource.moveToFolder`                | Move to Folder…                       |          |                        |
+| `database.synchronize`                   | Synchronize                           | `⌥⌘Y`    | `Ctrl+Alt+Y`           |
+| `explorer.collapseAll`                   | Collapse All                          | `⌘-` ¹   | `Ctrl+-` ¹             |
+| `explorer.toggleSystemSchemas`           | Show System Schemas                   |          |                        |
+| `explorer.copyName`                      | Copy Qualified Name                   | `⌥⇧⌘C` ¹ | `Ctrl+Alt+Shift+C` ¹   |
+| `explorer.reveal`                        | Select in Database View               |          |                        |
 
 ¹ Only with focus in the Database tool window (`shortcutRegion`); elsewhere the key reaches the
-focused element. The datasource actions act on the selected tree node with focus in the Database
+focused element. ² Only with focus in a result grid (region `grid`); in the editor and
+the value panel ⌘C and ⌘A stay native. The datasource actions act on the selected tree node with focus in the Database
 tool window, else on the active console's datasource. `console.new` opens on that datasource too.
 
 Shortcuts are declared as platform-neutral chords (`Mod+Shift+A`, `Shift Shift`) and dispatched by
@@ -439,10 +466,74 @@ releases the unpinned result tabs and numbers new ones after the pinned; the pin
 failed.
 
 Output is a log per console, in memory and capped at `OUTPUT_LIMIT = 500` entries: the time, the
-first line of the SQL, then `2 rows retrieved in 38 ms`, `1 row affected in 12 ms`,
-`completed in 4 ms` for statements that are not writes, `Cancelled`, or the error with its hint.
+first line of the SQL, then `2 rows retrieved in 38 ms` (`500+ rows retrieved` while the cursor has
+more), `1 row affected in 12 ms`, `completed in 4 ms` for statements that are not writes,
+`Cancelled`, `50,000 rows exported to /path/a.csv (1.8 MB) in 120 ms`, or the error with its hint.
 Commit, Rollback, skipped statements and a session lost with its transaction are logged too. A
 statement's error also shows in the toolbar.
+
+### Result grid
+
+Plan 007. `renderer/grid/ResultGrid.tsx` draws a result as DataGrip does: a toolbar, a sticky
+header and row-number gutter, virtualized rows, and an optional value panel on the right.
+
+**Paging.** A statement answers with its first `RESULT_PAGE_ROWS` rows and an open cursor
+(decision 025). The toolbar reads, left to right: Fetch Next Page, Fetch All, Rerun, Cancel fetch
+while a fetch runs, the state label, then the extractor select, Copy, Export Data… and Value Panel.
+
+| Label                               | When                                                           |
+| ----------------------------------- | -------------------------------------------------------------- |
+| `5,000 rows`                        | Everything was read                                            |
+| `500+ rows`                         | The cursor is open; Fetch Next Page and Fetch All are enabled  |
+| `500+ rows · fetching stopped`      | Something closed the cursor first; Rerun runs it again         |
+| `100,000+ rows · fetch cap reached` | Fetch All stopped at `RESULT_FETCH_ALL_CAP`                    |
+| `… · sorted locally`                | Appended while a local sort is on a result not completely read |
+
+**Columns.** The header shows the column name with a type glyph (number, text, date, bool, json,
+bytes) from core's `typeClass`; a column the driver did not type takes the class of its first
+non-null value. The tooltip is `name: type`. Numbers are right-aligned. A column starts as wide as
+its header and the widest value loaded so far, capped at `--spacing-column-max`; dragging the
+header's right edge resizes it (at least 40 px) and double-clicking fits it to its loaded values.
+The header context menu holds Sort Ascending, Sort Descending, Clear Sort, Hide Column, Show All
+Columns and Copy Column Name. Widths, hidden columns and sort belong to the result tab
+(`model/columnLayout.ts`) and survive Rerun when the column names are the same.
+
+**Sort.** Clicking a header cycles ascending, descending, none on that column alone; ⌥-click adds
+the column as the next key or cycles it in place, and the header shows its arrow and position.
+`result.sort` sorts the rows the engine holds through a permutation, comparing by type class:
+numbers and decimal text numerically and exactly, booleans false first, everything else by code
+point; `NULL` sorts last ascending and first descending. Rows fetched later take their sorted
+places.
+
+**Selection and copy.** Click, shift-click, drag, the arrows (shift extends), Page Up/Down,
+Home/End select a rectangle; the gutter selects rows, ⌘-click on a header a column, `grid.selectAll`
+every fetched row. Copy asks the engine for `result.extract` over the selection's rows and visible
+columns in the chosen extractor and writes the clipboard; above `MAX_COPY_ROWS = 100_000` rows
+it is disabled with the reason. The extractor is one setting in the layout, default CSV:
+
+| Extractor   | Output                                                                                   |
+| ----------- | ---------------------------------------------------------------------------------------- |
+| CSV         | Header row, RFC 4180 quoting, `\n` line ends, `NULL` empty                               |
+| TSV         | Header row; tab, newline, return and backslash escaped as `\t` `\n` `\r` `\\`            |
+| JSON        | An array of objects; `json` cells embedded, bigints and decimals as strings, bytes `0x…` |
+| SQL Inserts | `INSERT INTO MY_TABLE (…) VALUES (…);` per row with the plugin's quoting and literals    |
+| Markdown    | A pipe table; `\|` escaped, newlines as `<br>`, `NULL` empty                             |
+
+Bytes carry only their 32-byte preview, so a longer value copies clipped (`0x…` with `…`, or a
+`/* 32 of 2048 bytes */` comment after the literal).
+
+**Export.** `grid.export` asks main for a path (`dialog.saveFile`, default name
+`<result title>.<ext>`), then sends `result.export` with the visible columns; Output logs rows,
+size and time.
+
+**Values.** `NULL` reads `<null>` in `text-grid-null` italics, unlike the text `'<null>'`. The
+value panel (⇧↵) shows the focused cell: JSON pretty-printed in a read-only editor, text wrapped,
+bytes as hex lines with `32 of 2,048 bytes shown`, `NULL` muted.
+
+**Memory.** A tab keeps at most `MAX_LOADED_WINDOWS = 20` windows of `RESULT_WINDOW_ROWS`; loading
+another evicts the one furthest from it, and scrolling back fetches it again. When the engine
+exits, the tab keeps its windows, shows `Results from a closed connection; rerun to refresh` and
+stops fetching; Rerun reconnects (decision 021) and runs the statement again in place.
 
 ### Transactions
 

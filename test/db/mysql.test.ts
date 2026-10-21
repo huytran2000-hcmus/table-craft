@@ -2,7 +2,7 @@ import mysql from "@table-craft/plugin-mysql";
 import { runPluginContract } from "@table-craft/plugin-api/testing";
 import { MYSQL_CONFIG, withWrongPassword } from "../support/databases.js";
 import { MYSQL_MANIFEST } from "../support/manifests.js";
-import { TYPE_PROBE_EXPECTED, TYPE_PROBE_WRITE } from "../support/typeProbe.js";
+import { TYPE_PROBE_COPY_AS, TYPE_PROBE_EXPECTED, TYPE_PROBE_WRITE } from "../support/typeProbe.js";
 
 runPluginContract(mysql, {
   manifest: MYSQL_MANIFEST,
@@ -12,7 +12,7 @@ runPluginContract(mysql, {
     write: TYPE_PROBE_WRITE,
     sleep: (seconds) => `SELECT SLEEP(${String(seconds)})`,
   },
-  typeProbe: { expected: TYPE_PROBE_EXPECTED },
+  typeProbe: { expected: TYPE_PROBE_EXPECTED, copyTable: TYPE_PROBE_COPY_AS },
   scripts: [
     {
       text: "DELIMITER //\nCREATE PROCEDURE p() BEGIN SELECT 1; END//\nDELIMITER ;\nCALL p();",

@@ -5,6 +5,7 @@ export const IDLE_CONTEXT: ActionContext = {
   tabs: [],
   activeTab: null,
   console: null,
+  result: null,
   datasources: [],
   selection: null,
   datasource: null,

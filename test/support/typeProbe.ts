@@ -23,3 +23,20 @@ export const TYPE_PROBE_EXPECTED: readonly Row[] = [
 
 /** Rewrites one cell with its own value: a real write that leaves the fixture as it was. */
 export const TYPE_PROBE_WRITE = "UPDATE type_probe SET small_int = small_int WHERE id = 1";
+
+/** Postgres and MySQL keep declared types through `CREATE TABLE … AS`. */
+export const TYPE_PROBE_COPY_AS = "CREATE TABLE type_probe_copy AS SELECT * FROM type_probe WHERE 1 = 0";
+
+/** SQLite's `CREATE TABLE … AS` keeps only affinities, which lose BOOLEAN and JSON, so it is spelled out. */
+export const TYPE_PROBE_COPY_SQLITE = `CREATE TABLE type_probe_copy (
+  id INTEGER PRIMARY KEY,
+  small_int INTEGER,
+  big_int INTEGER,
+  exact_decimal TEXT,
+  unicode_text TEXT,
+  flag BOOLEAN,
+  doc JSON,
+  payload BLOB,
+  day TEXT,
+  moment TEXT
+)`;

@@ -18,7 +18,15 @@ import {
   type Transactions,
   type WireValue,
 } from "@table-craft/plugin-api";
-import { classifyTokens, sqlSplitter, transactionEffect, type SqlDialectOptions } from "@table-craft/plugin-api/sql";
+import {
+  classifyTokens,
+  quoteIdentifierWith,
+  sqlLiteral,
+  sqlSplitter,
+  transactionEffect,
+  type SqlDialectOptions,
+  type SqlLiteralOptions,
+} from "@table-craft/plugin-api/sql";
 import { sqliteIntrospector } from "./introspect.js";
 
 const PLUGIN_ID = "sqlite";
@@ -28,9 +36,13 @@ const CAPABILITIES: readonly Capability[] = ["sql", "schemaTree", "transactions"
 /** Trigger bodies are `BEGIN … END` and hold semicolons. */
 const DIALECT: SqlDialectOptions = { blockKeywords: ["BEGIN"] };
 
+const LITERALS: SqlLiteralOptions = { backslashEscapes: false, bytes: (hex) => `X'${hex}'` };
+
 const language: SqlLanguage = {
   split: sqlSplitter(DIALECT),
   classify: (sql) => classifyTokens(sql, DIALECT),
+  quoteIdentifier: quoteIdentifierWith('"'),
+  literal: (value) => sqlLiteral(value, LITERALS),
 };
 
 const BEGIN_SQL = "BEGIN";

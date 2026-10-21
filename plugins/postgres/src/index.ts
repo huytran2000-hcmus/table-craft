@@ -18,7 +18,15 @@ import {
   type Transactions,
   type WireValue,
 } from "@table-craft/plugin-api";
-import { classifyTokens, sqlSplitter, transactionEffect, type SqlDialectOptions } from "@table-craft/plugin-api/sql";
+import {
+  classifyTokens,
+  quoteIdentifierWith,
+  sqlLiteral,
+  sqlSplitter,
+  transactionEffect,
+  type SqlDialectOptions,
+  type SqlLiteralOptions,
+} from "@table-craft/plugin-api/sql";
 import { postgresIntrospector } from "./introspect.js";
 
 const PLUGIN_ID = "postgres";
@@ -27,9 +35,13 @@ const CAPABILITIES: readonly Capability[] = ["sql", "cancel", "schemaTree", "tra
 /** Function bodies live in dollar quotes; `BEGIN ATOMIC … END` holds a SQL-standard body. */
 const DIALECT: SqlDialectOptions = { dollarQuotes: true, nestedBlockComments: true, blockKeywords: ["BEGIN"] };
 
+const LITERALS: SqlLiteralOptions = { backslashEscapes: false, bytes: (hex) => `'\\x${hex}'::bytea` };
+
 const language: SqlLanguage = {
   split: sqlSplitter(DIALECT),
   classify: (sql) => classifyTokens(sql, DIALECT),
+  quoteIdentifier: quoteIdentifierWith('"'),
+  literal: (value) => sqlLiteral(value, LITERALS),
 };
 
 const BEGIN_SQL = "BEGIN";

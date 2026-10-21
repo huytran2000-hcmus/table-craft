@@ -1,4 +1,7 @@
-import { describe, expect, it } from "vitest";
+import { mkdtemp, readdir, readFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
 import { PluginError, z, type DatasourcePlugin, type Session } from "@table-craft/plugin-api";
 import type { PluginLoadResult } from "@table-craft/core";
 import sqlite from "@table-craft/plugin-sqlite";
@@ -10,6 +13,8 @@ import type {
   EngineResponse,
   ExecutedStatement,
   Namespace,
+  ExportedResult,
+  ResultState,
   ResultWindow,
   TransactionState,
 } from "@table-craft/desktop/engine/protocol.js";
@@ -109,6 +114,7 @@ describe("engine", () => {
       await connection.handle({ id: 2, type: "statement.execute", sessionId, sql: ROWS_1200 }),
     );
     expect(firstWindow.rows).toHaveLength(RESULT_WINDOW_ROWS);
+    await connection.handle({ id: 3, type: "result.fetchMore", handle, all: true });
 
     const window = resultOf<ResultWindow>(
       await connection.handle({ id: 3, type: "result.window", handle, offset: 1000, limit: RESULT_WINDOW_ROWS }),
@@ -505,5 +511,151 @@ describe("engine scripts and transactions", () => {
 
     expect(response).toMatchObject({ type: "engine.error", error: { code: "statementFailed" } });
     expect(resultOf<TransactionState>(committed)).toEqual({ mode: "manual", transactionOpen: false });
+  });
+});
+
+describe("engine results", () => {
+  const directories: string[] = [];
+  afterEach(async () => {
+    await Promise.all(directories.splice(0).map((directory) => rm(directory, { recursive: true, force: true })));
+  });
+
+  async function execute(connection: ReturnType<typeof connected>, sessionId: string, sql: string) {
+    return resultOf<ExecutedStatement>(await connection.handle({ id: 3, type: "statement.execute", sessionId, sql }));
+  }
+
+  async function fetchMore(connection: ReturnType<typeof connected>, handle: string, all = false) {
+    return resultOf<ResultState>(await connection.handle({ id: 4, type: "result.fetchMore", handle, all }));
+  }
+
+  it("givenLargeResult_whenExecuted_thenFirstPageOnlyAndCursorOpen", async () => {
+    const connection = connected();
+    const sessionId = await openSession(connection);
+
+    const executed = await execute(connection, sessionId, ROWS_1200);
+
+    expect(executed).toMatchObject({ rowCount: 500, complete: false, cursorOpen: true, typeClasses: ["integer"] });
+    expect(await fetchMore(connection, executed.handle)).toEqual({ rowCount: 1000, complete: false, cursorOpen: true });
+    expect(await fetchMore(connection, executed.handle)).toEqual({ rowCount: 1200, complete: true, cursorOpen: false });
+  });
+
+  it("givenOpenCursor_whenSessionRunsAnotherStatement_thenCursorClosedRowsKept", async () => {
+    const connection = connected();
+    const sessionId = await openSession(connection);
+    const first = await execute(connection, sessionId, ROWS_1200);
+
+    await execute(connection, sessionId, "SELECT 1");
+    const state = await fetchMore(connection, first.handle);
+    const window = resultOf<ResultWindow>(
+      await connection.handle({ id: 5, type: "result.window", handle: first.handle, offset: 0, limit: 500 }),
+    );
+
+    expect(state).toEqual({ rowCount: 500, complete: false, cursorOpen: false });
+    expect(window.rows).toHaveLength(500);
+  });
+
+  it("givenOpenCursorInManualMode_whenCommitted_thenCursorClosedAndCommitSucceeds", async () => {
+    const connection = connected();
+    const sessionId = await openSession(connection);
+    await connection.handle({ id: 2, type: "transaction.setMode", sessionId, mode: "manual" });
+    const first = await execute(connection, sessionId, ROWS_1200);
+
+    const committed = await connection.handle({ id: 5, type: "transaction.commit", sessionId });
+
+    expect(resultOf<TransactionState>(committed)).toEqual({ mode: "manual", transactionOpen: false });
+    expect((await fetchMore(connection, first.handle)).cursorOpen).toBe(false);
+  });
+
+  it("givenSortedResult_whenExtractedAsCsv_thenSortedRowsAndChosenColumns", async () => {
+    const connection = connected();
+    const sessionId = await openSession(connection);
+    const { handle } = await execute(
+      connection,
+      sessionId,
+      "SELECT 2 AS id, 'b' AS name UNION ALL SELECT 1, 'a' UNION ALL SELECT 3, 'c'",
+    );
+
+    await connection.handle({ id: 5, type: "result.sort", handle, keys: [{ column: 0, direction: "desc" }] });
+    const text = await connection.handle({
+      id: 6,
+      type: "result.extract",
+      handle,
+      extractor: "csv",
+      rows: [{ from: 0, to: 2 }],
+      columns: [1],
+    });
+
+    expect(resultOf<string>(text)).toBe("name\nc\nb\n");
+  });
+
+  it("givenSqlInsertExtractor_whenExtracted_thenPluginQuotesNamesAndValues", async () => {
+    const connection = connected();
+    const sessionId = await openSession(connection);
+    const { handle } = await execute(connection, sessionId, "SELECT 'it''s' AS \"a b\", X'00ff' AS blob");
+
+    const text = await connection.handle({
+      id: 6,
+      type: "result.extract",
+      handle,
+      extractor: "sqlInsert",
+      rows: [{ from: 0, to: 1 }],
+      columns: [0, 1],
+    });
+
+    expect(resultOf<string>(text)).toBe(`INSERT INTO MY_TABLE ("a b", "blob") VALUES ('it''s', X'00ff');\n`);
+  });
+
+  it("givenOpenCursor_whenExported_thenFileHoldsEveryRowAndNoTempFile", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "table-craft-export-"));
+    directories.push(directory);
+    const path = join(directory, "rows.csv");
+    const connection = connected();
+    const sessionId = await openSession(connection);
+    const { handle } = await execute(connection, sessionId, ROWS_1200);
+
+    const exported = resultOf<ExportedResult>(
+      await connection.handle({ id: 6, type: "result.export", handle, extractor: "csv", path, columns: [0] }),
+    );
+    const lines = (await readFile(path, "utf8")).trimEnd().split("\n");
+
+    expect(exported).toMatchObject({ path, rows: 1200 });
+    expect(exported.bytes).toBeGreaterThan(0);
+    expect(lines).toHaveLength(1201);
+    expect(lines.at(-1)).toBe("1200");
+    expect(await readdir(directory)).toEqual(["rows.csv"]);
+  });
+
+  it("givenRelativePath_whenExported_thenInvalidRequest", async () => {
+    const connection = connected();
+    const sessionId = await openSession(connection);
+    const { handle } = await execute(connection, sessionId, "SELECT 1");
+
+    const response = await connection.handle({
+      id: 6,
+      type: "result.export",
+      handle,
+      extractor: "csv",
+      path: "relative.csv",
+      columns: [0],
+    });
+
+    expect(response).toMatchObject({ type: "engine.error", error: { code: "invalidRequest" } });
+  });
+
+  it("givenMissingFolder_whenExported_thenStatementFailedWithExportHint", async () => {
+    const connection = connected();
+    const sessionId = await openSession(connection);
+    const { handle } = await execute(connection, sessionId, "SELECT 1");
+
+    const response = await connection.handle({
+      id: 6,
+      type: "result.export",
+      handle,
+      extractor: "csv",
+      path: join(tmpdir(), "table-craft-missing-folder", "rows.csv"),
+      columns: [0],
+    });
+
+    expect(response).toMatchObject({ type: "engine.error", error: { code: "statementFailed" } });
   });
 });

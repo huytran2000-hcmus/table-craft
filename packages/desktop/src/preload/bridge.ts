@@ -28,6 +28,7 @@ export const INVOKE_CHANNELS = {
   connectEngine: "table-craft:engine.connect",
   disconnectEngine: "table-craft:engine.disconnect",
   chooseFile: "table-craft:dialog.choose-file",
+  saveFile: "table-craft:dialog.save-file",
   listConsoles: "table-craft:consoles.list",
   readConsole: "table-craft:consoles.read",
   writeConsole: "table-craft:consoles.write",
@@ -163,6 +164,8 @@ export interface TableCraftBridge {
   disconnectEngine(datasourceId: string): Promise<InvokeResult<null>>;
   /** The native open dialog, for a `file` connection field; null when cancelled. */
   chooseFile(title: string): Promise<InvokeResult<string | null>>;
+  /** The native save dialog, for an export; the chosen absolute path, or null when cancelled. */
+  saveFile(title: string, defaultName: string): Promise<InvokeResult<string | null>>;
   /** The console names saved for the datasource, sorted (plan 006). */
   listConsoles(datasourceId: string): Promise<InvokeResult<readonly string[]>>;
   /** A saved console's text; null when none of that name is saved. */

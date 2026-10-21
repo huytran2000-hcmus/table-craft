@@ -10,6 +10,7 @@ import {
   safeStorage,
   utilityProcess,
   type OpenDialogOptions,
+  type SaveDialogOptions,
   type UtilityProcess,
   type WebContents,
 } from "electron";
@@ -128,6 +129,13 @@ function createWindow(): void {
   void window.loadFile(distPath("../renderer/index.html"));
 }
 
+async function saveFile(contents: WebContents, title: string, defaultName: string): Promise<string | null> {
+  const parent = BrowserWindow.fromWebContents(contents);
+  const options: SaveDialogOptions = { title, defaultPath: defaultName, properties: ["createDirectory"] };
+  const picked = parent === null ? await dialog.showSaveDialog(options) : await dialog.showSaveDialog(parent, options);
+  return picked.canceled || picked.filePath === "" ? null : picked.filePath;
+}
+
 async function chooseFile(contents: WebContents, title: string): Promise<string | null> {
   const parent = BrowserWindow.fromWebContents(contents);
   const options: OpenDialogOptions = { title, properties: ["openFile", "promptToCreate"] };
@@ -153,6 +161,7 @@ void app.whenReady().then(async () => {
     service,
     consoles,
     chooseFile,
+    saveFile,
     answerClose(sender, proceed) {
       const window = BrowserWindow.fromWebContents(sender);
       if (window !== null) closeGuard.answer(window, proceed);

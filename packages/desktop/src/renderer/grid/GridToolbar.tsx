@@ -1,0 +1,74 @@
+import { EXTRACTOR_KINDS, RESULT_FETCH_ALL_CAP, type ExtractorKind } from "@table-craft/desktop/engine/protocol.js";
+import {
+  copyBlockedReason,
+  EXTRACTOR_LABELS,
+  GRID_ACTION_IDS,
+} from "@table-craft/desktop/renderer/actions/gridActions.js";
+import { invoke } from "@table-craft/desktop/renderer/actions/index.js";
+import { ActionButton } from "@table-craft/desktop/renderer/console/ActionButton.js";
+import { resultStateText } from "@table-craft/desktop/renderer/model/format.js";
+import type { ResultTab } from "@table-craft/desktop/renderer/state/consoles.js";
+import { useLayout } from "@table-craft/desktop/renderer/state/layout.js";
+import { SpinnerIcon } from "@table-craft/desktop/renderer/ui/icons.js";
+
+const FETCHING_TEXT: Readonly<Record<NonNullable<ResultTab["fetching"]>, string>> = {
+  page: "Fetching…",
+  all: "Fetching all…",
+  export: "Exporting…",
+};
+
+function isExtractor(value: string): value is ExtractorKind {
+  return (EXTRACTOR_KINDS as readonly string[]).includes(value);
+}
+
+/** Above the rows, in DataGrip's order: fetch and rerun, the row count, then extract and view. */
+export function GridToolbar({ result }: { readonly result: ResultTab }) {
+  const extractor = useLayout((state) => state.layout.extractor);
+  const valuePanel = useLayout((state) => state.layout.valuePanel);
+  const fetching = result.fetching === "page" || result.fetching === "all";
+  return (
+    <div
+      role="toolbar"
+      aria-label="Result"
+      className="flex h-row shrink-0 items-center gap-1 border-b border-line bg-panel px-1"
+    >
+      <ActionButton actionId={GRID_ACTION_IDS.fetchNextPage} compact />
+      <ActionButton actionId={GRID_ACTION_IDS.fetchAll} compact />
+      <ActionButton actionId={GRID_ACTION_IDS.rerun} compact />
+      {fetching ? <ActionButton actionId={GRID_ACTION_IDS.cancelFetch} compact /> : null}
+      <span data-testid="result-state" className="ml-gap truncate text-ink-muted">
+        {resultStateText({
+          rowCount: result.rowCount,
+          complete: result.complete,
+          cursorOpen: result.cursorOpen,
+          sorted: result.sort.length > 0,
+          fetchAllCap: RESULT_FETCH_ALL_CAP,
+        })}
+      </span>
+      {result.fetching === null ? null : (
+        <span className="flex items-center gap-1 text-ink-muted">
+          <SpinnerIcon aria-hidden className="size-icon animate-spin" />
+          {FETCHING_TEXT[result.fetching]}
+        </span>
+      )}
+      <div className="flex-1" />
+      <select
+        aria-label="Extractor"
+        className="h-row rounded border border-line bg-panel px-1 text-ui text-ink"
+        value={extractor}
+        onChange={(event) => {
+          if (isExtractor(event.target.value)) invoke(GRID_ACTION_IDS.setExtractor, { extractor: event.target.value });
+        }}
+      >
+        {EXTRACTOR_KINDS.map((kind) => (
+          <option key={kind} value={kind}>
+            {EXTRACTOR_LABELS[kind]}
+          </option>
+        ))}
+      </select>
+      <ActionButton actionId={GRID_ACTION_IDS.copy} compact reason={copyBlockedReason(result)} />
+      <ActionButton actionId={GRID_ACTION_IDS.export} compact />
+      <ActionButton actionId={GRID_ACTION_IDS.toggleValuePanel} compact pressed={valuePanel} />
+    </div>
+  );
+}

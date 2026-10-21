@@ -76,8 +76,10 @@ function fakeEngine() {
         const result: ExecutedStatement = {
           handle: `h${String(++handles)}`,
           columns: reads ? [{ name: "n", type: "int4" }] : [],
+          typeClasses: reads ? ["integer"] : [],
           rowCount: reads ? 1 : 0,
-          truncated: false,
+          complete: true,
+          cursorOpen: false,
           rowsAffected: reads ? null : 1,
           firstWindow: { offset: 0, rows: reads ? [[sql]] : [] },
           transactionOpen: open,
@@ -287,7 +289,7 @@ describe("console runs", () => {
 });
 
 describe("output lines", () => {
-  const NO_ROWS = { columns: [], rowCount: 0, truncated: false } as const;
+  const NO_ROWS = { columns: [], rowCount: 0, complete: true } as const;
 
   it("givenDdlWithDriversZeroAffected_whenFormatted_thenCompletedNotZeroRows", () => {
     expect(executedText({ ...NO_ROWS, rowsAffected: 0 }, 44, "ddl")).toBe("completed in 44 ms");
@@ -297,9 +299,15 @@ describe("output lines", () => {
     expect(executedText({ ...NO_ROWS, rowsAffected: 1 }, 12, "write")).toBe("1 row affected in 12 ms");
   });
 
-  it("givenTruncatedRead_whenFormatted_thenRowsRetrievedAndTruncated", () => {
-    expect(executedText({ columns: [{}], rowCount: 3, truncated: true, rowsAffected: null }, 38, "read")).toBe(
-      "3 rows retrieved (truncated) in 38 ms",
+  it("givenCompleteRead_whenFormatted_thenRowsRetrieved", () => {
+    expect(executedText({ columns: [{}], rowCount: 3, complete: true, rowsAffected: null }, 38, "read")).toBe(
+      "3 rows retrieved in 38 ms",
+    );
+  });
+
+  it("givenFirstPageOfMore_whenFormatted_thenCountWithPlus", () => {
+    expect(executedText({ columns: [{}], rowCount: 500, complete: false, rowsAffected: null }, 38, "read")).toBe(
+      "500+ rows retrieved in 38 ms",
     );
   });
 });

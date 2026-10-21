@@ -58,8 +58,10 @@ function fakeClient(datasourceId: string, options: { openFails?: EngineError } =
         const executed: ExecutedStatement = {
           handle: `${String(params.sessionId)}-result`,
           columns: [{ name: datasourceId, type: "text" }],
+          typeClasses: ["text"],
           rowCount: 1,
-          truncated: false,
+          complete: true,
+          cursorOpen: false,
           rowsAffected: null,
           firstWindow: { offset: 0, rows: [[String(params.sql)]] },
           transactionOpen: false,

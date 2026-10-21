@@ -13,6 +13,8 @@
   --color-danger: var(--tc-danger);
   --color-success: var(--tc-success);
   --color-grid-stripe: var(--tc-grid-stripe);
+  --color-grid-selection: var(--tc-grid-selection);
+  --color-grid-null: var(--tc-grid-null);
   --color-selection: var(--tc-selection);
   --color-search-match: var(--tc-search-match);
   --color-key-icon: var(--tc-key-icon);
@@ -35,6 +37,7 @@
   --spacing-cell: var(--tc-cell-padding);
   --spacing-gap: var(--tc-gap);
   --spacing-column-max: var(--tc-grid-column-max-width);
+  --spacing-value-panel: var(--tc-value-panel-width);
   --spacing-console: var(--tc-console-height);
   --spacing-stripe: var(--tc-stripe-width);
   --spacing-tab: var(--tc-tab-height);

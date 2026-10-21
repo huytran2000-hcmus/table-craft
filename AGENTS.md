@@ -52,11 +52,14 @@ Run all four before considering a change done: `bun run lint`, `bun run format:c
 packages/plugin-api/       @table-craft/plugin-api: the plugin contract and nothing else.
                            Types, Zod schemas, API_VERSION, capability names, and the
                            contract test suite under `testing/`. `sql/` (subpath
-                           `@table-craft/plugin-api/sql`) is the shared splitter and
-                           classifier plugins build `language` from. Depends only on zod
+                           `@table-craft/plugin-api/sql`) is the shared splitter,
+                           classifier and literal helpers plugins build `language` from.
+                           Depends only on zod
 packages/core/             @table-craft/core: plugin loader, session manager, result-set
-                           store, edit batches, history, and the catalog cache
-                           (`catalog/`). Knows nothing about Electron
+                           store with open cursors and local sort (`results/`), the copy
+                           and export extractors (`results/extract/`), edit batches,
+                           history, and the catalog cache (`catalog/`). Knows nothing
+                           about Electron
 packages/desktop/          @table-craft/desktop, the Electron app
   src/main/                lifecycle, the window, menus, one engine host per datasource,
                            the datasource list and secrets, console files, the invoke
@@ -68,7 +71,8 @@ packages/desktop/          @table-craft/desktop, the Electron app
   src/renderer/            React 19, Zustand, Tailwind v4, CodeMirror 6; a pure view.
                            `actions/` is the one command registry and keymap; `shell/`,
                            `panes/`, `palette/` the DataGrip-shaped window; `console/`
-                           the SQL console: editor, result tabs, Output, transactions
+                           the SQL console: editor, result tabs, Output, transactions;
+                           `grid/` the result grid, its toolbar and value panel
 plugins/<id>/              built-in plugins (@table-craft/plugin-<id>): postgres, mysql,
                            sqlite. Each depends on plugin-api and its driver alone, and
                            ships a `table-craft-plugin.json` beside `src/`; its

@@ -1,7 +1,12 @@
 import type { Capability } from "@table-craft/desktop/engine/protocol.js";
 import type { DatasourceView } from "@table-craft/desktop/preload/bridge.js";
 import { useCatalog } from "@table-craft/desktop/renderer/state/catalog.js";
-import { useConsoles, type ConsoleSession } from "@table-craft/desktop/renderer/state/consoles.js";
+import {
+  activeResultOf,
+  useConsoles,
+  type ConsoleSession,
+  type ResultTab,
+} from "@table-craft/desktop/renderer/state/consoles.js";
 import { useDataSourcesDialog } from "@table-craft/desktop/renderer/state/dataSourcesDialog.js";
 import {
   capabilitiesOf,
@@ -19,7 +24,9 @@ import { useSecretPrompt } from "@table-craft/desktop/renderer/state/secretPromp
 import { activeTab, useTabs, type Tab } from "@table-craft/desktop/renderer/state/tabs.js";
 
 /** The regions focus can be in; each is a `data-region` attribute on its container. */
-export type FocusRegion = "editor" | "database" | "services" | "other";
+export type FocusRegion = "editor" | "grid" | "database" | "services" | "other";
+
+const REGIONS: readonly FocusRegion[] = ["editor", "grid", "database", "services"];
 
 export const REGION_ATTRIBUTE = "data-region";
 
@@ -36,6 +43,8 @@ export interface ActionContext {
   readonly activeTab: Tab | null;
   /** The active tab's console, when the active tab is one. */
   readonly console: ConsoleSession | null;
+  /** The active console's shown result tab, when a result rather than Output is showing. */
+  readonly result: ResultTab | null;
   readonly datasources: readonly DatasourceView[];
   readonly selection: TreeSelection | null;
   /**
@@ -55,7 +64,7 @@ export interface ActionContext {
 
 function regionOf(element: Element | null | undefined): FocusRegion {
   const region = element?.closest(`[${REGION_ATTRIBUTE}]`)?.getAttribute(REGION_ATTRIBUTE);
-  return region === "editor" || region === "database" || region === "services" ? region : "other";
+  return REGIONS.find((candidate) => candidate === region) ?? "other";
 }
 
 export function focusedRegion(): FocusRegion {
@@ -100,6 +109,7 @@ export function currentContext(): ActionContext {
     tabs: strip.tabs,
     activeTab: active,
     console,
+    result: console === null ? null : (activeResultOf(console) ?? null),
     datasources: datasources.datasources,
     selection: datasources.selection,
     datasource:

@@ -1,10 +1,16 @@
 import { describe, expect, expectTypeOf, it } from "vitest";
 import {
-  RESULT_FETCH_CAP,
+  EXTRACTOR_KINDS,
+  RESULT_FETCH_ALL_CAP,
+  RESULT_PAGE_ROWS,
   RESULT_WINDOW_ROWS,
   type CachedCatalog,
   type CoreErrorCode,
+  type ExtractorKind,
+  type ResultState,
   type ResultSummary,
+  type SortKey,
+  type TypeClass,
 } from "@table-craft/core";
 import {
   CAPABILITIES,
@@ -24,7 +30,16 @@ import * as protocol from "@table-craft/desktop/engine/protocol.js";
 describe("engine protocol", () => {
   it("givenProtocolConstants_whenComparedWithCore_thenEqual", () => {
     expect(protocol.RESULT_WINDOW_ROWS).toBe(RESULT_WINDOW_ROWS);
-    expect(protocol.RESULT_FETCH_CAP).toBe(RESULT_FETCH_CAP);
+    expect(protocol.RESULT_PAGE_ROWS).toBe(RESULT_PAGE_ROWS);
+    expect(protocol.RESULT_FETCH_ALL_CAP).toBe(RESULT_FETCH_ALL_CAP);
+  });
+
+  it("givenResultTypes_whenComparedWithCore_thenIdentical", () => {
+    expectTypeOf<protocol.ResultState>().toEqualTypeOf<ResultState>();
+    expectTypeOf<protocol.SortKey>().toEqualTypeOf<SortKey>();
+    expectTypeOf<protocol.TypeClass>().toEqualTypeOf<TypeClass>();
+    expectTypeOf<protocol.ExtractorKind>().toEqualTypeOf<ExtractorKind>();
+    expect(protocol.EXTRACTOR_KINDS).toEqual(EXTRACTOR_KINDS);
   });
 
   it("givenProtocolWireTypes_whenComparedWithPluginApi_thenIdentical", () => {

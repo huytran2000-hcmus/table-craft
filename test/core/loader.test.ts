@@ -15,7 +15,12 @@ function pluginSource(id: string): string {
   return `export default {
   id: ${JSON.stringify(id)},
   capabilities: ["sql"],
-  language: { split: () => [], classify: () => ({ kind: "other", destructive: null }) },
+  language: {
+    split: () => [],
+    classify: () => ({ kind: "other", destructive: null }),
+    quoteIdentifier: (name) => name,
+    literal: () => "NULL",
+  },
   connectionSchema: { safeParse: (value) => ({ success: true, data: value }) },
   connect: async () => ({ execute: async () => { throw new Error("not used"); }, close: async () => {} }),
 };
@@ -111,7 +116,7 @@ describe("loadPlugins", () => {
   });
 
   it("givenSqlPluginWithoutLanguage_whenLoaded_thenUnavailable", async () => {
-    const source = pluginSource("mute").replace(/ {2}language: .*\n/, "");
+    const source = pluginSource("mute").replace(/ {2}language: \{[\s\S]*?\n {2}\},\n/, "");
     await writePlugin("builtin", "mute", { id: "mute", source });
 
     const [result] = await loadPlugins([join(workspace, "builtin")]);

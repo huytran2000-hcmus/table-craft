@@ -3,27 +3,49 @@ import { invoke, registry, useActionEnabled } from "@table-craft/desktop/rendere
 import { ACTION_ICONS } from "@table-craft/desktop/renderer/ui/icons.js";
 import { Tooltip } from "@table-craft/desktop/renderer/ui/Tooltip.js";
 
-/** A toolbar button that is an action: its label, icon, tooltip and enabled state come from the registry. */
-export function ActionButton({ actionId, primary = false }: { readonly actionId: string; readonly primary?: boolean }) {
+/**
+ * A toolbar button that is an action: its label, icon, tooltip and enabled state come from the
+ * registry. `compact` draws the icon alone, the title moving to the tooltip; `reason` replaces the
+ * tooltip while the button is off, saying why.
+ */
+export function ActionButton({
+  actionId,
+  primary = false,
+  compact = false,
+  pressed,
+  reason,
+}: {
+  readonly actionId: string;
+  readonly primary?: boolean;
+  readonly compact?: boolean;
+  readonly pressed?: boolean;
+  readonly reason?: string | null;
+}) {
   const enabled = useActionEnabled(actionId);
   const action = registry.get(actionId);
   if (action === undefined) return null;
   const Icon = action.icon === undefined ? null : ACTION_ICONS[action.icon];
   const shortcut = action.shortcut === undefined ? undefined : formatChord(action.shortcut, currentPlatform());
   return (
-    <Tooltip label={action.title} shortcut={shortcut} side="bottom">
+    <Tooltip label={!enabled && reason != null ? reason : action.title} shortcut={shortcut} side="bottom">
       <button
         type="button"
+        aria-label={compact ? action.title : undefined}
+        aria-pressed={pressed}
+        // A disabled button gets no pointer events, so Radix never opens; the native tooltip still does.
+        title={!enabled && reason != null ? reason : undefined}
         className={
           primary
             ? "flex h-row shrink-0 items-center gap-1 rounded bg-accent px-gap whitespace-nowrap text-accent-ink disabled:opacity-50"
-            : "flex h-row shrink-0 items-center gap-1 rounded border border-line px-gap whitespace-nowrap text-ink disabled:opacity-50"
+            : compact
+              ? "flex h-row shrink-0 items-center rounded px-1 text-ink hover:bg-raised disabled:opacity-50 aria-pressed:bg-selection"
+              : "flex h-row shrink-0 items-center gap-1 rounded border border-line px-gap whitespace-nowrap text-ink disabled:opacity-50"
         }
         disabled={!enabled}
         onClick={() => invoke(actionId)}
       >
-        {Icon === null ? null : <Icon aria-hidden weight="fill" className="size-icon" />}
-        {action.title}
+        {Icon === null ? null : <Icon aria-hidden weight={compact ? "regular" : "fill"} className="size-icon" />}
+        {compact ? null : action.title}
       </button>
     </Tooltip>
   );

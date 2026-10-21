@@ -6,8 +6,10 @@
 
 /** Mirrors `RESULT_WINDOW_ROWS` in core: the most rows one `result.window` returns. */
 export const RESULT_WINDOW_ROWS = 500;
-/** Mirrors `RESULT_FETCH_CAP` in core: the most rows a result set keeps before it is truncated. */
-export const RESULT_FETCH_CAP = 10_000;
+/** Mirrors `RESULT_PAGE_ROWS` in core: rows read when a statement runs and per Fetch Next Page. */
+export const RESULT_PAGE_ROWS = 500;
+/** Mirrors `RESULT_FETCH_ALL_CAP` in core: the most rows a result holds; Fetch All stops there. */
+export const RESULT_FETCH_ALL_CAP = 100_000;
 
 /** What main posts on the engine's parent port, once, before any renderer port arrives. */
 export const ENGINE_BOOT_MESSAGE = "engine.boot";
@@ -194,12 +196,48 @@ export interface ResultWindow {
   readonly rows: readonly Row[];
 }
 
+/** Mirrors `TypeClass` in core: what a column holds, for its header glyph. */
+export type TypeClass = "integer" | "float" | "decimal" | "boolean" | "temporal" | "json" | "bytes" | "text";
+
+/** Mirrors `ResultState` in core: how far a result has been read, and whether more can be. */
+export interface ResultState {
+  readonly rowCount: number;
+  readonly complete: boolean;
+  readonly cursorOpen: boolean;
+}
+
+/** Mirrors `SortDirection` in core. */
+export type SortDirection = "asc" | "desc";
+
+/** Mirrors `SortKey` in core: a column index and its direction. */
+export interface SortKey {
+  readonly column: number;
+  readonly direction: SortDirection;
+}
+
+/** Mirrors `EXTRACTOR_KINDS` in core: the formats Copy and Export write. */
+export const EXTRACTOR_KINDS = ["csv", "tsv", "json", "sqlInsert", "markdown"] as const;
+export type ExtractorKind = (typeof EXTRACTOR_KINDS)[number];
+
+/** Rows `from` up to but not including `to`, in the result's current sort order. */
+export interface RowRange {
+  readonly from: number;
+  readonly to: number;
+}
+
+/** What `result.export` wrote. */
+export interface ExportedResult {
+  readonly path: string;
+  readonly rows: number;
+  readonly bytes: number;
+  readonly elapsedMs: number;
+}
+
 /** Mirrors `ResultSummary` in core, with the first window and the session's transaction attached. */
-export interface ExecutedStatement {
+export interface ExecutedStatement extends ResultState {
   readonly handle: string;
   readonly columns: readonly Column[];
-  readonly rowCount: number;
-  readonly truncated: boolean;
+  readonly typeClasses: readonly TypeClass[];
   readonly rowsAffected: number | null;
   readonly firstWindow: ResultWindow;
   /** Whether the session holds a transaction open after the statement; always false without `transactions`. */
@@ -238,7 +276,34 @@ export interface EngineCalls {
     params: { readonly handle: string; readonly offset: number; readonly limit: number };
     result: ResultWindow;
   };
+  /** Closes the result's cursor and drops its rows. */
   "result.release": { params: { readonly handle: string }; result: null };
+  /** Reads one more page, or with `all` up to `RESULT_FETCH_ALL_CAP`; a no-op once the cursor is closed. */
+  "result.fetchMore": { params: { readonly handle: string; readonly all: boolean }; result: ResultState };
+  /** Ends a running fetch after its current row; the cursor stays open. */
+  "result.stopFetch": { params: { readonly handle: string }; result: ResultState };
+  /** Sorts the held rows in the engine; windows read through the new order. No keys restores it. */
+  "result.sort": { params: { readonly handle: string; readonly keys: readonly SortKey[] }; result: ResultState };
+  /** The given rows and columns as `extractor` text, for the clipboard. */
+  "result.extract": {
+    params: {
+      readonly handle: string;
+      readonly extractor: ExtractorKind;
+      readonly rows: readonly RowRange[];
+      readonly columns: readonly number[];
+    };
+    result: string;
+  };
+  /** Writes every held row, then drains the open cursor uncapped, to `path` (decision 025). */
+  "result.export": {
+    params: {
+      readonly handle: string;
+      readonly extractor: ExtractorKind;
+      readonly path: string;
+      readonly columns: readonly number[];
+    };
+    result: ExportedResult;
+  };
   /**
    * The datasource's namespaces, from the engine's cache unless `refresh`; the first call opens the
    * engine's introspection session (decision 022). Needs `schemaTree`.

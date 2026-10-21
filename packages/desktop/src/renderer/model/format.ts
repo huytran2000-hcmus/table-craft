@@ -16,14 +16,15 @@ function rows(count: number): string {
 }
 
 /**
- * An Output line for a statement that ran: `3 rows retrieved in 38 ms`, `1 row affected in 12 ms`,
- * or `completed in 44 ms` for DDL and the rest, whose affected count is the driver's 0, not a fact.
+ * An Output line for a statement that ran: `3 rows retrieved in 38 ms`, `500+ rows retrieved` while
+ * more wait in the cursor, `1 row affected in 12 ms`, or `completed in 44 ms` for DDL and the rest,
+ * whose affected count is the driver's 0, not a fact.
  */
 export function executedText(
   summary: {
     readonly columns: readonly unknown[];
     readonly rowCount: number;
-    readonly truncated: boolean;
+    readonly complete: boolean;
     readonly rowsAffected: number | null;
   },
   ms: number,
@@ -34,8 +35,59 @@ export function executedText(
     if (kind !== "write" || summary.rowsAffected === null) return `completed ${took}`;
     return `${rows(summary.rowsAffected)} affected ${took}`;
   }
-  const truncated = summary.truncated ? " (truncated)" : "";
-  return `${rows(summary.rowCount)} retrieved${truncated} ${took}`;
+  if (!summary.complete) return `${formatCount(summary.rowCount)}+ rows retrieved ${took}`;
+  return `${rows(summary.rowCount)} retrieved ${took}`;
+}
+
+const COUNT_FORMAT = new Intl.NumberFormat("en-US");
+
+/** `50,000`: grouped the way the grid's row count reads. */
+export function formatCount(count: number): string {
+  return COUNT_FORMAT.format(count);
+}
+
+const BYTES_PER_KIB = 1024;
+const BYTE_UNITS = ["bytes", "KB", "MB", "GB"] as const;
+
+/** `812 bytes`, `1.4 MB`. */
+export function formatBytes(bytes: number): string {
+  let value = bytes;
+  let unit = 0;
+  while (value >= BYTES_PER_KIB && unit < BYTE_UNITS.length - 1) {
+    value /= BYTES_PER_KIB;
+    unit++;
+  }
+  return unit === 0 ? `${formatCount(bytes)} bytes` : `${value.toFixed(1)} ${BYTE_UNITS[unit]}`;
+}
+
+/** The Output line an export leaves: `50,000 rows exported to /tmp/a.csv (1.4 MB) in 1.2 s`. */
+export function exportedText(exported: {
+  readonly path: string;
+  readonly rows: number;
+  readonly bytes: number;
+  readonly elapsedMs: number;
+}): string {
+  const count = exported.rows === 1 ? "1 row" : `${formatCount(exported.rows)} rows`;
+  return `${count} exported to ${exported.path} (${formatBytes(exported.bytes)}) in ${formatDuration(exported.elapsedMs)}`;
+}
+
+/**
+ * The grid toolbar's row count (plan 007 decision 2): `5,000 rows` when all are fetched,
+ * `500+ rows` while the cursor holds more, and why fetching ended when it ended early.
+ */
+export function resultStateText(result: {
+  readonly rowCount: number;
+  readonly complete: boolean;
+  readonly cursorOpen: boolean;
+  readonly sorted: boolean;
+  readonly fetchAllCap: number;
+}): string {
+  const count = formatCount(result.rowCount);
+  if (result.complete) return result.rowCount === 1 ? "1 row" : `${count} rows`;
+  const parts = [`${count}+ rows`];
+  if (!result.cursorOpen) parts.push(result.rowCount >= result.fetchAllCap ? "fetch cap reached" : "fetching stopped");
+  if (result.sorted) parts.push("sorted locally");
+  return parts.join(" · ");
 }
 
 /** The first line of a statement, as the Output log and result tooltips name it. */

@@ -1,21 +1,37 @@
+import { open as openFile, rename, rm } from "node:fs/promises";
+import { isAbsolute } from "node:path";
 import {
   CatalogCache,
   CoreError,
   loadedPlugin,
   openSession,
+  project,
   ResultStore,
+  rowWriter,
+  type ExtractorKind,
   type PluginLoadResult,
+  type ResultState,
 } from "@table-craft/core";
-import { isPluginError, type Capability, type Session, type Transactions } from "@table-craft/plugin-api";
+import {
+  isPluginError,
+  type Capability,
+  type Column,
+  type Row,
+  type Session,
+  type SqlLanguage,
+  type Transactions,
+} from "@table-craft/plugin-api";
 import type {
   ClassifiedStatement,
   DatasourceConfig,
   EngineError,
   EngineMethod,
   EngineResponse,
+  ExportedResult,
   ProbeResult,
   RequestOf,
   ResultOf,
+  RowRange,
   TransactionState,
 } from "@table-craft/desktop/engine/protocol.js";
 import { engineRequestSchema, readRequestId } from "@table-craft/desktop/engine/requests.js";
@@ -129,12 +145,43 @@ export async function probeDatasource(options: EngineOptions, now: () => number 
 }
 
 const TRANSACTION_HINT = "Check the connection, then try again; the transaction may already have ended.";
+const EXPORT_HINT = "Check that the folder exists and is writable, then export again.";
+const TEMP_SUFFIX = ".tmp";
+/** Characters gathered before a write, so an export of a million rows is not a million writes. */
+const EXPORT_CHUNK_CHARS = 1 << 16;
+
+/** Writes `chunks` to `path` through a temporary file renamed into place, removed on failure. */
+async function writeAtomically(path: string, chunks: AsyncIterable<string>): Promise<number> {
+  const temporary = `${path}${TEMP_SUFFIX}`;
+  const file = await openFile(temporary, "w");
+  let bytes = 0;
+  try {
+    let pending = "";
+    for await (const chunk of chunks) {
+      pending += chunk;
+      if (pending.length < EXPORT_CHUNK_CHARS) continue;
+      bytes += (await file.write(pending)).bytesWritten;
+      pending = "";
+    }
+    if (pending !== "") bytes += (await file.write(pending)).bytesWritten;
+    await file.close();
+    await rename(temporary, path);
+    return bytes;
+  } catch (cause) {
+    await file.close().catch(() => undefined);
+    await rm(temporary, { force: true });
+    throw cause;
+  }
+}
+
+function rowsIn(rows: readonly Row[], ranges: readonly RowRange[]): Row[] {
+  return ranges.flatMap((range) => rows.slice(range.from, Math.max(range.from, range.to)));
+}
 const OPEN_TRANSACTION_HINT = "Commit or roll back the open transaction first.";
 
-export function createEngine(options: EngineOptions): Engine {
-  function splitScript(text: string): ClassifiedStatement[] {
-    const { plugin } = loadedPlugin(options.plugins, options.datasource.pluginId);
-    const { language } = plugin;
+export function createEngine(options: EngineOptions, now: () => number = Date.now): Engine {
+  function sqlLanguage(): SqlLanguage {
+    const { language } = loadedPlugin(options.plugins, options.datasource.pluginId).plugin;
     if (language === undefined) {
       throw new EngineFailure({
         code: "invalidRequest",
@@ -142,6 +189,11 @@ export function createEngine(options: EngineOptions): Engine {
         hint: BUG_HINT,
       });
     }
+    return language;
+  }
+
+  function splitScript(text: string): ClassifiedStatement[] {
+    const language = sqlLanguage();
     return language.split(text).map((span) => ({ ...span, ...language.classify(span.sql) }));
   }
 
@@ -188,13 +240,84 @@ export function createEngine(options: EngineOptions): Engine {
     const sessions = new Map<string, OpenSession>();
     /** Each live result handle, mapped to the session that produced it. */
     const handles = new Map<string, string>();
+    /** The one result per session whose cursor is still open (decision 025). */
+    const cursors = new Map<string, string>();
 
-    function releaseHandlesOf(sessionId: string): void {
-      for (const [handle, owner] of handles) {
-        if (owner !== sessionId) continue;
-        handles.delete(handle);
-        results.release(handle);
+    async function releaseHandlesOf(sessionId: string): Promise<void> {
+      cursors.delete(sessionId);
+      const owned = [...handles].filter(([, owner]) => owner === sessionId).map(([handle]) => handle);
+      for (const handle of owned) handles.delete(handle);
+      await Promise.all(owned.map((handle) => results.release(handle)));
+    }
+
+    /** Before the session runs anything else or its transaction ends, its open cursor closes. */
+    async function closeCursorOf(sessionId: string): Promise<void> {
+      const handle = cursors.get(sessionId);
+      if (handle === undefined) return;
+      cursors.delete(sessionId);
+      await results.closeCursor(handle).catch(() => undefined);
+    }
+
+    function track(handle: string, state: ResultState): ResultState {
+      const owner = handles.get(handle);
+      if (owner !== undefined && !state.cursorOpen && cursors.get(owner) === handle) cursors.delete(owner);
+      return state;
+    }
+
+    function chosenColumns(handle: string, indices: readonly number[]): Column[] {
+      const all = results.columns(handle);
+      return indices.map((index) => {
+        const column = all[index];
+        if (column === undefined) {
+          throw new EngineFailure({
+            code: "invalidRequest",
+            message: `Column ${String(index)} is outside this result's ${String(all.length)} columns.`,
+            hint: BUG_HINT,
+          });
+        }
+        return column;
+      });
+    }
+
+    async function exportResult(
+      handle: string,
+      extractor: ExtractorKind,
+      path: string,
+      columns: readonly number[],
+    ): Promise<ExportedResult> {
+      if (!isAbsolute(path)) {
+        throw new EngineFailure({
+          code: "invalidRequest",
+          message: `Export needs an absolute path, not "${path}".`,
+          hint: BUG_HINT,
+        });
       }
+      const started = now();
+      const writer = rowWriter(extractor, chosenColumns(handle, columns), { dialect: sqlLanguage() });
+      let count = 0;
+      const held = results.rows(handle);
+      const bytes = await results
+        .drain(handle, (rest) =>
+          writeAtomically(
+            path,
+            (async function* chunks(): AsyncGenerator<string, void, undefined> {
+              yield writer.start();
+              for (const row of held) yield writer.row(project(row, columns), count++);
+              for await (const row of rest) yield writer.row(project(row, columns), count++);
+              yield writer.end(count);
+            })(),
+          ),
+        )
+        .catch((cause: unknown) => {
+          if (isPluginError(cause)) throw statementFailed(cause, options.datasource.readOnly);
+          throw new EngineFailure({
+            code: "statementFailed",
+            message: `Export failed: ${messageOf(cause)}`,
+            hint: EXPORT_HINT,
+          });
+        });
+      track(handle, results.state(handle));
+      return { path, rows: count, bytes, elapsedMs: now() - started };
     }
 
     function sessionFor(sessionId: string): OpenSession {
@@ -235,6 +358,7 @@ export function createEngine(options: EngineOptions): Engine {
         });
       }
       try {
+        await closeCursorOf(sessionId);
         await change(transactions);
       } catch (cause) {
         throw new EngineFailure({ code: "statementFailed", message: messageOf(cause), hint });
@@ -258,7 +382,7 @@ export function createEngine(options: EngineOptions): Engine {
       "session.close": async ({ sessionId }) => {
         const open = sessionFor(sessionId);
         sessions.delete(sessionId);
-        releaseHandlesOf(sessionId);
+        await releaseHandlesOf(sessionId);
         await open.session.close();
         return null;
       },
@@ -266,6 +390,8 @@ export function createEngine(options: EngineOptions): Engine {
         const open = sessionFor(sessionId);
         open.running += 1;
         try {
+          // Awaited only when there is one: a needless await would let a cancel overtake the execute.
+          if (cursors.has(sessionId)) await closeCursorOf(sessionId);
           const summary = await open.session
             .execute(sql)
             .then((result) => results.put(result))
@@ -274,10 +400,11 @@ export function createEngine(options: EngineOptions): Engine {
             });
           if (sessions.get(sessionId) !== open) {
             // The session closed while the statement ran; nobody is left to release this result.
-            results.release(summary.handle);
+            await results.release(summary.handle);
             sessionFor(sessionId);
           }
           handles.set(summary.handle, sessionId);
+          if (summary.cursorOpen) cursors.set(sessionId, summary.handle);
           return {
             ...summary,
             firstWindow: results.window(summary.handle, 0),
@@ -308,10 +435,31 @@ export function createEngine(options: EngineOptions): Engine {
         transact(sessionId, (transactions) => transactions.rollback(), TRANSACTION_HINT),
       "result.window": ({ handle, offset, limit }) =>
         Promise.resolve(results.window(ownedHandle(handle), offset, limit)),
-      "result.release": ({ handle }) => {
-        if (handles.delete(handle)) results.release(handle);
-        return Promise.resolve(null);
+      "result.release": async ({ handle }) => {
+        const owner = handles.get(handle);
+        if (owner === undefined) return null;
+        handles.delete(handle);
+        if (cursors.get(owner) === handle) cursors.delete(owner);
+        await results.release(handle);
+        return null;
       },
+      "result.fetchMore": async ({ handle, all }) => {
+        const state = await results.fetchMore(ownedHandle(handle), { all }).catch((cause: unknown) => {
+          throw statementFailed(cause, options.datasource.readOnly);
+        });
+        return track(handle, state);
+      },
+      "result.stopFetch": async ({ handle }) => track(handle, await results.stopFetch(ownedHandle(handle))),
+      "result.sort": ({ handle, keys }) => Promise.resolve(results.sort(ownedHandle(handle), keys)),
+      "result.extract": ({ handle, extractor, rows, columns }) => {
+        const chosen = chosenColumns(ownedHandle(handle), columns);
+        const writer = rowWriter(extractor, chosen, { dialect: sqlLanguage() });
+        const picked = rowsIn(results.rows(handle), rows);
+        const body = picked.map((row, index) => writer.row(project(row, columns), index)).join("");
+        return Promise.resolve(writer.start() + body + writer.end(picked.length));
+      },
+      "result.export": ({ handle, extractor, path, columns }) =>
+        exportResult(ownedHandle(handle), extractor, path, columns),
       "catalog.namespaces": ({ refresh }) => introspect(({ cache }) => cache.namespaces(refresh)),
       "catalog.describe": ({ path, refresh }) => introspect(({ cache }) => cache.describe(path, refresh)),
       "catalog.qualifiedName": ({ path, name }) =>
@@ -345,8 +493,10 @@ export function createEngine(options: EngineOptions): Engine {
         }
       },
       async close() {
-        for (const handle of handles.keys()) results.release(handle);
+        const held = [...handles.keys()];
         handles.clear();
+        cursors.clear();
+        await Promise.all(held.map((handle) => results.release(handle)));
         const open = [...sessions.values()];
         sessions.clear();
         await Promise.allSettled(open.map((entry) => entry.session.close()));

@@ -1,4 +1,5 @@
-export type CoreErrorCode = "unknownHandle" | "unknownPlugin" | "pluginUnavailable" | "invalidConfig";
+export type CoreErrorCode =
+  "unknownHandle" | "unknownPlugin" | "pluginUnavailable" | "invalidConfig" | "invalidRequest";
 
 /** A failure the user can act on: `hint` says what to do next. */
 export class CoreError extends Error {

@@ -205,3 +205,50 @@ describe("keymap", () => {
     expect(created).toHaveBeenCalledTimes(1);
   });
 });
+
+describe("grid keymap", () => {
+  function dispatcherIn(region: () => FocusRegion) {
+    const ran: string[] = [];
+    const registry = createActionRegistry(() => IDLE_CONTEXT);
+    registry.register(
+      ALL_ACTIONS.map((action) => ({ ...action, when: undefined, run: () => void ran.push(action.id) })),
+    );
+    const dispatch = createKeyDispatcher({
+      registry,
+      platform: "mac",
+      paletteOpen: () => false,
+      focusedRegion: region,
+    });
+    return { dispatch, ran };
+  }
+
+  it("givenGridFocused_whenModC_thenGridCopyNotEditorCopy", () => {
+    let region: FocusRegion = "grid";
+    const { dispatch, ran } = dispatcherIn(() => region);
+
+    const inGrid = keydown({ key: "c", metaKey: true });
+    dispatch(inGrid);
+    region = "editor";
+    const inEditor = keydown({ key: "c", metaKey: true });
+    dispatch(inEditor);
+
+    expect(ran).toEqual(["grid.copy"]);
+    expect(inGrid.prevented()).toBe(true);
+    expect(inEditor.prevented()).toBe(false);
+  });
+
+  it("givenGridFocused_whenGridChordsPressed_thenGridActionsRun", () => {
+    const { dispatch, ran } = dispatcherIn(() => "grid");
+
+    dispatch(keydown({ key: "a", metaKey: true }));
+    dispatch(keydown({ key: "Enter", code: "Enter", shiftKey: true }));
+    dispatch(keydown({ key: "r", metaKey: true }));
+
+    expect(ran).toEqual(["grid.selectAll", "grid.toggleValuePanel", "grid.rerun"]);
+  });
+
+  it("givenGridChords_whenListed_thenAllScopedToTheGrid", () => {
+    const gridChords = ALL_ACTIONS.filter((action) => action.shortcutRegion === "grid");
+    expect(gridChords.map((action) => action.shortcut)).toEqual(["Mod+R", "Mod+C", "Mod+A", "Shift+Enter"]);
+  });
+});

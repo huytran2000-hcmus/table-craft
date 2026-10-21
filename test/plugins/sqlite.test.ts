@@ -5,7 +5,7 @@ import sqlite from "@table-craft/plugin-sqlite";
 import { describe, expect, it } from "vitest";
 import { seededSqliteFile } from "../support/sqliteFixture.js";
 import { SQLITE_MANIFEST } from "../support/manifests.js";
-import { TYPE_PROBE_EXPECTED, TYPE_PROBE_WRITE } from "../support/typeProbe.js";
+import { TYPE_PROBE_COPY_SQLITE, TYPE_PROBE_EXPECTED, TYPE_PROBE_WRITE } from "../support/typeProbe.js";
 
 const IN_MEMORY = { path: ":memory:" };
 const BEYOND_SAFE_INTEGER = "9007199254740993";
@@ -32,7 +32,7 @@ runPluginContract(sqlite, {
   manifest: SQLITE_MANIFEST,
   config: { path: seededSqliteFile() },
   statements: { write: TYPE_PROBE_WRITE },
-  typeProbe: { expected: TYPE_PROBE_EXPECTED },
+  typeProbe: { expected: TYPE_PROBE_EXPECTED, copyTable: TYPE_PROBE_COPY_SQLITE },
   scripts: [
     {
       text: "CREATE TRIGGER t AFTER INSERT ON orders BEGIN UPDATE customers SET name = name; END;\nSELECT 1;",

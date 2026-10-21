@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { columnChars, columnTemplate, displayChars } from "@table-craft/desktop/renderer/grid/widths.js";
+import {
+  columnChars,
+  displayChars,
+  HEADER_EXTRA_CHARS,
+  widerChars,
+} from "@table-craft/desktop/renderer/grid/widths.js";
 
 describe("grid column widths", () => {
   it("givenCjkAndEmoji_whenMeasured_thenEachCountsTwoCells", () => {
@@ -10,20 +15,20 @@ describe("grid column widths", () => {
     expect(displayChars("héllo")).toBe(5);
   });
 
-  it("givenCellsWiderThanName_whenMeasured_thenWidestFormattedCellWins", () => {
+  it("givenCellsWiderThanHeader_whenMeasured_thenWidestFormattedCellWins", () => {
     const columns = [
       { name: "id", type: "int4" },
       { name: "doc", type: "jsonb" },
     ];
     const rows = [
-      [1, { kind: "json" as const, text: '{"a": 1}' }],
+      [1, { kind: "json" as const, text: '{"a": 1, "b": 2}' }],
       [null, null],
     ];
 
-    expect(columnChars(columns, rows)).toEqual([6, 8]);
+    expect(columnChars(columns, rows)).toEqual([2 + HEADER_EXTRA_CHARS, 16]);
   });
 
-  it("givenNoRows_whenMeasured_thenNameOrMinimumWins", () => {
+  it("givenNoRows_whenMeasured_thenHeaderWins", () => {
     expect(
       columnChars(
         [
@@ -32,10 +37,19 @@ describe("grid column widths", () => {
         ],
         [],
       ),
-    ).toEqual([4, 12]);
+    ).toEqual([1 + HEADER_EXTRA_CHARS, 12 + HEADER_EXTRA_CHARS]);
   });
 
-  it("givenChars_whenTemplated_thenEachTrackIsCappedByTheDensityToken", () => {
-    expect(columnTemplate([4])).toBe("min(var(--spacing-column-max), calc(4ch + 2 * var(--spacing-cell) + 1px))");
+  it("givenLaterWindowWithWiderNumbers_whenWidened_thenOnlyThatColumnGrows", () => {
+    const chars = [8, 20];
+
+    expect(widerChars(chars, [[49_994, "short"]])).toEqual([8, 20]);
+    expect(widerChars(chars, [[123_456_789, "short"]])).toEqual([9, 20]);
+  });
+
+  it("givenNothingWider_whenWidened_thenSameArray", () => {
+    const chars = [8, 20];
+
+    expect(widerChars(chars, [[1, "x"]])).toBe(chars);
   });
 });

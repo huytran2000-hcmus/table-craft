@@ -1,3 +1,4 @@
+import { EXTRACTOR_KINDS } from "@table-craft/core";
 import { TRANSACTION_MODES, z } from "@table-craft/plugin-api";
 import type { EngineRequest } from "@table-craft/desktop/engine/protocol.js";
 
@@ -5,6 +6,9 @@ const requestId = z.number().int().nonnegative();
 const handle = z.string().min(1);
 const sessionId = z.string().min(1);
 const namespacePath = z.array(z.string()).min(1);
+const index = z.number().int().nonnegative();
+const extractor = z.enum(EXTRACTOR_KINDS);
+const columns = z.array(index);
 
 /** The renderer is untrusted input: every request is parsed before it is routed. */
 export const engineRequestSchema = z.discriminatedUnion("type", [
@@ -34,6 +38,30 @@ export const engineRequestSchema = z.discriminatedUnion("type", [
     limit: z.number().int().positive(),
   }),
   z.strictObject({ id: requestId, type: z.literal("result.release"), handle }),
+  z.strictObject({ id: requestId, type: z.literal("result.fetchMore"), handle, all: z.boolean() }),
+  z.strictObject({ id: requestId, type: z.literal("result.stopFetch"), handle }),
+  z.strictObject({
+    id: requestId,
+    type: z.literal("result.sort"),
+    handle,
+    keys: z.array(z.strictObject({ column: index, direction: z.enum(["asc", "desc"]) })),
+  }),
+  z.strictObject({
+    id: requestId,
+    type: z.literal("result.extract"),
+    handle,
+    extractor,
+    rows: z.array(z.strictObject({ from: index, to: index })),
+    columns,
+  }),
+  z.strictObject({
+    id: requestId,
+    type: z.literal("result.export"),
+    handle,
+    extractor,
+    path: z.string().min(1),
+    columns,
+  }),
   z.strictObject({ id: requestId, type: z.literal("catalog.namespaces"), refresh: z.boolean().optional() }),
   z.strictObject({
     id: requestId,

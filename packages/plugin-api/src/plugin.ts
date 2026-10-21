@@ -78,6 +78,13 @@ export interface SqlLanguage {
   /** Every non-empty statement in `text`, in order. Comments and blanks between statements belong to none. */
   split(text: string): readonly StatementSpan[];
   classify(sql: string): StatementClass;
+  /** `name` quoted as an identifier, whatever characters it holds. */
+  quoteIdentifier(name: string): string;
+  /**
+   * `value` as a literal a statement can insert into a column of `columnType`. A bytes value
+   * carries only its preview, so a longer one is written clipped with a comment saying so.
+   */
+  literal(value: WireValue, columnType: string | null): string;
 }
 
 export const TRANSACTION_MODES = ["auto", "manual"] as const;

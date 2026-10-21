@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import { EXTRACTOR_KINDS, type ExtractorKind } from "@table-craft/desktop/engine/protocol.js";
 
 /**
  * Which tool windows are open and how big they are. Per-window UI memory in `localStorage`, not a
@@ -19,6 +20,10 @@ export interface Layout {
   readonly showSystemSchemas: boolean;
   /** The console tabs open at the last change, in tab order, reopened at launch (plan 006). */
   readonly openConsoles: readonly OpenConsole[];
+  /** The grid's extractor, which both Copy and Export use (plan 007 decision 12). */
+  readonly extractor: ExtractorKind;
+  /** Whether result grids show the value panel beside their rows (plan 007 decision 15). */
+  readonly valuePanel: boolean;
 }
 
 /** A console tab as the layout remembers it; its text lives in its file (decision 16). */
@@ -34,6 +39,8 @@ export const DEFAULT_LAYOUT: Layout = {
   hidden: null,
   showSystemSchemas: false,
   openConsoles: [],
+  extractor: "csv",
+  valuePanel: false,
 };
 
 const MIN_SIZE_PERCENT = 5;
@@ -57,6 +64,9 @@ function isOpenConsole(value: unknown): value is OpenConsole {
   return typeof datasourceId === "string" && typeof name === "string" && typeof active === "boolean";
 }
 
+const isExtractor = (value: unknown): value is ExtractorKind =>
+  typeof value === "string" && (EXTRACTOR_KINDS as readonly string[]).includes(value);
+
 function openConsolesOf(value: unknown): readonly OpenConsole[] {
   return Array.isArray(value) ? value.filter(isOpenConsole) : [];
 }
@@ -72,7 +82,10 @@ export function loadLayout(storage: Pick<Storage, "getItem">): Layout {
     return DEFAULT_LAYOUT;
   }
   if (typeof saved !== "object" || saved === null) return DEFAULT_LAYOUT;
-  const { visible, sizes, hidden, showSystemSchemas, openConsoles } = saved as Record<string, unknown>;
+  const { visible, sizes, hidden, showSystemSchemas, openConsoles, extractor, valuePanel } = saved as Record<
+    string,
+    unknown
+  >;
   if (!isRecordOf(visible, isBoolean) || !isRecordOf(sizes, isSize)) return DEFAULT_LAYOUT;
   return {
     visible,
@@ -80,6 +93,8 @@ export function loadLayout(storage: Pick<Storage, "getItem">): Layout {
     hidden: isRecordOf(hidden, isBoolean) ? hidden : null,
     showSystemSchemas: showSystemSchemas === true,
     openConsoles: openConsolesOf(openConsoles),
+    extractor: isExtractor(extractor) ? extractor : DEFAULT_LAYOUT.extractor,
+    valuePanel: valuePanel === true,
   };
 }
 
@@ -112,6 +127,8 @@ export interface LayoutState {
   readonly resize: (id: ToolWindowId, percent: number) => void;
   readonly toggleSystemSchemas: () => void;
   readonly setOpenConsoles: (openConsoles: readonly OpenConsole[]) => void;
+  readonly setExtractor: (extractor: ExtractorKind) => void;
+  readonly toggleValuePanel: () => void;
 }
 
 /** A layout store over `storage`; the app passes `localStorage`, tests a map. */
@@ -132,6 +149,10 @@ export function createLayoutStore(storage: LayoutStorage) {
         if (JSON.stringify(openConsoles) === JSON.stringify(get().layout.openConsoles)) return;
         update({ ...get().layout, openConsoles });
       },
+      setExtractor(extractor) {
+        if (extractor !== get().layout.extractor) update({ ...get().layout, extractor });
+      },
+      toggleValuePanel: () => update({ ...get().layout, valuePanel: !get().layout.valuePanel }),
     };
   });
 }

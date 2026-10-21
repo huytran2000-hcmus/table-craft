@@ -2,7 +2,7 @@
   "id": "mysql",
   "name": "MySQL",
   "version": "0.0.0",
-  "apiVersion": "0.5.0",
+  "apiVersion": "0.6.0",
   "entry": "index.js",
   "capabilities": ["sql", "cancel", "schemaTree", "transactions"],
   "highlight": "mysql",

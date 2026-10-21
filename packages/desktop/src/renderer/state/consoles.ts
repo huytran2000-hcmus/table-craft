@@ -4,12 +4,21 @@ import {
   type ClassifiedStatement,
   type Column,
   type EngineError,
+  type ExecutedStatement,
+  type ExtractorKind,
+  type ResultState,
   type Row,
+  type RowRange,
+  type SortKey,
   type TransactionMode,
   type TransactionState,
+  type TypeClass,
 } from "@table-craft/desktop/engine/protocol.js";
 import { EngineRequestError, type EngineClient } from "@table-craft/desktop/renderer/engine/client.js";
-import { executedText, firstLine } from "@table-craft/desktop/renderer/model/format.js";
+import { columnChars, widerChars } from "@table-craft/desktop/renderer/grid/widths.js";
+import { carriedLayout, initialLayout, type ColumnLayout } from "@table-craft/desktop/renderer/model/columnLayout.js";
+import { executedText, exportedText, firstLine } from "@table-craft/desktop/renderer/model/format.js";
+import { clampSelection, type GridSelection } from "@table-craft/desktop/renderer/model/gridSelection.js";
 import { statementsToRun, type RunScope, type TextSpan } from "@table-craft/desktop/renderer/model/statementAt.js";
 import { useCatalog } from "@table-craft/desktop/renderer/state/catalog.js";
 import { useDatasources } from "@table-craft/desktop/renderer/state/datasources.js";
@@ -21,19 +30,32 @@ import { useModal } from "@table-craft/desktop/renderer/state/modal.js";
  */
 export type ConsoleStatus = "connecting" | "ready" | "running" | "failed" | "disconnected";
 
-/** A result tab: one row-returning statement's rows, held in the engine behind `handle`. */
-export interface ResultTab {
+/** What the grid is fetching for a result: a page, everything to the cap, or the rest into a file. */
+export type ResultFetch = "page" | "all" | "export";
+
+/**
+ * A result tab: one row-returning statement's rows, held in the engine behind `handle`. Its
+ * layout, sort and selection live here and die with the tab (plan 007 decision 8).
+ */
+export interface ResultTab extends ResultState {
   readonly id: string;
   /** `Result 1`, `Result 2`…, the first number no pinned tab holds. */
   readonly title: string;
   readonly sql: string;
   readonly handle: string;
   readonly columns: readonly Column[];
-  readonly rowCount: number;
-  readonly truncated: boolean;
+  readonly typeClasses: readonly TypeClass[];
   readonly rowsAffected: number | null;
-  /** Loaded windows keyed by their offset, a multiple of `RESULT_WINDOW_ROWS`. */
+  /** Loaded windows keyed by their offset, a multiple of `RESULT_WINDOW_ROWS`; at most `MAX_LOADED_WINDOWS`. */
   readonly windows: Readonly<Record<number, readonly Row[]>>;
+  /** Each column's width in characters from the first page, so scrolling and eviction never reflow it. */
+  readonly autoChars: readonly number[];
+  readonly sort: readonly SortKey[];
+  readonly layout: ColumnLayout;
+  readonly selection: GridSelection | null;
+  readonly fetching: ResultFetch | null;
+  /** Its engine went away: the rows shown are all there will be until a rerun (plan 007 decision 18). */
+  readonly stale: boolean;
   /** A pinned tab survives the next run; the others are replaced and their handles released. */
   readonly pinned: boolean;
 }
@@ -105,7 +127,34 @@ export interface ConsolesState {
   readonly run: (id: string, scope: RunScope) => Promise<void>;
   /** Asks the engine to cancel the running statement; `run` then reports it as cancelled. */
   readonly cancel: (id: string) => Promise<void>;
+  /** Loads the window at `offset` unless it is loaded or on its way; evicts the furthest past the limit. */
   readonly ensureWindow: (id: string, resultId: string, offset: number) => void;
+  /** Fetch Next Page, or Fetch All up to the cap (decision 025). */
+  readonly fetchMore: (id: string, resultId: string, all: boolean) => Promise<void>;
+  /** Stops a running fetch; the rows it got stay and the cursor stays open. */
+  readonly stopFetch: (id: string, resultId: string) => Promise<void>;
+  /** Sorts the fetched rows locally; no keys restores the server's order. */
+  readonly sort: (id: string, resultId: string, keys: readonly SortKey[]) => Promise<void>;
+  readonly setLayout: (id: string, resultId: string, layout: ColumnLayout) => void;
+  readonly select: (id: string, resultId: string, selection: GridSelection | null) => void;
+  /** Runs the tab's statement again in place, keeping its layout and sort, reconnecting when it must. */
+  readonly rerun: (id: string, resultId: string) => Promise<void>;
+  /** The chosen rows and columns as an extractor's text, or null when the engine refused (the Output log says why). */
+  readonly extract: (
+    id: string,
+    resultId: string,
+    extractor: ExtractorKind,
+    rows: readonly RowRange[],
+    columns: readonly number[],
+  ) => Promise<string | null>;
+  /** Writes the result to `path`, draining its open cursor, and logs what it wrote. */
+  readonly exportTo: (
+    id: string,
+    resultId: string,
+    extractor: ExtractorKind,
+    path: string,
+    columns: readonly number[],
+  ) => Promise<boolean>;
   readonly showResult: (id: string, resultId: string) => void;
   readonly togglePin: (id: string, resultId: string) => void;
   /** False when the engine refused, which the Output log then explains. */
@@ -133,6 +182,51 @@ export function windowOffsetOf(index: number): number {
 export function rowAt(windows: ResultTab["windows"], index: number): Row | undefined {
   const offset = windowOffsetOf(index);
   return windows[offset]?.[index - offset];
+}
+
+/** Windows a result tab keeps loaded (plan 007 decision 17); scrolling back refetches the rest. */
+export const MAX_LOADED_WINDOWS = 20;
+
+/** `windows` with `rows` at `offset`, dropping the windows furthest from it past `max`. */
+export function withWindow(
+  windows: ResultTab["windows"],
+  offset: number,
+  rows: readonly Row[],
+  max: number = MAX_LOADED_WINDOWS,
+): ResultTab["windows"] {
+  const next: Record<number, readonly Row[]> = { ...windows, [offset]: rows };
+  const offsets = Object.keys(next).map(Number);
+  if (offsets.length <= max) return next;
+  const furthest = offsets.sort((a, b) => Math.abs(b - offset) - Math.abs(a - offset)).slice(0, offsets.length - max);
+  for (const evicted of furthest) delete next[evicted];
+  return next;
+}
+
+/** A tab for `executed`, the statement `sql` returned. */
+export function resultTabOf(
+  executed: Omit<ExecutedStatement, "transactionOpen">,
+  ids: { readonly id: string; readonly title: string },
+  sql: string,
+): ResultTab {
+  const { firstWindow, ...summary } = executed;
+  return {
+    ...summary,
+    ...ids,
+    sql,
+    windows: { [firstWindow.offset]: firstWindow.rows },
+    autoChars: columnChars(summary.columns, firstWindow.rows),
+    sort: [],
+    layout: initialLayout(summary.columns.length),
+    selection: null,
+    fetching: null,
+    stale: false,
+    pinned: false,
+  };
+}
+
+/** Whether Fetch Next Page and Fetch All can run on the tab. */
+export function canFetch(result: ResultTab): boolean {
+  return result.cursorOpen && !result.stale && result.fetching === null;
 }
 
 /** Whether Run can start from this status; it reconnects from the last two. */
@@ -190,6 +284,8 @@ export function createConsolesStore(dependencies: ConsolesDependencies) {
   const clients = new Map<string, EngineClient>();
   /** Window requests in flight per result tab. */
   const requested = new Map<string, Set<number>>();
+  /** Bumped when a tab's loaded windows stop matching the engine's order; older answers are dropped. */
+  const generations = new Map<string, number>();
   /** Consoles whose DDL ran inside a transaction not yet ended: Commit makes it visible. */
   const pendingDdl = new Set<string>();
   const clock = dependencies.clock ?? (() => Date.now());
@@ -242,6 +338,7 @@ export function createConsolesStore(dependencies: ConsolesDependencies) {
 
     async function applyMode(id: string, client: EngineClient, sessionId: string, mode: TransactionMode) {
       try {
+        cursorsClosed(id);
         const state = await client.call("transaction.setMode", { sessionId, mode });
         patch(id, { txMode: state.mode, transactionOpen: state.transactionOpen });
         return true;
@@ -254,9 +351,50 @@ export function createConsolesStore(dependencies: ConsolesDependencies) {
     function release(id: string, results: readonly ResultTab[]): void {
       const client = clients.get(id);
       for (const result of results) {
-        requested.delete(result.id);
-        if (client !== undefined) void client.call("result.release", { handle: result.handle }).catch(() => undefined);
+        forget(result.id);
+        if (client !== undefined && !result.stale) {
+          void client.call("result.release", { handle: result.handle }).catch(() => undefined);
+        }
       }
+    }
+
+    function forget(resultId: string): void {
+      requested.delete(resultId);
+      generations.delete(resultId);
+    }
+
+    function resultOf(id: string, resultId: string): ResultTab | undefined {
+      return get().consoles[id]?.results.find((result) => result.id === resultId);
+    }
+
+    function updateResult(id: string, resultId: string, change: (result: ResultTab) => ResultTab): void {
+      const current = get().consoles[id];
+      if (current === undefined) return;
+      patch(id, { results: current.results.map((result) => (result.id === resultId ? change(result) : result)) });
+    }
+
+    /** Loaded windows no longer match the engine's order: drop them, and any answer still on its way. */
+    function invalidateWindows(resultId: string): void {
+      generations.set(resultId, (generations.get(resultId) ?? 0) + 1);
+      requested.delete(resultId);
+    }
+
+    /** `result` after the engine reported `state`; rows that moved are fetched again as they show. */
+    function withState(result: ResultTab, state: ResultState): ResultTab {
+      if (state.rowCount === result.rowCount) return { ...result, ...state };
+      invalidateWindows(result.id);
+      const windows =
+        result.sort.length > 0
+          ? {}
+          : Object.fromEntries(Object.entries(result.windows).filter(([, rows]) => rows.length === RESULT_WINDOW_ROWS));
+      return { ...result, ...state, windows };
+    }
+
+    /** The engine closes a session's open cursor when the session runs anything or its transaction ends. */
+    function cursorsClosed(id: string): void {
+      const current = get().consoles[id];
+      if (current === undefined || !current.results.some((result) => result.cursorOpen)) return;
+      patch(id, { results: current.results.map((result) => ({ ...result, cursorOpen: false })) });
     }
 
     /** Drops the unpinned result tabs before a run fills new ones (decision 10). */
@@ -303,22 +441,22 @@ export function createConsolesStore(dependencies: ConsolesDependencies) {
         patch(id, { flash: { from: statement.from, to: statement.to, seq: ++flashes } });
         const startedAt = dependencies.now();
         try {
-          const executed = await client.call("statement.execute", { sessionId, sql: statement.sql });
+          cursorsClosed(id);
+          const { transactionOpen, ...executed } = await client.call("statement.execute", {
+            sessionId,
+            sql: statement.sql,
+          });
           const elapsed = dependencies.now() - startedAt;
-          const { firstWindow, transactionOpen, ...summary } = executed;
-          log(id, { sql, message: executedText(summary, elapsed, statement.kind), tone: "success" });
+          log(id, { sql, message: executedText(executed, elapsed, statement.kind), tone: "success" });
           const current = get().consoles[id];
           if (current === undefined) return "cancelled";
           const datasourceId = current.datasourceId;
-          if (summary.columns.length > 0) {
-            const tab: ResultTab = {
-              ...summary,
-              id: `${id}/result-${++resultIds}`,
-              title: nextResultTitle(current.results),
-              sql: statement.sql,
-              windows: { [firstWindow.offset]: firstWindow.rows },
-              pinned: false,
-            };
+          if (executed.columns.length > 0) {
+            const tab = resultTabOf(
+              executed,
+              { id: `${id}/result-${++resultIds}`, title: nextResultTitle(current.results) },
+              statement.sql,
+            );
             patch(id, { results: [...current.results, tab], activeResult: tab.id, transactionOpen });
           } else {
             patch(id, { transactionOpen });
@@ -357,6 +495,7 @@ export function createConsolesStore(dependencies: ConsolesDependencies) {
       const client = clients.get(id);
       if (current?.sessionId == null || client === undefined) return true;
       try {
+        cursorsClosed(id);
         const state: TransactionState = await client.call(method, { sessionId: current.sessionId });
         patch(id, { transactionOpen: state.transactionOpen });
         const committed = method === "transaction.commit";
@@ -384,7 +523,7 @@ export function createConsolesStore(dependencies: ConsolesDependencies) {
         if (closing === undefined) return;
         const { [id]: _closed, ...rest } = get().consoles;
         set({ consoles: rest });
-        for (const result of closing.results) requested.delete(result.id);
+        for (const result of closing.results) forget(result.id);
         pendingDdl.delete(id);
         const client = clients.get(id);
         clients.delete(id);
@@ -397,7 +536,7 @@ export function createConsolesStore(dependencies: ConsolesDependencies) {
           if (session.datasourceId !== datasourceId) continue;
           clients.delete(id);
           pendingDdl.delete(id);
-          for (const result of session.results) requested.delete(result.id);
+          for (const result of session.results) invalidateWindows(result.id);
           if (session.transactionOpen) {
             log(id, { sql: "", message: "The session closed; its open transaction was rolled back.", tone: "warning" });
           }
@@ -406,6 +545,7 @@ export function createConsolesStore(dependencies: ConsolesDependencies) {
             status: error === null ? "disconnected" : "failed",
             error: error ?? session.error,
             transactionOpen: false,
+            results: session.results.map((result) => ({ ...result, stale: true, cursorOpen: false, fetching: null })),
           });
         }
       },
@@ -474,28 +614,198 @@ export function createConsolesStore(dependencies: ConsolesDependencies) {
       },
 
       ensureWindow(id, resultId, offset) {
-        const result = get().consoles[id]?.results.find((candidate) => candidate.id === resultId);
+        const result = resultOf(id, resultId);
         const client = clients.get(id);
-        if (result === undefined || client === undefined || offset in result.windows) return;
+        if (result === undefined || client === undefined || result.stale || offset in result.windows) return;
+        if (offset >= result.rowCount) return;
         const inFlight = requested.get(resultId) ?? new Set<number>();
         requested.set(resultId, inFlight);
         if (inFlight.has(offset)) return;
         inFlight.add(offset);
+        const generation = generations.get(resultId) ?? 0;
         client
           .call("result.window", { handle: result.handle, offset, limit: RESULT_WINDOW_ROWS })
           .then((window) => {
-            const latest = get().consoles[id];
-            if (latest === undefined) return;
-            patch(id, {
-              results: latest.results.map((candidate) =>
-                candidate.id === resultId
-                  ? { ...candidate, windows: { ...candidate.windows, [window.offset]: window.rows } }
-                  : candidate,
-              ),
-            });
+            if ((generations.get(resultId) ?? 0) !== generation) return;
+            updateResult(id, resultId, (latest) => ({
+              ...latest,
+              windows: withWindow(latest.windows, window.offset, window.rows),
+              autoChars: widerChars(latest.autoChars, window.rows),
+            }));
           })
-          .catch((cause: unknown) => patch(id, { error: toError(cause) }))
+          .catch((cause: unknown) => {
+            if ((generations.get(resultId) ?? 0) === generation) patch(id, { error: toError(cause) });
+          })
           .finally(() => inFlight.delete(offset));
+      },
+
+      async fetchMore(id, resultId, all) {
+        const result = resultOf(id, resultId);
+        const client = clients.get(id);
+        if (result === undefined || client === undefined || !canFetch(result)) return;
+        updateResult(id, resultId, (latest) => ({ ...latest, fetching: all ? "all" : "page" }));
+        try {
+          const state = await client.call("result.fetchMore", { handle: result.handle, all });
+          updateResult(id, resultId, (latest) => withState(latest, state));
+        } catch (cause) {
+          logError(id, firstLine(result.sql), toError(cause));
+          updateResult(id, resultId, (latest) => ({ ...latest, cursorOpen: false }));
+        } finally {
+          updateResult(id, resultId, (latest) => ({ ...latest, fetching: null }));
+        }
+      },
+
+      async stopFetch(id, resultId) {
+        const result = resultOf(id, resultId);
+        const client = clients.get(id);
+        if (result === undefined || client === undefined || (result.fetching !== "page" && result.fetching !== "all")) {
+          return;
+        }
+        try {
+          await client.call("result.stopFetch", { handle: result.handle });
+        } catch (cause) {
+          logError(id, firstLine(result.sql), toError(cause));
+        }
+      },
+
+      async sort(id, resultId, keys) {
+        const result = resultOf(id, resultId);
+        const client = clients.get(id);
+        if (result === undefined) return;
+        if (client === undefined || result.stale) {
+          // Sorting is the engine's (decision 009); a closed connection's rows keep their order.
+          return;
+        }
+        try {
+          const state = await client.call("result.sort", { handle: result.handle, keys: [...keys] });
+          invalidateWindows(resultId);
+          updateResult(id, resultId, (latest) => ({ ...latest, ...state, sort: keys, windows: {}, selection: null }));
+        } catch (cause) {
+          logError(id, firstLine(result.sql), toError(cause));
+        }
+      },
+
+      setLayout(id, resultId, layout) {
+        updateResult(id, resultId, (latest) => {
+          const visible = layout.hidden.filter((hidden) => !hidden).length;
+          const hiddenChanged = layout.hidden.some((hidden, index) => hidden !== latest.layout.hidden[index]);
+          const selection = hiddenChanged
+            ? null
+            : clampSelection(latest.selection, { rows: latest.rowCount, columns: visible });
+          return { ...latest, layout, selection };
+        });
+      },
+
+      select(id, resultId, selection) {
+        updateResult(id, resultId, (latest) => (latest.selection === selection ? latest : { ...latest, selection }));
+      },
+
+      async rerun(id, resultId) {
+        const before = get().consoles[id];
+        if (before === undefined || resultOf(id, resultId) === undefined || !canRun(before.status)) return;
+        if (before.status !== "ready" && !(await openSession(id))) return;
+        const current = get().consoles[id];
+        const client = clients.get(id);
+        const tab = resultOf(id, resultId);
+        if (current?.sessionId == null || current.status !== "ready" || client === undefined || tab === undefined)
+          return;
+        const { sessionId } = current;
+        const sql = firstLine(tab.sql);
+        const startedAt = dependencies.now();
+        patch(id, { status: "running", error: null });
+        let outcome: RunOutcome;
+        try {
+          const [statement] = await client.call("script.split", { text: tab.sql });
+          if (statement !== undefined && statement.destructive !== null && !(await confirmDestructive([statement]))) {
+            log(id, { sql: "", message: "Cancelled; nothing ran.", tone: "warning" });
+            outcome = "cancelled";
+          } else {
+            cursorsClosed(id);
+            const { transactionOpen, ...executed } = await client.call("statement.execute", {
+              sessionId,
+              sql: tab.sql,
+            });
+            const kind = statement?.kind ?? "read";
+            log(id, { sql, message: executedText(executed, dependencies.now() - startedAt, kind), tone: "success" });
+            const latest = resultOf(id, resultId);
+            if (latest === undefined) {
+              void client.call("result.release", { handle: executed.handle }).catch(() => undefined);
+            } else {
+              if (!latest.stale) void client.call("result.release", { handle: latest.handle }).catch(() => undefined);
+              invalidateWindows(resultId);
+              const fresh = resultTabOf(executed, { id: latest.id, title: latest.title }, latest.sql);
+              const names = (columns: readonly Column[]) => columns.map((column) => column.name);
+              const layout = carriedLayout(latest.layout, names(latest.columns), names(fresh.columns));
+              const kept = layout === latest.layout;
+              const sort = kept ? latest.sort : [];
+              const state =
+                sort.length > 0 ? await client.call("result.sort", { handle: fresh.handle, keys: [...sort] }) : fresh;
+              updateResult(id, resultId, () => ({
+                ...fresh,
+                ...state,
+                pinned: latest.pinned,
+                layout,
+                autoChars: kept ? latest.autoChars : fresh.autoChars,
+                sort,
+                windows: sort.length > 0 ? {} : fresh.windows,
+              }));
+            }
+            patch(id, { transactionOpen });
+            outcome = "succeeded";
+          }
+        } catch (cause) {
+          const error = toError(cause);
+          if (error.code === "cancelled") log(id, { sql, message: "Cancelled", tone: "warning" });
+          else logError(id, sql, error);
+          patch(id, { error, activeResult: OUTPUT_TAB });
+          outcome = error.code === "cancelled" ? "cancelled" : "failed";
+        }
+        const latest = get().consoles[id];
+        patch(id, {
+          status: latest?.status === "disconnected" || latest?.status === "failed" ? latest.status : "ready",
+          lastRun: { durationMs: dependencies.now() - startedAt, outcome },
+        });
+      },
+
+      async extract(id, resultId, extractor, rows, columns) {
+        const result = resultOf(id, resultId);
+        const client = clients.get(id);
+        if (result === undefined || client === undefined || result.stale) return null;
+        try {
+          return await client.call("result.extract", {
+            handle: result.handle,
+            extractor,
+            rows: [...rows],
+            columns: [...columns],
+          });
+        } catch (cause) {
+          logError(id, firstLine(result.sql), toError(cause));
+          return null;
+        }
+      },
+
+      async exportTo(id, resultId, extractor, path, columns) {
+        const result = resultOf(id, resultId);
+        const client = clients.get(id);
+        if (result === undefined || client === undefined || result.stale || result.fetching !== null) return false;
+        updateResult(id, resultId, (latest) => ({ ...latest, fetching: "export" }));
+        try {
+          const exported = await client.call("result.export", {
+            handle: result.handle,
+            extractor,
+            path,
+            columns: [...columns],
+          });
+          log(id, { sql: firstLine(result.sql), message: exportedText(exported), tone: "success" });
+          // The export drained the cursor into the file.
+          updateResult(id, resultId, (latest) => ({ ...latest, cursorOpen: false }));
+          return true;
+        } catch (cause) {
+          logError(id, firstLine(result.sql), toError(cause));
+          return false;
+        } finally {
+          updateResult(id, resultId, (latest) => ({ ...latest, fetching: null }));
+        }
       },
 
       showResult(id, resultId) {

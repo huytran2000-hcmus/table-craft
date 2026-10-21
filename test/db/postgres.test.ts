@@ -2,7 +2,7 @@ import postgres from "@table-craft/plugin-postgres";
 import { runPluginContract } from "@table-craft/plugin-api/testing";
 import { POSTGRES_CONFIG, withWrongPassword } from "../support/databases.js";
 import { POSTGRES_MANIFEST } from "../support/manifests.js";
-import { TYPE_PROBE_EXPECTED, TYPE_PROBE_WRITE } from "../support/typeProbe.js";
+import { TYPE_PROBE_COPY_AS, TYPE_PROBE_EXPECTED, TYPE_PROBE_WRITE } from "../support/typeProbe.js";
 
 runPluginContract(postgres, {
   manifest: POSTGRES_MANIFEST,
@@ -12,7 +12,7 @@ runPluginContract(postgres, {
     write: TYPE_PROBE_WRITE,
     sleep: (seconds) => `SELECT pg_sleep(${String(seconds)})`,
   },
-  typeProbe: { expected: TYPE_PROBE_EXPECTED },
+  typeProbe: { expected: TYPE_PROBE_EXPECTED, copyTable: TYPE_PROBE_COPY_AS },
   scripts: [
     {
       text: "CREATE FUNCTION f() RETURNS int AS $$ BEGIN RETURN 1; END; $$ LANGUAGE plpgsql;\nSELECT f();",

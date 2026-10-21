@@ -2,7 +2,7 @@ import type { Chord } from "@table-craft/desktop/renderer/actions/chords.js";
 import type { ActionContext, FocusRegion } from "@table-craft/desktop/renderer/actions/context.js";
 
 /** Every command the app has is one of these (decision 015): menus, palette, keymap and buttons only `invoke`. */
-export type ActionCategory = "Console" | "Database" | "Editor Tabs" | "Tool Windows" | "Navigation";
+export type ActionCategory = "Console" | "Result Grid" | "Database" | "Editor Tabs" | "Tool Windows" | "Navigation";
 
 /** Names, not components, so the registry stays free of React; `ui/icons.ts` maps them. */
 export type ActionIcon =
@@ -26,7 +26,15 @@ export type ActionIcon =
   | "folder"
   | "synchronize"
   | "collapseAll"
-  | "copy";
+  | "copy"
+  | "fetchNextPage"
+  | "fetchAll"
+  | "rerun"
+  | "export"
+  | "valuePanel"
+  | "sortAscending"
+  | "sortDescending"
+  | "hide";
 
 export interface Action<A = void> {
   readonly id: string;

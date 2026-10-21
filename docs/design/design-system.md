@@ -100,6 +100,34 @@ first line in `text-ink-muted`, then the message: `text-ink` for results and not
 for warnings, `text-danger` for errors, with the hint muted after it. The
 completion popup draws no type icons.
 
+## Result grid
+
+Plan 007. The grid is `font-grid` at `text-grid`, rows `h-row`, and reuses the shell's panel, line
+and accent colours; it adds three tokens and leans on two older ones.
+
+| Token (`appearance/tokens.ts`) | CSS variable                 | Tailwind               | Dark / comfortable | Used by                                        |
+| ------------------------------ | ---------------------------- | ---------------------- | ------------------ | ---------------------------------------------- |
+| `colors.gridSelection`         | `--tc-grid-selection`        | `bg-grid-selection`    | `#214283`          | Selected cells; stronger than `bg-selection`   |
+| `colors.gridNull`              | `--tc-grid-null`             | `text-grid-null`       | `#7c7f87`          | `<null>`, italic, in cells and the value panel |
+| `density.valuePanelWidthPx`    | `--tc-value-panel-width`     | `w-value-panel`        | 360 px             | The value panel beside the rows                |
+| `colors.gridStripe`            | `--tc-grid-stripe`           | `bg-grid-stripe`       | `#26282b`          | Every second row                               |
+| `density.gridColumnMaxWidthPx` | `--tc-grid-column-max-width` | `--spacing-column-max` | 320 px             | The cap on a column's automatic width          |
+
+The header and the row-number gutter are `bg-panel` with `border-line` dividers and stay put while
+the rows scroll; gutter numbers are `text-ink-muted`, `text-ink` on a selected row. A header holds a
+type glyph in `text-ink-muted` (`TYPE_GLYPHS` in `ui/icons.ts`: `Hash` number, `TextAa` text,
+`Calendar` date, `ToggleLeft` bool, `BracketsCurly` json, `Binary` bytes), the name, and, when
+sorted, an `ArrowUp` / `ArrowDown` in `text-accent` followed by the key's position when there are
+several. The focused cell has a 1 px `outline-accent` inset. The resize handle is the header's
+right 8 px with `cursor-col-resize`.
+
+The toolbar is `h-row` on `bg-panel`: icon-only buttons (`ArrowDown` Fetch Next Page,
+`ArrowLineDown` Fetch All, `ArrowClockwise` Rerun, `Stop` Cancel Fetch), the state label in
+`text-ink-muted`, a spinner while fetching, then on the right the extractor `<select>`,
+`CopySimple` Copy, `Export` Export Data… and `SidebarSimple` Value Panel, `bg-selection` while
+open. A disabled button explains itself in its tooltip. The closed-connection banner is an `h-row`
+strip in `bg-panel`, `text-ink-muted` italics, above the rows.
+
 ## Datasource colours
 
 Plan 004. A datasource stores its colour by name (decision 011); the theme gives the value. The

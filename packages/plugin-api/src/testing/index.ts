@@ -35,6 +35,11 @@ export interface ContractFixture {
   readonly typeProbe: {
     /** The rows of `SELECT * FROM type_probe ORDER BY id`, as wire values. */
     readonly expected: readonly Row[];
+    /**
+     * Creates `TYPE_PROBE_COPY_TABLE` with `type_probe`'s columns and declared types; the literal
+     * round trip creates and drops it. `CREATE TABLE … AS` will not do where it drops declared types.
+     */
+    readonly copyTable: string;
   };
   /** Scripts only this dialect splits, and the statements `language.split` must find in each. */
   readonly scripts?: readonly SplitCase[];
@@ -84,6 +89,9 @@ const DELETE_TRANSACTION_ROW = `DELETE FROM orders WHERE id = ${TRANSACTION_ROW_
 
 /** The table every fixture database carries, one column per value rule the contract pins. */
 export const TYPE_PROBE_TABLE = "type_probe";
+/** Where the literal round trip inserts `type_probe`'s rows; created and dropped by the suite. */
+export const TYPE_PROBE_COPY_TABLE = "type_probe_copy";
+const AWKWARD_IDENTIFIER = 'we"ird`name';
 
 export const TYPE_PROBE_COLUMNS = [
   "id",
@@ -387,6 +395,40 @@ export function runPluginContract(plugin: DatasourcePlugin, fixture: ContractFix
           expect(language().classify(sql).destructive !== null).toBe(destructive);
         },
       );
+
+      it("givenAwkwardIdentifier_whenQuotedAndSelected_thenNameReadsBack", async () => {
+        await withSession(plugin, fixture, async (session) => {
+          const result = await session.execute(`SELECT 1 AS ${language().quoteIdentifier(AWKWARD_IDENTIFIER)}`);
+          await collect(result.rows);
+          expect(result.columns.map((column) => column.name)).toEqual([AWKWARD_IDENTIFIER]);
+        });
+      });
+
+      it("givenTypeProbeRow_whenSqlInsertPerDialect_thenRoundTripsEqual", async () => {
+        const dialect = language();
+        const run = async (session: Session, sql: string): Promise<Row[]> => collect((await session.execute(sql)).rows);
+        await withSession(plugin, fixture, async (session) => {
+          const source = await session.execute(`SELECT * FROM ${TYPE_PROBE_TABLE} ORDER BY id`);
+          const rows = await collect(source.rows);
+          const names = source.columns.map((column) => dialect.quoteIdentifier(column.name)).join(", ");
+          await run(session, `DROP TABLE IF EXISTS ${TYPE_PROBE_COPY_TABLE}`);
+          await run(session, fixture.typeProbe.copyTable);
+          try {
+            for (const row of rows) {
+              const values = row.map((value, index) => dialect.literal(value, source.columns[index]?.type ?? null));
+              await run(
+                session,
+                `INSERT INTO ${dialect.quoteIdentifier(TYPE_PROBE_COPY_TABLE)} (${names}) VALUES (${values.join(", ")})`,
+              );
+            }
+            expect(await run(session, `SELECT * FROM ${TYPE_PROBE_COPY_TABLE} ORDER BY id`)).toEqual(
+              fixture.typeProbe.expected,
+            );
+          } finally {
+            await run(session, `DROP TABLE IF EXISTS ${TYPE_PROBE_COPY_TABLE}`);
+          }
+        });
+      });
 
       it("givenDropTable_whenClassified_thenDdl", () => {
         expect(language().classify("DROP TABLE orders").kind).toBe("ddl");
