@@ -5,6 +5,7 @@ import type {
   EngineError,
   EngineMethod,
   EngineResponse,
+  ProbeResult,
   RequestOf,
   ResultOf,
 } from "@table-craft/desktop/engine/protocol.js";
@@ -54,7 +55,11 @@ function connectionFailed(cause: unknown): unknown {
   });
 }
 
-function statementFailed(cause: unknown): EngineFailure {
+const STATEMENT_HINT = "Fix the statement and run it again.";
+const READ_ONLY_STATEMENT_HINT =
+  "This data source is read-only, so writes are refused; clear Read-only in its properties to write.";
+
+function statementFailed(cause: unknown, readOnly: boolean): EngineFailure {
   if (isPluginError(cause) && cause.code === "cancelled") {
     return new EngineFailure({
       code: "cancelled",
@@ -65,7 +70,7 @@ function statementFailed(cause: unknown): EngineFailure {
   return new EngineFailure({
     code: "statementFailed",
     message: messageOf(cause),
-    hint: "Fix the statement and run it again.",
+    hint: readOnly ? READ_ONLY_STATEMENT_HINT : STATEMENT_HINT,
   });
 }
 
@@ -90,6 +95,30 @@ function loadedPlugin(
   }
   // openSession has just connected through this plugin, so it is loaded.
   throw new Error(`Plugin "${pluginId}" opened a session but is not loaded.`);
+}
+
+function connectDatasource(options: EngineOptions): Promise<Session> {
+  const { pluginId, config, readOnly } = options.datasource;
+  return openSession(options.plugins, pluginId, config, { readOnly }).catch((cause: unknown) => {
+    throw connectionFailed(cause);
+  });
+}
+
+/**
+ * Test Connection (plan 004): connect once, read what the server reports, close. Never rejects;
+ * a failure comes back as the error the console would have shown.
+ */
+export async function probeDatasource(options: EngineOptions, now: () => number = Date.now): Promise<ProbeResult> {
+  const started = now();
+  try {
+    const session = await connectDatasource(options);
+    const elapsedMs = now() - started;
+    await session.close().catch(() => undefined);
+    const plugin = loadedPlugin(options.plugins, options.datasource.pluginId);
+    return { ok: true, pluginName: plugin.name, serverVersion: session.serverVersion, elapsedMs };
+  } catch (cause) {
+    return { ok: false, error: toEngineError(cause) };
+  }
 }
 
 export function createEngine(options: EngineOptions): Engine {
@@ -134,14 +163,16 @@ export function createEngine(options: EngineOptions): Engine {
 
     const routes: { [M in EngineMethod]: (request: RequestOf<M>) => Promise<ResultOf<M>> } = {
       "session.open": async () => {
-        const { pluginId, config } = options.datasource;
-        const session = await openSession(options.plugins, pluginId, config).catch((cause: unknown) => {
-          throw connectionFailed(cause);
-        });
-        const plugin = loadedPlugin(options.plugins, pluginId);
+        const session = await connectDatasource(options);
+        const plugin = loadedPlugin(options.plugins, options.datasource.pluginId);
         const sessionId = `${SESSION_PREFIX}${nextSession++}`;
         sessions.set(sessionId, { session, capabilities: plugin.capabilities, running: 0 });
-        return { sessionId, pluginName: plugin.name, capabilities: plugin.capabilities };
+        return {
+          sessionId,
+          pluginName: plugin.name,
+          capabilities: plugin.capabilities,
+          serverVersion: session.serverVersion,
+        };
       },
       "session.close": async ({ sessionId }) => {
         const open = sessionFor(sessionId);
@@ -158,7 +189,7 @@ export function createEngine(options: EngineOptions): Engine {
             .execute(sql)
             .then((result) => results.put(result))
             .catch((cause: unknown) => {
-              throw statementFailed(cause);
+              throw statementFailed(cause, options.datasource.readOnly);
             });
           if (sessions.get(sessionId) !== open) {
             // The session closed while the statement ran; nobody is left to release this result.

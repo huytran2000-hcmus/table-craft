@@ -41,7 +41,17 @@ export const APPLICATION_MENU: readonly MenuEntry[] = [
     kind: "submenu",
     label: "File",
     items: [
+      // No accelerator: ⌘N belongs to the Database tool window alone (plan 004).
+      { kind: "action", label: "New Data Source…", actionId: "datasource.new" },
       { kind: "action", label: "New Console", actionId: "console.new", accelerator: "CmdOrCtrl+Shift+L" },
+      SEPARATOR,
+      {
+        kind: "action",
+        label: "Data Source Properties…",
+        actionId: "datasource.properties",
+        accelerator: "CmdOrCtrl+;",
+      },
+      { kind: "action", label: "Disconnect", actionId: "datasource.disconnect", accelerator: "CmdOrCtrl+F2" },
       SEPARATOR,
       { kind: "action", label: "Close Tab", actionId: "tab.close", accelerator: "CmdOrCtrl+W" },
     ],

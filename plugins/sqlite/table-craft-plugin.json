@@ -2,8 +2,19 @@
   "id": "sqlite",
   "name": "SQLite",
   "version": "0.0.0",
-  "apiVersion": "0.2.0",
+  "apiVersion": "0.3.0",
   "entry": "index.js",
   "capabilities": ["sql"],
-  "highlight": "sqlite"
+  "highlight": "sqlite",
+  "connection": {
+    "fields": [
+      {
+        "key": "path",
+        "label": "File",
+        "kind": "file",
+        "required": true,
+        "placeholder": "/path/to/database.sqlite, or :memory:"
+      }
+    ]
+  }
 }

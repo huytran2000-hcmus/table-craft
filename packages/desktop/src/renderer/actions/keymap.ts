@@ -8,6 +8,7 @@ import {
   type Platform,
   type TimedKey,
 } from "@table-craft/desktop/renderer/actions/chords.js";
+import type { FocusRegion } from "@table-craft/desktop/renderer/actions/context.js";
 import type { ActionRegistry, AnyAction } from "@table-craft/desktop/renderer/actions/registry.js";
 
 /** The parts of a `KeyboardEvent` the keymap reads and acts on. */
@@ -20,8 +21,10 @@ export interface KeyEventLike extends TimedKey {
 export interface KeymapOptions {
   readonly registry: ActionRegistry;
   readonly platform: Platform;
-  /** While the palette is open its input owns the keyboard. */
+  /** While the palette or a dialog is open, it owns the keyboard. */
   readonly paletteOpen: () => boolean;
+  /** Where focus is, for shortcuts scoped to a region; absent, every scoped shortcut works. */
+  readonly focusedRegion?: () => FocusRegion;
   readonly doubleTapWindowMs?: number;
 }
 
@@ -43,8 +46,15 @@ export function createKeyDispatcher(options: KeymapOptions): (event: KeyEventLik
     return chord;
   }
 
+  function inRegion(action: AnyAction): boolean {
+    return action.shortcutRegion === undefined || options.focusedRegion === undefined
+      ? true
+      : options.focusedRegion() === action.shortcutRegion;
+  }
+
   function dispatch(event: KeyEventLike, candidates: readonly AnyAction[]): void {
     for (const action of candidates) {
+      if (!inRegion(action)) continue;
       if (registry.invoke(action.id) !== "ran") continue;
       event.preventDefault();
       event.stopPropagation();

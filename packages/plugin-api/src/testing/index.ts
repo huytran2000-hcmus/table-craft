@@ -2,13 +2,18 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   CAPABILITIES,
   isPluginError,
+  z,
+  type ConnectOptions,
   type DatasourcePlugin,
   type PluginErrorCode,
+  type PluginManifest,
   type Row,
   type Session,
 } from "@table-craft/plugin-api";
 
 export interface ContractFixture {
+  /** The plugin's parsed `table-craft-plugin.json`, whose connection form the suite checks. */
+  readonly manifest: PluginManifest;
   /** Configuration that connects to a reachable, writable database seeded with `TYPE_PROBE_TABLE`. */
   readonly config: unknown;
   /** The same database with a wrong password; omitted by plugins that do not authenticate. */
@@ -16,6 +21,11 @@ export interface ContractFixture {
   readonly statements?: {
     /** A statement that runs for `seconds`; required when the plugin declares `cancel`. */
     readonly sleep?: (seconds: number) => string;
+    /**
+     * A write that succeeds on a writable session and leaves the fixture unchanged, such as an
+     * update setting a column to itself; the read-only case is skipped without one.
+     */
+    readonly write?: string;
   };
   readonly typeProbe: {
     /** The rows of `SELECT * FROM type_probe ORDER BY id`, as wire values. */
@@ -65,16 +75,20 @@ async function collect(rows: AsyncIterable<Row>): Promise<Row[]> {
   return collected;
 }
 
-async function connect(plugin: DatasourcePlugin, config: unknown): Promise<Session> {
-  return plugin.connect(plugin.connectionSchema.parse(config));
+const WRITABLE: ConnectOptions = { readOnly: false };
+const READ_ONLY: ConnectOptions = { readOnly: true };
+
+async function connect(plugin: DatasourcePlugin, config: unknown, options = WRITABLE): Promise<Session> {
+  return plugin.connect(plugin.connectionSchema.parse(config), options);
 }
 
 async function withSession(
   plugin: DatasourcePlugin,
   fixture: ContractFixture,
   use: (session: Session) => Promise<void>,
+  options = WRITABLE,
 ): Promise<void> {
-  const session = await connect(plugin, fixture.config);
+  const session = await connect(plugin, fixture.config, options);
   try {
     await use(session);
   } finally {
@@ -95,6 +109,37 @@ function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+interface ObjectJsonSchema {
+  readonly properties?: Record<string, unknown>;
+  readonly required?: readonly string[];
+}
+
+/**
+ * Where a manifest's connection form and the plugin's `connectionSchema` disagree (decision 019),
+ * one sentence per problem; empty when they agree.
+ */
+export function connectionFormProblems(manifest: PluginManifest, connectionSchema: z.ZodType): string[] {
+  const json = z.toJSONSchema(connectionSchema, { io: "input", unrepresentable: "any" }) as ObjectJsonSchema;
+  const accepted = new Set(Object.keys(json.properties ?? {}));
+  const fields = manifest.connection.fields;
+  const keys = new Set(fields.map((field) => field.key));
+  const problems: string[] = [];
+  if (keys.size !== fields.length) problems.push("Two connection fields share a key.");
+  for (const field of fields) {
+    if (!accepted.has(field.key)) problems.push(`Field "${field.key}" is not accepted by connectionSchema.`);
+    if (field.kind === "password" && field.secret !== true) {
+      problems.push(`Password field "${field.key}" must be marked secret.`);
+    }
+    if (field.kind === "select" && field.options === undefined) {
+      problems.push(`Select field "${field.key}" needs options.`);
+    }
+  }
+  for (const key of json.required ?? []) {
+    if (!keys.has(key)) problems.push(`connectionSchema requires "${key}", but no connection field fills it.`);
+  }
+  return problems;
+}
+
 /**
  * The behaviour every plugin owes the host, gated on the capabilities it declares (decision 013).
  * Call it from a Vitest file; it registers one `describe` block.
@@ -107,6 +152,18 @@ export function runPluginContract(plugin: DatasourcePlugin, fixture: ContractFix
 
     it("givenFixtureConfig_whenParsedByConnectionSchema_thenSucceeds", () => {
       expect(plugin.connectionSchema.safeParse(fixture.config).success).toBe(true);
+    });
+
+    it("givenManifestFields_whenComparedWithConnectionSchema_thenAgree", () => {
+      expect(fixture.manifest.id).toBe(plugin.id);
+      expect(connectionFormProblems(fixture.manifest, plugin.connectionSchema)).toEqual([]);
+    });
+
+    it("givenSession_whenConnected_thenServerVersionNonEmpty", async () => {
+      await withSession(plugin, fixture, (session) => {
+        expect(session.serverVersion).toMatch(/\S/);
+        return Promise.resolve();
+      });
     });
 
     it.runIf(fixture.wrongPasswordConfig !== undefined)(
@@ -146,6 +203,25 @@ export function runPluginContract(plugin: DatasourcePlugin, fixture: ContractFix
           expect(await rejectionCode(session.execute("SELEC 1"))).toBe("statementFailed");
         });
       });
+
+      it.runIf(fixture.statements?.write !== undefined)(
+        "givenReadOnlySession_whenInsert_thenStatementFailed",
+        async () => {
+          const write = fixture.statements?.write ?? "";
+          await withSession(plugin, fixture, async (session) => {
+            await session.execute(write);
+          });
+          await withSession(
+            plugin,
+            fixture,
+            async (session) => {
+              expect(await rejectionCode(session.execute(write))).toBe("statementFailed");
+              expect(await collect((await session.execute("SELECT 1 AS one")).rows)).toEqual([[1]]);
+            },
+            READ_ONLY,
+          );
+        },
+      );
 
       it("givenFailedStatement_whenNextStatementRun_thenSessionStillWorks", async () => {
         await withSession(plugin, fixture, async (session) => {

@@ -17,18 +17,22 @@ Run from the repository root.
   in `docker compose`, seeded from `test/db/schema/`
 - `bun run test:smoke` - build the app and drive it under Playwright; needs a display
 - `bun run test:smoke:db` - the same against PostgreSQL, MySQL and SQLite; set
-  `TABLE_CRAFT_EVIDENCE_DIR=docs/evidence/NNN` to save a window PNG per scenario for a plan's
-  live test. `test/e2e/harness.ts` holds the launch, run and capture helpers
+  `TABLE_CRAFT_EVIDENCE_DIR=docs/evidence/NNN` to save a window PNG per scenario for plan NNN's
+  live test (each suite captures only for its own plan, via `evidenceFor("NNN")`).
+  `test/e2e/harness.ts` holds the launch, run, dialog and capture helpers
 - `bun run typecheck` - `tsc --noEmit`, every program: the root one, the renderer
   (`packages/desktop/src/renderer/tsconfig.json`) and the renderer tests (`test/renderer/tsconfig.json`)
 - `bun run lint` / `bun run lint:fix` - ESLint, including the architecture fences
 - `bun run format:check` / `bun run format` - Prettier
-- `bun run desktop` - build and launch the app. It connects to in-memory SQLite unless
-  `TABLE_CRAFT_DATASOURCE` holds a datasource as JSON, e.g.
+- `bun run desktop` - build and launch the app. It shows the datasources saved in the profile's
+  `datasources.json`, empty at first; add them in the Data Sources dialog (⌘N in the Database
+  pane). `TABLE_CRAFT_DATASOURCE` adds one ephemeral datasource on top, never saved, and opens a
+  console on it, e.g.
   `{"id":"pg","pluginId":"postgres","config":{"host":"127.0.0.1","port":55432,"database":"table_craft","user":"table_craft","password":"table_craft"}}`
-  for the `test:db` Postgres. A development seam until connections land (decision 018).
-  `TABLE_CRAFT_USER_DATA` points the profile (layout, user plugins) at another directory; the smoke
-  harness gives every launch a fresh one
+  for the `test:db` Postgres (decision 018 and its amendment). `TABLE_CRAFT_USER_DATA` points the
+  profile (layout, datasources, secrets, user plugins) at another directory; the smoke harness gives
+  every launch a fresh one, seeds `datasources.json` with `seedDatasources`, and on macOS passes
+  `--use-mock-keychain` so `safeStorage` never touches the real keychain
 - `bun run desktop:package` - electron-builder; macOS is first-class, Windows and Linux best-effort
 
 Bun is the toolchain only. Electron runs Node, so nothing under `packages/*/src` or
@@ -51,7 +55,8 @@ packages/plugin-api/       @table-craft/plugin-api: the plugin contract and noth
 packages/core/             @table-craft/core: plugin loader, session manager, result-set
                            store, edit batches, history. Knows nothing about Electron
 packages/desktop/          @table-craft/desktop, the Electron app
-  src/main/                lifecycle, the window, menus, one engine host per datasource
+  src/main/                lifecycle, the window, menus, one engine host per datasource,
+                           the datasource list and secrets, the invoke channels (`ipc.ts`)
   src/preload/             contextBridge; hands the engine port to the renderer and relays
                            menu clicks. `menu.ts` declares the native menu as data
   src/engine/              the utilityProcess; `protocol.ts` is the only module the
@@ -88,7 +93,8 @@ docs/evidence/NNN/         screenshots from each plan's live test (decision 016)
 - Every command is an action in `renderer/actions/` and runs through `invoke` (decision 015).
   Buttons, menus, shortcuts and the palette never call store methods directly; a new chord must not
   clash with an existing one (`test/renderer/keymap.test.ts` checks).
-- Secrets go through `safeStorage` and are never written to `datasources.json` or logs.
+- Secrets go through `safeStorage` and are never written to `datasources.json` or logs, and never
+  reach a renderer (decision 020): the renderer sees which keys are stored, not their values.
 - TypeScript strict, ESM, `verbatimModuleSyntax`. No magic literals: hoist them to a named
   module constant. Errors are typed and say what to do next.
 - Colours, spacing and fonts come from design tokens (`docs/design/design-system.md`), never

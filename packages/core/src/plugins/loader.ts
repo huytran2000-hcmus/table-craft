@@ -27,6 +27,15 @@ export interface UnavailablePlugin {
 
 export type PluginLoadResult = LoadedPlugin | UnavailablePlugin;
 
+/** A plugin whose manifest is valid and compatible; its code has not been run. */
+export interface AvailablePlugin {
+  readonly status: "available";
+  readonly directory: string;
+  readonly manifest: PluginManifest;
+}
+
+export type PluginDiscovery = AvailablePlugin | UnavailablePlugin;
+
 const MISSING_FILE = "ENOENT";
 
 function describe(error: unknown): string {
@@ -50,6 +59,10 @@ async function pluginDirectories(root: string): Promise<string[]> {
   }
 }
 
+function incompatibleReason(apiVersion: string): string {
+  return `Built for plugin API ${apiVersion}, but this table-craft provides ${API_VERSION}. Install a compatible version of the plugin.`;
+}
+
 type ManifestRead = { ok: true; manifest: PluginManifest } | { ok: false; reason: string };
 
 async function readManifest(directory: string): Promise<ManifestRead> {
@@ -67,6 +80,11 @@ async function readManifest(directory: string): Promise<ManifestRead> {
     return { ok: false, reason: `${MANIFEST_FILE} is not valid JSON: ${describe(error)}` };
   }
   const parsed = pluginManifestSchema.safeParse(json);
+  const apiVersion = (json as { apiVersion?: unknown } | null)?.apiVersion;
+  if (!parsed.success && typeof apiVersion === "string" && !isCompatible(apiVersion)) {
+    // An older plugin fails the schema for fields its contract never had; the version says why.
+    return { ok: false, reason: incompatibleReason(apiVersion) };
+  }
   if (!parsed.success) {
     const issues = parsed.error.issues.map((issue) => `${issue.path.join(".") || "(root)"}: ${issue.message}`);
     return { ok: false, reason: `${MANIFEST_FILE} is invalid: ${issues.join("; ")}` };
@@ -118,12 +136,12 @@ async function importPlugin(directory: string, manifest: PluginManifest): Promis
 }
 
 /**
- * Loads every plugin directory under `roots`, in order (decision 005). Earlier roots win an id
- * clash, so pass the built-in root first. A broken plugin becomes an `UnavailablePlugin` with a
- * reason; it never stops the others.
+ * Reads every plugin directory under `roots`, in order, without running any plugin code
+ * (decision 005), so main can list plugins and their connection forms (decision 019). Earlier
+ * roots win an id clash, so pass the built-in root first.
  */
-export async function loadPlugins(roots: readonly string[]): Promise<PluginLoadResult[]> {
-  const results: PluginLoadResult[] = [];
+export async function discoverPlugins(roots: readonly string[]): Promise<PluginDiscovery[]> {
+  const results: PluginDiscovery[] = [];
   const claimed = new Map<string, string>();
   for (const root of roots) {
     for (const directory of await pluginDirectories(root)) {
@@ -141,12 +159,23 @@ export async function loadPlugins(roots: readonly string[]): Promise<PluginLoadR
       }
       claimed.set(manifest.id, directory);
       if (!isCompatible(manifest.apiVersion)) {
-        const reason = `Built for plugin API ${manifest.apiVersion}, but this table-craft provides ${API_VERSION}. Install a compatible version of the plugin.`;
-        results.push({ status: "unavailable", directory, manifest, reason });
+        results.push({ status: "unavailable", directory, manifest, reason: incompatibleReason(manifest.apiVersion) });
         continue;
       }
-      results.push(await importPlugin(directory, manifest));
+      results.push({ status: "available", directory, manifest });
     }
+  }
+  return results;
+}
+
+/**
+ * Loads every plugin `discoverPlugins` finds available. A broken plugin becomes an
+ * `UnavailablePlugin` with a reason; it never stops the others.
+ */
+export async function loadPlugins(roots: readonly string[]): Promise<PluginLoadResult[]> {
+  const results: PluginLoadResult[] = [];
+  for (const found of await discoverPlugins(roots)) {
+    results.push(found.status === "available" ? await importPlugin(found.directory, found.manifest) : found);
   }
   return results;
 }

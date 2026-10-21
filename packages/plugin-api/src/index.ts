@@ -1,9 +1,20 @@
 export { isPluginError, PLUGIN_ERROR_CODES, PluginError, type PluginErrorCode } from "./errors.js";
-export { MANIFEST_FILE, pluginManifestSchema, type PluginManifest } from "./manifest.js";
+export {
+  CONNECTION_FIELD_GROUPS,
+  CONNECTION_FIELD_KINDS,
+  connectionFieldSchema,
+  MANIFEST_FILE,
+  pluginManifestSchema,
+  type ConnectionField,
+  type ConnectionFieldGroup,
+  type ConnectionFieldKind,
+  type PluginManifest,
+} from "./manifest.js";
 export {
   CAPABILITIES,
   type Capability,
   type Column,
+  type ConnectOptions,
   type DatasourcePlugin,
   type ExecuteResult,
   type Row,

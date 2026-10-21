@@ -38,6 +38,16 @@ export interface Session {
    */
   cancel?(): Promise<void>;
   close(): Promise<void>;
+  /** What the server reports about itself, such as `17.4`; null when it reports nothing. */
+  readonly serverVersion: string | null;
+}
+
+export interface ConnectOptions {
+  /**
+   * Ask the database to refuse writes for the whole session (decision 011). A guard against
+   * accidents, not a security boundary: a statement can switch it back off.
+   */
+  readonly readOnly: boolean;
 }
 
 /** The default export of a plugin's entry module (decision 005). */
@@ -47,5 +57,5 @@ export interface DatasourcePlugin {
   /** Validates the configuration `connect` receives; the host parses before it calls. */
   readonly connectionSchema: z.ZodType;
   /** Rejects with a `PluginError` coded `connectionFailed` when the database cannot be reached. */
-  connect(config: unknown): Promise<Session>;
+  connect(config: unknown, options: ConnectOptions): Promise<Session>;
 }

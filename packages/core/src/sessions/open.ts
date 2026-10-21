@@ -1,4 +1,4 @@
-import type { Session } from "@table-craft/plugin-api";
+import type { ConnectOptions, Session } from "@table-craft/plugin-api";
 import { CoreError } from "@table-craft/core/errors.js";
 import type { PluginLoadResult } from "@table-craft/core/plugins/loader.js";
 
@@ -7,6 +7,7 @@ export async function openSession(
   plugins: readonly PluginLoadResult[],
   pluginId: string,
   config: unknown,
+  options: ConnectOptions,
 ): Promise<Session> {
   const candidates = plugins.filter((entry) => entry.manifest?.id === pluginId);
   const loaded = candidates.find((entry) => entry.status === "loaded");
@@ -34,5 +35,5 @@ export async function openSession(
       "Correct the datasource settings and connect again.",
     );
   }
-  return loaded.plugin.connect(parsed.data);
+  return loaded.plugin.connect(parsed.data, options);
 }

@@ -6,6 +6,7 @@ import {
   z,
   type Capability,
   type Column,
+  type ConnectOptions,
   type DatasourcePlugin,
   type ExecuteResult,
   type PluginErrorCode,
@@ -77,11 +78,19 @@ function readRows(rows: Iterator<unknown>, cells: readonly Cell[]): AsyncIterabl
   return { [Symbol.asyncIterator]: () => iterator };
 }
 
+const VERSION_SQL = "SELECT sqlite_version() AS version";
+/** Refuses every write on this connection, temporary tables included. */
+const READ_ONLY_SQL = "PRAGMA query_only = ON";
+
 class SqliteSession implements Session {
   readonly #database: DatabaseSync;
+  readonly serverVersion: string | null;
 
-  constructor(config: SqliteConfig) {
+  constructor(config: SqliteConfig, options: ConnectOptions) {
     this.#database = new DatabaseSync(config.path);
+    if (options.readOnly) this.#database.exec(READ_ONLY_SQL);
+    const row = this.#database.prepare(VERSION_SQL).get();
+    this.serverVersion = typeof row?.version === "string" ? row.version : null;
   }
 
   execute(sql: string): Promise<ExecuteResult> {
@@ -107,7 +116,8 @@ const plugin: DatasourcePlugin = {
   id: PLUGIN_ID,
   capabilities: CAPABILITIES,
   connectionSchema,
-  connect: (config) => settle("connectionFailed", () => new SqliteSession(connectionSchema.parse(config))),
+  connect: (config, options) =>
+    settle("connectionFailed", () => new SqliteSession(connectionSchema.parse(config), options)),
 };
 
 export default plugin;

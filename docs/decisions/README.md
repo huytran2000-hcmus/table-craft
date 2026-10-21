@@ -31,3 +31,4 @@ started, not when it is merged.
 | 018 | [The datasource comes from the environment until there is a list](018-the-datasource-comes-from-the-environment-until-there-is-a-list.md) |
 | 019 | [Connection forms are manifest data](019-connection-forms-are-manifest-data.md)                                                           |
 | 020 | [Secrets live in main and reach only their engine](020-secrets-live-in-main-and-reach-only-their-engine.md)                               |
+| 021 | [Main stops engines, and Run reconnects](021-main-stops-engines-and-run-reconnects.md)                                                    |

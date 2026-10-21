@@ -2,12 +2,22 @@ import { ACTION_IDS } from "@table-craft/desktop/renderer/actions/appActions.js"
 import { currentPlatform, formatChord } from "@table-craft/desktop/renderer/actions/chords.js";
 import { invoke, registry, useActionEnabled } from "@table-craft/desktop/renderer/actions/index.js";
 import { ResultGrid } from "@table-craft/desktop/renderer/grid/ResultGrid.js";
+import { useConsoleDatasource } from "@table-craft/desktop/renderer/console/useConsoleDatasource.js";
 import { AUTOFOCUS_ATTRIBUTE } from "@table-craft/desktop/renderer/shell/focus.js";
 import { useConsoles } from "@table-craft/desktop/renderer/state/consoles.js";
-import { ACTION_ICONS } from "@table-craft/desktop/renderer/ui/icons.js";
+import { pluginOf, useDatasources } from "@table-craft/desktop/renderer/state/datasources.js";
+import { cn } from "@table-craft/desktop/renderer/ui/cn.js";
+import { ACTION_ICONS, ReadOnlyIcon } from "@table-craft/desktop/renderer/ui/icons.js";
+import { TINT_BORDER } from "@table-craft/desktop/renderer/ui/tint.js";
 import { Tooltip } from "@table-craft/desktop/renderer/ui/Tooltip.js";
 
-const STATUS_TEXT = { connecting: "Connecting…", running: "Running…", ready: "", failed: "" } as const;
+const STATUS_TEXT = {
+  connecting: "Connecting…",
+  running: "Running…",
+  ready: "",
+  failed: "",
+  disconnected: "Disconnected; Run reconnects.",
+} as const;
 
 /** A toolbar button that is an action: its label, icon, tooltip and enabled state come from the registry. */
 function ActionButton({ actionId, primary = false }: { readonly actionId: string; readonly primary?: boolean }) {
@@ -38,14 +48,20 @@ function ActionButton({ actionId, primary = false }: { readonly actionId: string
 /** One console tab: a plain textarea until CodeMirror lands (plan 006), its toolbar, and its result. */
 export function Console({ consoleId }: { readonly consoleId: string }) {
   const session = useConsoles((state) => state.consoles[consoleId]);
-  const canCancel = useConsoles((state) => state.datasource.capabilities.includes("cancel"));
-  const pluginName = useConsoles((state) => state.datasource.pluginName);
+  const datasource = useConsoleDatasource(consoleId);
+  const plugin = useDatasources((state) => pluginOf(state.plugins, datasource?.pluginId ?? ""));
   const setSql = useConsoles((state) => state.setSql);
   if (session === undefined) return null;
   const { status, error, sql } = session;
+  const canCancel = plugin?.capabilities.includes("cancel") === true;
+  const color = datasource?.color ?? null;
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col">
+    <div
+      data-testid="console"
+      data-color={color ?? undefined}
+      className={cn("flex min-h-0 flex-1 flex-col", color !== null && `border-2 ${TINT_BORDER[color]}`)}
+    >
       <section className="flex flex-col gap-gap border-b border-line bg-panel p-gap">
         <div className="flex items-center gap-gap">
           <ActionButton actionId={ACTION_IDS.run} primary />
@@ -56,7 +72,14 @@ export function Console({ consoleId }: { readonly consoleId: string }) {
               {error.message} <span className="text-ink-muted">{error.hint}</span>
             </span>
           )}
-          {pluginName === null ? null : <span className="ml-auto shrink-0 text-ink-muted">{pluginName}</span>}
+          {datasource === undefined ? null : (
+            <span className="ml-auto flex shrink-0 items-center gap-1 text-ink-muted">
+              {datasource.readOnly ? <ReadOnlyIcon aria-hidden className="size-icon" /> : null}
+              {datasource.readOnly ? "read-only · " : ""}
+              {datasource.name}
+              {plugin === undefined ? "" : ` · ${plugin.name}`}
+            </span>
+          )}
         </div>
         <textarea
           aria-label="SQL console"

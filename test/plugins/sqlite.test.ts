@@ -1,28 +1,23 @@
 import { openSession, ResultStore, type PluginLoadResult } from "@table-craft/core";
-import { API_VERSION, isPluginError, type Row } from "@table-craft/plugin-api";
+import { isPluginError, type ConnectOptions, type Row } from "@table-craft/plugin-api";
 import { runPluginContract } from "@table-craft/plugin-api/testing";
 import sqlite from "@table-craft/plugin-sqlite";
 import { describe, expect, it } from "vitest";
 import { seededSqliteFile } from "../support/sqliteFixture.js";
-import { TYPE_PROBE_EXPECTED } from "../support/typeProbe.js";
+import { SQLITE_MANIFEST } from "../support/manifests.js";
+import { TYPE_PROBE_EXPECTED, TYPE_PROBE_WRITE } from "../support/typeProbe.js";
 
 const IN_MEMORY = { path: ":memory:" };
 const BEYOND_SAFE_INTEGER = "9007199254740993";
 const UNREACHABLE = { path: "/nonexistent-table-craft-directory/fixture.sqlite" };
 
+const WRITABLE: ConnectOptions = { readOnly: false };
+
 const LOADED: PluginLoadResult[] = [
   {
     status: "loaded",
     directory: "builtin/sqlite",
-    manifest: {
-      id: "sqlite",
-      name: "SQLite",
-      version: "0.0.0",
-      apiVersion: API_VERSION,
-      entry: "index.js",
-      capabilities: ["sql"],
-      highlight: "sqlite",
-    },
+    manifest: SQLITE_MANIFEST,
     plugin: sqlite,
   },
 ];
@@ -34,13 +29,15 @@ async function collect(rows: AsyncIterable<Row>): Promise<Row[]> {
 }
 
 runPluginContract(sqlite, {
+  manifest: SQLITE_MANIFEST,
   config: { path: seededSqliteFile() },
+  statements: { write: TYPE_PROBE_WRITE },
   typeProbe: { expected: TYPE_PROBE_EXPECTED },
 });
 
 describe("sqlite plugin", () => {
   it("givenSqliteSession_whenSelectOne_thenReturnsColumnsAndOneRow", async () => {
-    const session = await sqlite.connect(IN_MEMORY);
+    const session = await sqlite.connect(IN_MEMORY, WRITABLE);
     try {
       const result = await session.execute("SELECT 1 AS one, 'two' AS two");
 
@@ -55,7 +52,7 @@ describe("sqlite plugin", () => {
   });
 
   it("givenIntegerBeyondSafeRange_whenSelected_thenTaggedAsBigInt", async () => {
-    const session = await sqlite.connect(IN_MEMORY);
+    const session = await sqlite.connect(IN_MEMORY, WRITABLE);
     try {
       const result = await session.execute(`SELECT ${BEYOND_SAFE_INTEGER} AS big, x'00ff' AS blob`);
 
@@ -71,13 +68,13 @@ describe("sqlite plugin", () => {
   });
 
   it("givenPathInMissingDirectory_whenConnecting_thenRejectsWithConnectionFailed", async () => {
-    const failure: unknown = await sqlite.connect(UNREACHABLE).catch((error: unknown) => error);
+    const failure: unknown = await sqlite.connect(UNREACHABLE, WRITABLE).catch((error: unknown) => error);
 
     expect(isPluginError(failure) && failure.code).toBe("connectionFailed");
   });
 
   it("givenLoadedSqlite_whenOpenedThroughCore_thenResultIsStored", async () => {
-    const session = await openSession(LOADED, "sqlite", IN_MEMORY);
+    const session = await openSession(LOADED, "sqlite", IN_MEMORY, WRITABLE);
     const store = new ResultStore();
     try {
       const summary = await store.put(await session.execute("SELECT 1 AS one, 'two' AS two"));
@@ -89,10 +86,12 @@ describe("sqlite plugin", () => {
   });
 
   it("givenInvalidConfig_whenOpenedThroughCore_thenInvalidConfigError", async () => {
-    await expect(openSession(LOADED, "sqlite", { file: ":memory:" })).rejects.toMatchObject({ code: "invalidConfig" });
+    await expect(openSession(LOADED, "sqlite", { file: ":memory:" }, WRITABLE)).rejects.toMatchObject({
+      code: "invalidConfig",
+    });
   });
 
   it("givenNoSuchPlugin_whenOpenedThroughCore_thenUnknownPluginError", async () => {
-    await expect(openSession(LOADED, "oracle", IN_MEMORY)).rejects.toMatchObject({ code: "unknownPlugin" });
+    await expect(openSession(LOADED, "oracle", IN_MEMORY, WRITABLE)).rejects.toMatchObject({ code: "unknownPlugin" });
   });
 });

@@ -1,11 +1,11 @@
 import { z } from "@table-craft/plugin-api";
-import type { DatasourceConfig } from "@table-craft/desktop/engine/protocol.js";
+import type { EphemeralDatasource } from "@table-craft/desktop/main/service.js";
 
-/** A JSON `DatasourceConfig`; the dev and test seam until the connection form lands (decision 018). */
+/**
+ * A JSON `{id, pluginId, config}`: one extra datasource that is listed but never written to disk,
+ * its secrets kept until restart (decision 018, as amended by plan 004).
+ */
 export const DATASOURCE_ENV = "TABLE_CRAFT_DATASOURCE";
-
-/** Without the variable, every window talks to one private in-memory SQLite database. */
-export const SCRATCH_DATASOURCE: DatasourceConfig = { id: "scratch", pluginId: "sqlite", config: { path: ":memory:" } };
 
 const datasourceSchema = z.strictObject({
   id: z.string().min(1),
@@ -18,13 +18,15 @@ export class DatasourceEnvError extends Error {
 }
 
 /**
- * The datasource named by `TABLE_CRAFT_DATASOURCE`, or the scratch database when it is unset.
- * A value that is set but unreadable throws rather than silently falling back, because the
- * caller asked for a specific database. The plugin's own schema checks `config` at connect time.
+ * The datasource named by `TABLE_CRAFT_DATASOURCE`, or null when it is unset. A value that is set
+ * but unreadable throws rather than being ignored, because the caller asked for a specific
+ * database. The plugin's own schema checks `config` at connect time.
  */
-export function datasourceFromEnvironment(env: Readonly<Record<string, string | undefined>>): DatasourceConfig {
+export function datasourceFromEnvironment(
+  env: Readonly<Record<string, string | undefined>>,
+): EphemeralDatasource | null {
   const raw = env[DATASOURCE_ENV];
-  if (raw === undefined || raw.trim() === "") return SCRATCH_DATASOURCE;
+  if (raw === undefined || raw.trim() === "") return null;
   let json: unknown;
   try {
     json = JSON.parse(raw);

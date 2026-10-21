@@ -1,57 +1,159 @@
 /**
  * One engine `utilityProcess` per datasource (decision 002). Main is not in the request path: it
- * boots the engine, hands one end of a `MessageChannelMain` to it and the other to the renderer,
- * and stays out of the way, so no request shape from `protocol.ts` is inspected here.
+ * boots the engine, hands one end of a channel to it and the other to the renderer, and stays out
+ * of the way, so no request shape from `protocol.ts` is inspected here. Electron arrives through
+ * `HostDependencies`, so this module runs under Vitest.
  */
-import { MessageChannelMain, utilityProcess, type UtilityProcess, type WebContents } from "electron";
 import {
   ENGINE_BOOT_MESSAGE,
-  ENGINE_PORT_MESSAGE,
+  ENGINE_PROBED_MESSAGE,
+  ENGINE_SHUTDOWN_MESSAGE,
   type DatasourceConfig,
   type EngineBoot,
+  type EngineMode,
+  type EngineProbed,
+  type ProbeResult,
 } from "@table-craft/desktop/engine/protocol.js";
-import { CHANNELS } from "@table-craft/desktop/preload/bridge.js";
 
+/** Test Connection gives up after this long and kills the probe engine (plan 004). */
+export const PROBE_TIMEOUT_MS = 15_000;
+/** How long a stopping engine may take to close its sessions before it is killed. */
+export const SHUTDOWN_GRACE_MS = 3_000;
+const MS_PER_SECOND = 1_000;
 const SERVICE_NAME_PREFIX = "table-craft-engine-";
-/** stdout and stderr inherit the app's, so engine output reaches the terminal that launched it. */
-const HOST_STDIO = "inherit";
+const PROBE_SERVICE_NAME_PREFIX = "table-craft-probe-";
 
-export interface HostRegistryOptions {
-  /** The built `engine/main.js`. Passed in so `main.ts` owns every path decision. */
-  readonly entryFile: string;
-  readonly pluginRoots: readonly string[];
+/** The slice of Electron's `UtilityProcess` the registry uses. */
+export interface EngineProcess {
+  postMessage(message: unknown): void;
+  on(event: "message", listener: (message: unknown) => void): unknown;
+  once(event: "exit", listener: (code: number) => void): unknown;
+  kill(): boolean;
 }
 
-export interface HostRegistry {
-  /** Starts the host for `datasource` if needed and gives `contents` a fresh port to it. */
-  open(datasource: DatasourceConfig, contents: WebContents): void;
+export interface HostDependencies<Target> {
+  fork(serviceName: string): EngineProcess;
+  /** Hands one end of a fresh channel to `host` and the other, tagged with the datasource, to `target`. */
+  connectPort(host: EngineProcess, datasourceId: string, target: Target): void;
+  setTimeout(run: () => void, ms: number): unknown;
+  clearTimeout(timer: unknown): void;
+}
+
+export interface HostRegistryOptions<Target> {
+  readonly pluginRoots: readonly string[];
+  readonly dependencies: HostDependencies<Target>;
+  /** `clean` is false when the engine died without being asked to, which the tree shows as failed. */
+  readonly onExit: (datasourceId: string, code: number, clean: boolean) => void;
+  readonly probeTimeoutMs?: number;
+}
+
+export interface HostRegistry<Target> {
+  /** Starts the host for `datasource` if needed and gives `target` a fresh port to it. */
+  open(datasource: DatasourceConfig, target: Target): void;
+  isRunning(datasourceId: string): boolean;
+  /** Asks the host to close its sessions and exit; resolves once it has. */
+  stop(datasourceId: string): Promise<void>;
+  /** Test Connection in a throwaway engine that never serves a port. Never rejects. */
+  probe(datasource: DatasourceConfig): Promise<ProbeResult>;
   closeAll(): void;
 }
 
-export function createHostRegistry(options: HostRegistryOptions): HostRegistry {
-  const hosts = new Map<string, UtilityProcess>();
+interface RunningHost {
+  readonly process: EngineProcess;
+  readonly exited: Promise<void>;
+  stopping: boolean;
+}
 
-  function spawn(datasource: DatasourceConfig): UtilityProcess {
-    const host = utilityProcess.fork(options.entryFile, [], {
-      serviceName: `${SERVICE_NAME_PREFIX}${datasource.id}`,
-      stdio: HOST_STDIO,
+function boot(mode: EngineMode, datasource: DatasourceConfig, pluginRoots: readonly string[]): EngineBoot {
+  return { kind: ENGINE_BOOT_MESSAGE, mode, datasource, pluginRoots };
+}
+
+function isProbed(message: unknown): message is EngineProbed {
+  return (message as { kind?: unknown } | null)?.kind === ENGINE_PROBED_MESSAGE;
+}
+
+export function createHostRegistry<Target>(options: HostRegistryOptions<Target>): HostRegistry<Target> {
+  const { dependencies } = options;
+  const hosts = new Map<string, RunningHost>();
+  const probeTimeoutMs = options.probeTimeoutMs ?? PROBE_TIMEOUT_MS;
+
+  function spawn(datasource: DatasourceConfig): RunningHost {
+    const process = dependencies.fork(`${SERVICE_NAME_PREFIX}${datasource.id}`);
+    let host: RunningHost | null = null;
+    const exited = new Promise<void>((resolve) => {
+      process.once("exit", (code) => {
+        if (hosts.get(datasource.id) === host) hosts.delete(datasource.id);
+        options.onExit(datasource.id, code, host?.stopping === true || code === 0);
+        resolve();
+      });
     });
-    const boot: EngineBoot = { kind: ENGINE_BOOT_MESSAGE, datasource, pluginRoots: options.pluginRoots };
-    host.postMessage(boot);
-    host.once("exit", () => hosts.delete(datasource.id));
+    host = { process, exited, stopping: false };
+    process.postMessage(boot("serve", datasource, options.pluginRoots));
     hosts.set(datasource.id, host);
     return host;
   }
 
+  function stop(datasourceId: string): Promise<void> {
+    const host = hosts.get(datasourceId);
+    if (host === undefined) return Promise.resolve();
+    hosts.delete(datasourceId);
+    host.stopping = true;
+    host.process.postMessage({ kind: ENGINE_SHUTDOWN_MESSAGE });
+    const timer = dependencies.setTimeout(() => host.process.kill(), SHUTDOWN_GRACE_MS);
+    return host.exited.finally(() => dependencies.clearTimeout(timer));
+  }
+
+  function probe(datasource: DatasourceConfig): Promise<ProbeResult> {
+    const process = dependencies.fork(`${PROBE_SERVICE_NAME_PREFIX}${datasource.id}`);
+    return new Promise((resolve) => {
+      let settled = false;
+      const settle = (result: ProbeResult): void => {
+        if (settled) return;
+        settled = true;
+        dependencies.clearTimeout(timer);
+        resolve(result);
+      };
+      const timer = dependencies.setTimeout(() => {
+        settle({
+          ok: false,
+          error: {
+            code: "timedOut",
+            message: `The database did not answer within ${String(probeTimeoutMs / MS_PER_SECOND)} s.`,
+            hint: "Check the host and port, and that nothing between here and the server drops the connection.",
+          },
+        });
+        process.kill();
+      }, probeTimeoutMs);
+      process.on("message", (message) => {
+        if (isProbed(message)) settle(message.result);
+      });
+      process.once("exit", (code) => {
+        settle({
+          ok: false,
+          error: {
+            code: "internal",
+            message: `The test connection's engine exited with code ${String(code)} before it answered.`,
+            hint: "This is a table-craft bug; restart the app and report it.",
+          },
+        });
+      });
+      process.postMessage(boot("probe", datasource, options.pluginRoots));
+    });
+  }
+
   return {
-    open(datasource, contents) {
+    open(datasource, target) {
       const host = hosts.get(datasource.id) ?? spawn(datasource);
-      const channel = new MessageChannelMain();
-      host.postMessage({ kind: ENGINE_PORT_MESSAGE }, [channel.port1]);
-      contents.postMessage(CHANNELS.enginePort, null, [channel.port2]);
+      dependencies.connectPort(host.process, datasource.id, target);
     },
+    isRunning: (datasourceId) => hosts.has(datasourceId),
+    stop,
+    probe,
     closeAll() {
-      for (const host of hosts.values()) host.kill();
+      for (const host of hosts.values()) {
+        host.stopping = true;
+        host.process.kill();
+      }
       hosts.clear();
     },
   };

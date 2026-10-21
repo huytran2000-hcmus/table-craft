@@ -1,0 +1,108 @@
+import { describe, expect, it } from "vitest";
+import { ENGINE_PROBED_MESSAGE, ENGINE_SHUTDOWN_MESSAGE } from "@table-craft/desktop/engine/protocol.js";
+import { createHostRegistry, PROBE_TIMEOUT_MS } from "@table-craft/desktop/main/hosts.js";
+import { fakeHostDependencies } from "../support/fakeHosts.js";
+
+const DATASOURCE = { id: "pg", pluginId: "postgres", config: { host: "db" }, readOnly: true };
+
+function registry() {
+  const dependencies = fakeHostDependencies();
+  const exits: [string, number, boolean][] = [];
+  const hosts = createHostRegistry({
+    pluginRoots: ["/plugins"],
+    dependencies,
+    onExit: (id, code, clean) => exits.push([id, code, clean]),
+  });
+  return { dependencies, exits, hosts };
+}
+
+describe("host registry", () => {
+  it("givenTwoOpens_whenSameDatasource_thenOneHostTwoPorts", () => {
+    const { dependencies, hosts } = registry();
+
+    hosts.open(DATASOURCE, "window-1");
+    hosts.open(DATASOURCE, "window-1");
+
+    expect(dependencies.forked).toHaveLength(1);
+    expect(dependencies.forked[0]?.posted[0]).toMatchObject({
+      kind: "engine.boot",
+      mode: "serve",
+      datasource: DATASOURCE,
+    });
+    expect(dependencies.ports).toEqual([
+      ["pg", "window-1"],
+      ["pg", "window-1"],
+    ]);
+  });
+
+  it("givenRunningHost_whenStopped_thenShutdownPostedAndExitReportedClean", async () => {
+    const { dependencies, exits, hosts } = registry();
+    hosts.open(DATASOURCE, "window-1");
+    const host = dependencies.forked[0];
+
+    const stopped = hosts.stop("pg");
+    expect(host?.posted).toContainEqual({ kind: ENGINE_SHUTDOWN_MESSAGE });
+    host?.exit(0);
+    await stopped;
+
+    expect(hosts.isRunning("pg")).toBe(false);
+    expect(exits).toEqual([["pg", 0, true]]);
+  });
+
+  it("givenStoppingHostIgnoresShutdown_whenGraceElapses_thenKilledAndStillClean", async () => {
+    const { dependencies, exits, hosts } = registry();
+    hosts.open(DATASOURCE, "window-1");
+
+    const stopped = hosts.stop("pg");
+    dependencies.elapse();
+    await stopped;
+
+    expect(dependencies.forked[0]?.killed).toBe(true);
+    expect(exits).toEqual([["pg", 1, true]]);
+  });
+
+  it("givenHostDiesUnasked_whenExitReported_thenNotClean", () => {
+    const { dependencies, exits, hosts } = registry();
+    hosts.open(DATASOURCE, "window-1");
+
+    dependencies.forked[0]?.exit(15);
+
+    expect(exits).toEqual([["pg", 15, false]]);
+    expect(hosts.isRunning("pg")).toBe(false);
+  });
+
+  it("givenProbeAnswers_whenProbed_thenResolvesWithItsResult", async () => {
+    const { dependencies, hosts } = registry();
+    const probing = hosts.probe(DATASOURCE);
+    const probe = dependencies.forked[0];
+    const result = { ok: true, pluginName: "PostgreSQL", serverVersion: "17.4", elapsedMs: 38 } as const;
+
+    probe?.answer({ kind: ENGINE_PROBED_MESSAGE, result });
+
+    expect(probe?.posted[0]).toMatchObject({ kind: "engine.boot", mode: "probe" });
+    expect(await probing).toEqual(result);
+    expect(hosts.isRunning("pg")).toBe(false);
+  });
+
+  it("givenProbeHangs_whenTimeoutElapses_thenProbeKilledAndTimeoutError", async () => {
+    const { dependencies, hosts } = registry();
+    const probing = hosts.probe(DATASOURCE);
+
+    dependencies.elapse();
+
+    expect(dependencies.forked[0]?.killed).toBe(true);
+    expect(await probing).toMatchObject({
+      ok: false,
+      error: { code: "timedOut", message: expect.stringContaining(String(PROBE_TIMEOUT_MS / 1_000)) as unknown },
+    });
+  });
+
+  it("givenProbeCrashes_whenExited_thenFailsWithoutWaitingForTimeout", async () => {
+    const { dependencies, hosts } = registry();
+    const probing = hosts.probe(DATASOURCE);
+
+    dependencies.forked[0]?.exit(9);
+
+    expect(await probing).toMatchObject({ ok: false, error: { code: "internal" } });
+  });
+});

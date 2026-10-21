@@ -14,6 +14,12 @@
   --color-success: var(--tc-success);
   --color-grid-stripe: var(--tc-grid-stripe);
   --color-selection: var(--tc-selection);
+  --color-ds-red: var(--tc-ds-red);
+  --color-ds-orange: var(--tc-ds-orange);
+  --color-ds-yellow: var(--tc-ds-yellow);
+  --color-ds-green: var(--tc-ds-green);
+  --color-ds-blue: var(--tc-ds-blue);
+  --color-ds-violet: var(--tc-ds-violet);
 
   --font-ui: var(--tc-font-ui);
   --font-editor: var(--tc-font-editor);
@@ -32,6 +38,9 @@
   --spacing-status-bar: var(--tc-status-bar-height);
   --spacing-icon: var(--tc-icon);
   --spacing-palette: var(--tc-palette-width);
+  --spacing-dialog: var(--tc-dialog-width);
+  --spacing-dialog-height: var(--tc-dialog-height);
+  --spacing-dialog-list: var(--tc-dialog-list-width);
 }
 
 html,

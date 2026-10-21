@@ -3,8 +3,12 @@ import { APP_ACTIONS } from "@table-craft/desktop/renderer/actions/appActions.js
 import { currentContext } from "@table-craft/desktop/renderer/actions/context.js";
 import { createActionRegistry, type InvokeOutcome } from "@table-craft/desktop/renderer/actions/registry.js";
 import { useConsoles } from "@table-craft/desktop/renderer/state/consoles.js";
+import { useDataSourcesDialog } from "@table-craft/desktop/renderer/state/dataSourcesDialog.js";
+import { useDatasources } from "@table-craft/desktop/renderer/state/datasources.js";
 import { useLayout } from "@table-craft/desktop/renderer/state/layout.js";
+import { useModal } from "@table-craft/desktop/renderer/state/modal.js";
 import { usePalette } from "@table-craft/desktop/renderer/state/palette.js";
+import { useSecretPrompt } from "@table-craft/desktop/renderer/state/secretPrompt.js";
 import { useTabs } from "@table-craft/desktop/renderer/state/tabs.js";
 
 /** The app's one registry. Everything that runs a command goes through `invoke` (decision 015). */
@@ -17,7 +21,16 @@ export function invoke(id: string, args?: unknown): InvokeOutcome {
   return registry.invoke(id, args);
 }
 
-const STORES = [useTabs, useConsoles, useLayout, usePalette] as const;
+const STORES = [
+  useTabs,
+  useConsoles,
+  useDatasources,
+  useLayout,
+  usePalette,
+  useDataSourcesDialog,
+  useSecretPrompt,
+  useModal,
+] as const;
 
 function subscribeToStores(listener: () => void): () => void {
   const unsubscribes = STORES.map((store) => store.subscribe(listener));

@@ -7,6 +7,7 @@ import {
   z,
   type Capability,
   type Column,
+  type ConnectOptions,
   type DatasourcePlugin,
   type ExecuteResult,
   type Row,
@@ -157,6 +158,26 @@ function openConnection(config: MysqlConfig): Promise<mysql.Connection> {
   });
 }
 
+const READ_ONLY_SQL = "SET SESSION TRANSACTION READ ONLY";
+const VERSION_SQL = "SELECT VERSION() AS version";
+
+function query(connection: mysql.Connection, sql: string): Promise<unknown> {
+  return new Promise((resolve, reject) => {
+    connection.query(sql, (error, rows) => {
+      if (error === null) resolve(rows);
+      else reject(new PluginError("connectionFailed", messageOf(error), { cause: error }));
+    });
+  });
+}
+
+/** Configures a fresh connection and reads what the server reports about itself. */
+async function prepareConnection(connection: mysql.Connection, options: ConnectOptions): Promise<string | null> {
+  if (options.readOnly) await query(connection, READ_ONLY_SQL);
+  const rows = (await query(connection, VERSION_SQL)) as readonly { version?: unknown }[];
+  const version = rows[0]?.version;
+  return typeof version === "string" && version !== "" ? version : null;
+}
+
 function closeConnection(connection: mysql.Connection): Promise<void> {
   return new Promise((resolve) => {
     connection.end(() => resolve());
@@ -203,9 +224,12 @@ class MysqlSession implements Session {
   #running: Running | null = null;
   #cancelling: Promise<void> = Promise.resolve();
 
-  constructor(config: MysqlConfig, connection: mysql.Connection) {
+  readonly serverVersion: string | null;
+
+  constructor(config: MysqlConfig, connection: mysql.Connection, serverVersion: string | null) {
     this.#config = config;
     this.#connection = connection;
+    this.serverVersion = serverVersion;
     connection.on("error", (error: Error) => {
       this.#broken = error;
     });
@@ -324,9 +348,15 @@ const plugin: DatasourcePlugin = {
   id: PLUGIN_ID,
   capabilities: CAPABILITIES,
   connectionSchema,
-  connect: async (config) => {
+  connect: async (config, options) => {
     const parsed = connectionSchema.parse(config);
-    return new MysqlSession(parsed, await openConnection(parsed));
+    const connection = await openConnection(parsed);
+    try {
+      return new MysqlSession(parsed, connection, await prepareConnection(connection, options));
+    } catch (cause) {
+      await closeConnection(connection);
+      throw cause;
+    }
   },
 };
 

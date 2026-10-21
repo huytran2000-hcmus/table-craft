@@ -26,7 +26,7 @@ const PROBE_SCRIPT = `
 const [entry, config] = process.argv.slice(2);
 const plugin = (await import(entry)).default;
 try {
-  const session = await plugin.connect(plugin.connectionSchema.parse(JSON.parse(config)));
+  const session = await plugin.connect(plugin.connectionSchema.parse(JSON.parse(config)), { readOnly: false });
   const result = await session.execute("SELECT 1 AS one");
   const rows = [];
   for await (const row of result.rows) rows.push(row);

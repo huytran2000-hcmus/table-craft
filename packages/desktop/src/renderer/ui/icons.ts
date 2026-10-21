@@ -1,6 +1,16 @@
 import {
+  CaretDown,
+  CaretRight,
   CircleNotch,
+  Copy,
   Database,
+  FolderSimple,
+  Lock,
+  Plug,
+  PlugsConnected,
+  SlidersHorizontal,
+  Trash,
+  Warning,
   HardDrives,
   MagnifyingGlass,
   Minus,
@@ -21,6 +31,11 @@ export {
   Minus as HideIcon,
   Terminal as ConsoleIcon,
   X as CloseIcon,
+  CaretDown as ExpandedIcon,
+  CaretRight as CollapsedIcon,
+  FolderSimple as FolderIcon,
+  Lock as ReadOnlyIcon,
+  Warning as WarningIcon,
 };
 
 export const ACTION_ICONS: Readonly<Record<ActionIcon, Icon>> = {
@@ -31,4 +46,11 @@ export const ACTION_ICONS: Readonly<Record<ActionIcon, Icon>> = {
   database: Database,
   services: HardDrives,
   search: MagnifyingGlass,
+  add: Plus,
+  properties: SlidersHorizontal,
+  duplicate: Copy,
+  delete: Trash,
+  connect: PlugsConnected,
+  disconnect: Plug,
+  folder: FolderSimple,
 };

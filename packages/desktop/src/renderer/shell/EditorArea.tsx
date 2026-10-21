@@ -4,9 +4,13 @@ import { currentPlatform, formatChord } from "@table-craft/desktop/renderer/acti
 import { REGION_ATTRIBUTE } from "@table-craft/desktop/renderer/actions/context.js";
 import { invoke, registry, useActionEnabled } from "@table-craft/desktop/renderer/actions/index.js";
 import { Console } from "@table-craft/desktop/renderer/console/Console.js";
+import { useConsoleDatasource } from "@table-craft/desktop/renderer/console/useConsoleDatasource.js";
+import { tabLabel } from "@table-craft/desktop/renderer/model/format.js";
+import { useDatasources } from "@table-craft/desktop/renderer/state/datasources.js";
 import { activeTab, useTabs, type Tab } from "@table-craft/desktop/renderer/state/tabs.js";
 import { cn } from "@table-craft/desktop/renderer/ui/cn.js";
-import { CloseIcon, ConsoleIcon } from "@table-craft/desktop/renderer/ui/icons.js";
+import { CloseIcon, ConsoleIcon, ReadOnlyIcon } from "@table-craft/desktop/renderer/ui/icons.js";
+import { TINT_TAB } from "@table-craft/desktop/renderer/ui/tint.js";
 
 const TAB_MENU_ACTIONS = [ACTION_IDS.closeTab, ACTION_IDS.closeOtherTabs, ACTION_IDS.closeAllTabs] as const;
 
@@ -32,28 +36,36 @@ function TabMenuItem({ actionId, tabId }: { readonly actionId: string; readonly 
 function TabButton({ tab, active }: { readonly tab: Tab; readonly active: boolean }) {
   const activate = useTabs((state) => state.activate);
   const args: TabArgs = { tabId: tab.id };
+  const datasource = useConsoleDatasource(tab.id);
+  const label = tabLabel(tab.title, datasource?.name);
+  const tint = datasource?.color == null ? null : TINT_TAB[datasource.color];
   return (
     <ContextMenu.Root>
       <ContextMenu.Trigger asChild>
         <div
           className={cn(
             "group flex h-tab shrink-0 items-center gap-cell border-r border-b-2 border-r-line px-gap",
-            active ? "border-b-accent bg-canvas text-ink" : "border-b-transparent text-ink-muted hover:bg-raised",
+            active ? "border-b-accent text-ink" : "border-b-transparent text-ink-muted hover:bg-raised",
+            tint ?? (active ? "bg-canvas" : null),
           )}
         >
           <button
             type="button"
             role="tab"
             aria-selected={active}
+            data-color={datasource?.color ?? undefined}
             className="flex items-center gap-cell outline-none"
             onClick={() => activate(tab.id)}
           >
             <ConsoleIcon aria-hidden className="size-icon" />
-            {tab.title}
+            {label}
+            {datasource?.readOnly === true ? (
+              <ReadOnlyIcon aria-label="read-only" className="size-icon text-ink-muted" />
+            ) : null}
           </button>
           <button
             type="button"
-            aria-label={`Close ${tab.title}`}
+            aria-label={`Close ${label}`}
             tabIndex={-1}
             className={cn(
               "flex size-icon items-center justify-center rounded hover:bg-raised hover:text-ink",
@@ -77,14 +89,20 @@ function TabButton({ tab, active }: { readonly tab: Tab; readonly active: boolea
 }
 
 function EmptyEditor() {
-  const action = registry.get(ACTION_IDS.newConsole);
+  const hasDatasources = useDatasources((state) => state.datasources.length > 0);
+  const action = registry.get(hasDatasources ? ACTION_IDS.newConsole : ACTION_IDS.newDatasource);
   const shortcut = action?.shortcut === undefined ? "" : formatChord(action.shortcut, currentPlatform());
   return (
     <div className="flex flex-1 flex-col items-center justify-center gap-gap text-ink-muted">
       <p>No open consoles.</p>
-      <p>
-        Press <kbd className="rounded border border-line px-1 font-ui text-ink">{shortcut}</kbd> to open a new console.
-      </p>
+      {hasDatasources ? (
+        <p>
+          Select a data source and press{" "}
+          <kbd className="rounded border border-line px-1 font-ui text-ink">{shortcut}</kbd> to open a console on it.
+        </p>
+      ) : (
+        <p>Add a data source in the Database tool window to start.</p>
+      )}
     </div>
   );
 }

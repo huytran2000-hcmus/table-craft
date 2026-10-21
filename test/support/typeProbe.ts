@@ -20,3 +20,6 @@ export const TYPE_PROBE_EXPECTED: readonly Row[] = [
   ],
   [2, null, null, null, null, null, null, null, null, null],
 ];
+
+/** Rewrites one cell with its own value: a real write that leaves the fixture as it was. */
+export const TYPE_PROBE_WRITE = "UPDATE type_probe SET small_int = small_int WHERE id = 1";

@@ -7,6 +7,7 @@ import {
   z,
   type Capability,
   type Column,
+  type ConnectOptions,
   type DatasourcePlugin,
   type ExecuteResult,
   type Row,
@@ -152,6 +153,15 @@ function readBatch(cursor: Cursor<unknown[]>): Promise<{ rows: unknown[][]; resu
   });
 }
 
+const READ_ONLY_SQL = "SET SESSION CHARACTERISTICS AS TRANSACTION READ ONLY";
+const VERSION_SQL = "SHOW server_version";
+
+/** Distribution builds append a build note, as in `17.4 (Debian 17.4-1.pgdg120+2)`. */
+function shortVersion(reported: string | undefined): string | null {
+  const version = reported?.split(" (")[0]?.trim() ?? "";
+  return version === "" ? null : version;
+}
+
 class PostgresSession implements Session {
   readonly #config: PostgresConfig;
   readonly #client: pg.Client;
@@ -161,20 +171,35 @@ class PostgresSession implements Session {
   #running: Running | null = null;
   #cancelling: Promise<void> = Promise.resolve();
 
-  constructor(config: PostgresConfig, client: pg.Client, typeNames: ReadonlyMap<number, string>) {
+  readonly serverVersion: string | null;
+
+  constructor(
+    config: PostgresConfig,
+    client: pg.Client,
+    typeNames: ReadonlyMap<number, string>,
+    serverVersion: string | null,
+  ) {
     this.#config = config;
     this.#client = client;
     this.#typeNames = typeNames;
+    this.serverVersion = serverVersion;
     client.on("error", (error) => {
       this.#broken = error;
     });
   }
 
-  static async open(config: PostgresConfig): Promise<PostgresSession> {
+  static async open(config: PostgresConfig, options: ConnectOptions): Promise<PostgresSession> {
     const client = await openClient(config);
     try {
+      if (options.readOnly) await client.query(READ_ONLY_SQL);
       const types = await client.query<{ oid: number; typname: string }>("SELECT oid, typname FROM pg_type");
-      return new PostgresSession(config, client, new Map(types.rows.map((type) => [type.oid, type.typname])));
+      const version = await client.query<{ server_version: string }>(VERSION_SQL);
+      return new PostgresSession(
+        config,
+        client,
+        new Map(types.rows.map((type) => [type.oid, type.typname])),
+        shortVersion(version.rows[0]?.server_version),
+      );
     } catch (cause) {
       await client.end();
       throw new PluginError("connectionFailed", messageOf(cause), { cause });
@@ -275,7 +300,7 @@ const plugin: DatasourcePlugin = {
   id: PLUGIN_ID,
   capabilities: CAPABILITIES,
   connectionSchema,
-  connect: (config) => PostgresSession.open(connectionSchema.parse(config)),
+  connect: (config, options) => PostgresSession.open(connectionSchema.parse(config), options),
 };
 
 export default plugin;

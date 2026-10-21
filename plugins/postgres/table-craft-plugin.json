@@ -2,8 +2,29 @@
   "id": "postgres",
   "name": "PostgreSQL",
   "version": "0.0.0",
-  "apiVersion": "0.2.0",
+  "apiVersion": "0.3.0",
   "entry": "index.js",
   "capabilities": ["sql", "cancel"],
-  "highlight": "postgresql"
+  "highlight": "postgresql",
+  "connection": {
+    "fields": [
+      { "key": "host", "label": "Host", "kind": "text", "default": "localhost", "required": true },
+      { "key": "port", "label": "Port", "kind": "number", "default": 5432, "required": true },
+      { "key": "database", "label": "Database", "kind": "text", "default": "postgres", "required": true },
+      { "key": "user", "label": "User", "kind": "text", "required": true },
+      { "key": "password", "label": "Password", "kind": "password", "secret": true },
+      {
+        "key": "sslMode",
+        "label": "SSL mode",
+        "kind": "select",
+        "default": "disable",
+        "group": "advanced",
+        "options": [
+          { "value": "disable", "label": "Disable" },
+          { "value": "require", "label": "Require" },
+          { "value": "verify-full", "label": "Verify full" }
+        ]
+      }
+    ]
+  }
 }

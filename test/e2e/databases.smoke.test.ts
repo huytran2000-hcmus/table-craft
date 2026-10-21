@@ -13,7 +13,7 @@ import { seededSqliteFile } from "../support/sqliteFixture.js";
 import { TYPE_PROBE_EXPECTED } from "../support/typeProbe.js";
 import {
   cancelButton,
-  captureWindow,
+  evidenceFor,
   consoleAlert,
   DATABASES_ENABLED,
   EVIDENCE_WINDOW,
@@ -28,6 +28,8 @@ import {
   type Datasource,
   type RunningApp,
 } from "./harness.js";
+
+const captureWindow = evidenceFor("002");
 
 const TYPE_PROBE_SQL = "SELECT * FROM type_probe ORDER BY id";
 const TYPE_PROBE_HEADERS = [
@@ -158,7 +160,8 @@ describe.runIf(DATABASES_ENABLED)("desktop against real databases", () => {
         await consoleAlert(page).waitFor({ timeout: SCENARIO_TIMEOUT_MS });
 
         expect(await consoleAlert(page).textContent()).toContain("Could not connect");
-        expect(await runButton(page).isEnabled()).toBe(false);
+        // Plan 004: Run on a failed console retries the connection instead of staying disabled.
+        expect(await runButton(page).isEnabled()).toBe(true);
         await captureWindow(page, `${target.name}-wrong-password`);
       },
       SCENARIO_TIMEOUT_MS,

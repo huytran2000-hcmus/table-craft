@@ -16,6 +16,7 @@ export function appearanceVariables(appearance: Appearance): Readonly<Record<str
     "--tc-success": colors.success,
     "--tc-grid-stripe": colors.gridStripe,
     "--tc-selection": colors.selection,
+    ...Object.fromEntries(Object.entries(colors.datasource).map(([name, value]) => [`--tc-ds-${name}`, value])),
     "--tc-font-ui": fonts.ui.family,
     "--tc-font-ui-size": `${fonts.ui.sizePx}px`,
     "--tc-font-editor": fonts.editor.family,
@@ -32,6 +33,9 @@ export function appearanceVariables(appearance: Appearance): Readonly<Record<str
     "--tc-status-bar-height": `${density.statusBarHeightPx}px`,
     "--tc-icon": `${density.iconPx}px`,
     "--tc-palette-width": `${density.paletteWidthPx}px`,
+    "--tc-dialog-width": `${density.dialogWidthPx}px`,
+    "--tc-dialog-height": `${density.dialogHeightPx}px`,
+    "--tc-dialog-list-width": `${density.dialogListWidthPx}px`,
   };
 }
 

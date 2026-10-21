@@ -1,7 +1,15 @@
 import type { ActionContext } from "@table-craft/desktop/renderer/actions/context.js";
+import {
+  askMoveToFolder,
+  askNewFolder,
+  deleteDatasource,
+  openConsole,
+} from "@table-craft/desktop/renderer/actions/datasourceCommands.js";
 import { defineAction, type AnyAction } from "@table-craft/desktop/renderer/actions/registry.js";
 import { focusRegion } from "@table-craft/desktop/renderer/shell/focus.js";
-import { useConsoles } from "@table-craft/desktop/renderer/state/consoles.js";
+import { canRun, useConsoles } from "@table-craft/desktop/renderer/state/consoles.js";
+import { useDataSourcesDialog } from "@table-craft/desktop/renderer/state/dataSourcesDialog.js";
+import { useDatasources } from "@table-craft/desktop/renderer/state/datasources.js";
 import { useLayout, type ToolWindowId } from "@table-craft/desktop/renderer/state/layout.js";
 import { usePalette } from "@table-craft/desktop/renderer/state/palette.js";
 import { useTabs, type Tab } from "@table-craft/desktop/renderer/state/tabs.js";
@@ -22,25 +30,19 @@ export const ACTION_IDS = {
   focusEditor: "focus.editor",
   findAction: "palette.findAction",
   searchEverywhere: "palette.searchEverywhere",
+  newDatasource: "datasource.new",
+  datasourceProperties: "datasource.properties",
+  duplicateDatasource: "datasource.duplicate",
+  deleteDatasource: "datasource.delete",
+  connect: "datasource.connect",
+  disconnect: "datasource.disconnect",
+  newFolder: "datasource.newFolder",
+  moveToFolder: "datasource.moveToFolder",
 } as const;
 
 /** Names a tab when an action runs on one other than the active tab, as the tab menu does. */
 export interface TabArgs {
   readonly tabId?: string;
-}
-
-const CONSOLE_TITLE = "console";
-const CONSOLE_ID_PREFIX = "console-";
-let consolesOpened = 0;
-
-/** DataGrip's naming: `console`, then `console_1`, `console_2`. */
-function nextConsole(): Tab {
-  const index = consolesOpened++;
-  return {
-    id: `${CONSOLE_ID_PREFIX}${index}`,
-    kind: "console",
-    title: index === 0 ? CONSOLE_TITLE : `${CONSOLE_TITLE}_${index}`,
-  };
 }
 
 function release(tabs: readonly Tab[]): void {
@@ -58,6 +60,16 @@ function toggleToolWindow(id: ToolWindowId, context: ActionContext): void {
 }
 
 const hasTabs = (context: ActionContext) => context.tabs.length > 0;
+const hasDatasource = (context: ActionContext) => context.datasource !== null;
+const isSaved = (context: ActionContext) => context.datasource !== null && !context.datasource.view.ephemeral;
+const isLive = (context: ActionContext) =>
+  context.datasource?.connection.status === "connected" || context.datasource?.connection.status === "connecting";
+
+/** The folder New Folder and New Data Source put things in: the selected one, or the selected datasource's. */
+function selectedFolder(context: ActionContext): string | null {
+  if (context.selection?.kind === "folder") return context.selection.path;
+  return context.focus === "database" ? (context.datasource?.view.folder ?? null) : null;
+}
 const hasSeveralTabs = (context: ActionContext) => context.tabs.length > 1;
 
 export const APP_ACTIONS: readonly AnyAction[] = [
@@ -67,7 +79,7 @@ export const APP_ACTIONS: readonly AnyAction[] = [
     category: "Console",
     icon: "run",
     shortcut: "Mod+Enter",
-    when: (context) => context.console?.status === "ready",
+    when: (context) => context.console !== null && canRun(context.console.status),
     run: (context) => {
       if (context.activeTab !== null) void useConsoles.getState().run(context.activeTab.id);
     },
@@ -88,10 +100,9 @@ export const APP_ACTIONS: readonly AnyAction[] = [
     category: "Console",
     icon: "newConsole",
     shortcut: "Mod+Shift+L",
-    run: () => {
-      const tab = nextConsole();
-      useTabs.getState().open(tab);
-      void useConsoles.getState().open(tab.id);
+    when: hasDatasource,
+    run: (context) => {
+      if (context.datasource !== null) openConsole(context.datasource.view.id);
     },
   }),
   defineAction<TabArgs | undefined>({
@@ -189,5 +200,92 @@ export const APP_ACTIONS: readonly AnyAction[] = [
     icon: "search",
     shortcut: "Shift Shift",
     run: () => usePalette.getState().show("searchEverywhere"),
+  }),
+  defineAction({
+    id: ACTION_IDS.newDatasource,
+    title: "New Data Source…",
+    category: "Database",
+    icon: "add",
+    shortcut: "Mod+N",
+    shortcutRegion: "database",
+    run: (context) =>
+      useDataSourcesDialog.getState().show({ kind: "new", pluginId: null, folder: selectedFolder(context) ?? "" }),
+  }),
+  defineAction({
+    id: ACTION_IDS.datasourceProperties,
+    title: "Data Source Properties…",
+    category: "Database",
+    icon: "properties",
+    shortcut: "Mod+;",
+    run: (context) => useDataSourcesDialog.getState().show({ kind: "edit", id: context.datasource?.view.id ?? null }),
+  }),
+  defineAction({
+    id: ACTION_IDS.duplicateDatasource,
+    title: "Duplicate Data Source",
+    category: "Database",
+    icon: "duplicate",
+    shortcut: "Mod+D",
+    shortcutRegion: "database",
+    when: hasDatasource,
+    run: (context) => {
+      if (context.datasource !== null) {
+        useDataSourcesDialog.getState().show({ kind: "duplicate", id: context.datasource.view.id });
+      }
+    },
+  }),
+  defineAction({
+    id: ACTION_IDS.deleteDatasource,
+    title: "Delete Data Source",
+    category: "Database",
+    icon: "delete",
+    shortcut: "Delete",
+    shortcutRegion: "database",
+    when: isSaved,
+    run: async (context) => {
+      if (context.datasource !== null) await deleteDatasource(context.datasource.view);
+    },
+  }),
+  defineAction({
+    id: ACTION_IDS.connect,
+    title: "Connect",
+    category: "Database",
+    icon: "connect",
+    when: (context) => hasDatasource(context) && !isLive(context),
+    run: (context) => {
+      if (context.datasource !== null) {
+        // The tree and status bar show a failure; nothing else waits on it.
+        useDatasources
+          .getState()
+          .connect(context.datasource.view.id)
+          .catch(() => undefined);
+      }
+    },
+  }),
+  defineAction({
+    id: ACTION_IDS.disconnect,
+    title: "Disconnect",
+    category: "Database",
+    icon: "disconnect",
+    shortcut: "Mod+F2",
+    when: isLive,
+    run: async (context) => {
+      if (context.datasource !== null) await useDatasources.getState().disconnect(context.datasource.view.id);
+    },
+  }),
+  defineAction({
+    id: ACTION_IDS.newFolder,
+    title: "New Folder…",
+    category: "Database",
+    icon: "folder",
+    run: (context) => askNewFolder(selectedFolder(context)),
+  }),
+  defineAction({
+    id: ACTION_IDS.moveToFolder,
+    title: "Move to Folder…",
+    category: "Database",
+    when: isSaved,
+    run: async (context) => {
+      if (context.datasource !== null) await askMoveToFolder(context.datasource.view);
+    },
   }),
 ];

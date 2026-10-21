@@ -1,30 +1,25 @@
 import { describe, expect, it } from "vitest";
-import {
-  API_VERSION,
-  PluginError,
-  pluginManifestSchema,
-  z,
-  type DatasourcePlugin,
-  type Session,
-} from "@table-craft/plugin-api";
+import { PluginError, z, type DatasourcePlugin, type Session } from "@table-craft/plugin-api";
 import type { PluginLoadResult } from "@table-craft/core";
 import sqlite from "@table-craft/plugin-sqlite";
-import { createEngine } from "@table-craft/desktop/engine/engine.js";
+import { createEngine, probeDatasource } from "@table-craft/desktop/engine/engine.js";
+import { createLifetime } from "@table-craft/desktop/engine/lifetime.js";
 import type { EngineResponse, ExecutedStatement, ResultWindow } from "@table-craft/desktop/engine/protocol.js";
 import { RESULT_WINDOW_ROWS } from "@table-craft/desktop/engine/protocol.js";
-import manifestJson from "../../plugins/sqlite/table-craft-plugin.json" with { type: "json" };
+import { fakeManifest, SQLITE_MANIFEST } from "../support/manifests.js";
 
 const SQLITE_DIRECTORY = "plugins/sqlite";
 const LOADED_SQLITE: PluginLoadResult = {
   status: "loaded",
   directory: SQLITE_DIRECTORY,
-  manifest: pluginManifestSchema.parse(manifestJson),
+  manifest: SQLITE_MANIFEST,
   plugin: sqlite,
 };
-const DATASOURCE = { id: "scratch", pluginId: "sqlite", config: { path: ":memory:" } };
+const DATASOURCE = { id: "scratch", pluginId: "sqlite", config: { path: ":memory:" }, readOnly: false };
 const ROWS_1200 = "WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 1200) SELECT i FROM n";
 
 const CANCELLABLE_ID = "cancellable";
+const VERSION = /^\d+\.\d+/;
 
 /** Its one statement runs until cancelled; enough to drive `statement.cancel` without a database. */
 function cancellablePlugin(): { plugin: DatasourcePlugin; cancels: () => number } {
@@ -42,6 +37,7 @@ function cancellablePlugin(): { plugin: DatasourcePlugin; cancels: () => number 
       return Promise.resolve();
     },
     close: () => Promise.resolve(),
+    serverVersion: null,
   };
   const plugin: DatasourcePlugin = {
     id: CANCELLABLE_ID,
@@ -56,18 +52,13 @@ function connectedToCancellable(plugin: DatasourcePlugin) {
   const loaded: PluginLoadResult = {
     status: "loaded",
     directory: "plugins/cancellable",
-    manifest: pluginManifestSchema.parse({
-      id: CANCELLABLE_ID,
-      name: "Cancellable",
-      version: "0.0.0",
-      apiVersion: API_VERSION,
-      entry: "index.js",
-      capabilities: ["sql", "cancel"],
-      highlight: "sql",
-    }),
+    manifest: fakeManifest({ id: CANCELLABLE_ID, name: "Cancellable", capabilities: ["sql", "cancel"] }),
     plugin,
   };
-  return createEngine({ datasource: { id: "c", pluginId: CANCELLABLE_ID, config: {} }, plugins: [loaded] }).connect();
+  return createEngine({
+    datasource: { id: "c", pluginId: CANCELLABLE_ID, config: {}, readOnly: false },
+    plugins: [loaded],
+  }).connect();
 }
 
 function connected() {
@@ -198,6 +189,32 @@ describe("engine", () => {
     expect(resultOf(response)).toMatchObject({ pluginName: "SQLite", capabilities: ["sql"] });
   });
 
+  it("givenSessionOpened_whenAnswered_thenCarriesServerVersion", async () => {
+    const response = await connected().handle({ id: 1, type: "session.open" });
+
+    expect(resultOf<{ serverVersion: string }>(response).serverVersion).toMatch(VERSION);
+  });
+
+  it("givenReadOnlyDatasource_whenWriting_thenStatementFailedWithReadOnlyHint", async () => {
+    const connection = createEngine({
+      datasource: { ...DATASOURCE, readOnly: true },
+      plugins: [LOADED_SQLITE],
+    }).connect();
+    const sessionId = await openSession(connection);
+
+    const response = await connection.handle({
+      id: 2,
+      type: "statement.execute",
+      sessionId,
+      sql: "CREATE TABLE t (n INTEGER)",
+    });
+
+    expect(response).toMatchObject({
+      type: "engine.error",
+      error: { code: "statementFailed", hint: expect.stringMatching(/read-only/) as unknown },
+    });
+  });
+
   it("givenUnreachableDatabase_whenSessionOpened_thenConnectionFailedError", async () => {
     const connection = createEngine({
       datasource: { ...DATASOURCE, config: { path: "/nonexistent-table-craft-directory/db.sqlite" } },
@@ -274,5 +291,54 @@ describe("engine", () => {
 
     expect(response).toEqual({ id: 2, type: "statement.cancel", result: null });
     expect(cancels()).toBe(0);
+  });
+});
+
+describe("probeDatasource", () => {
+  it("givenReachableDatabase_whenProbed_thenSucceedsWithVersionAndElapsed", async () => {
+    const ticks = [100, 138];
+    const result = await probeDatasource(
+      { datasource: DATASOURCE, plugins: [LOADED_SQLITE] },
+      () => ticks.shift() ?? 0,
+    );
+
+    expect(result).toMatchObject({ ok: true, pluginName: "SQLite", elapsedMs: 38 });
+    expect(result.ok && result.serverVersion).toMatch(VERSION);
+  });
+
+  it("givenUnreachableDatabase_whenProbed_thenFailsWithConnectionFailedAndHint", async () => {
+    const result = await probeDatasource({
+      datasource: { ...DATASOURCE, config: { path: "/nonexistent-table-craft-directory/db.sqlite" } },
+      plugins: [LOADED_SQLITE],
+    });
+
+    expect(result).toMatchObject({ ok: false, error: { code: "connectionFailed" } });
+    expect(!result.ok && result.error.hint).toMatch(/\S/);
+  });
+});
+
+describe("createLifetime", () => {
+  it("givenLastPortClosed_whenEngineIdle_thenEngineExits", () => {
+    let exits = 0;
+    const lifetime = createLifetime(() => {
+      exits += 1;
+    });
+    lifetime.attached();
+    lifetime.attached();
+
+    lifetime.detached();
+    expect(exits).toBe(0);
+    lifetime.detached();
+
+    expect(exits).toBe(1);
+  });
+
+  it("givenNoPortEverAttached_whenDetachedReported_thenEngineStays", () => {
+    let exits = 0;
+    createLifetime(() => {
+      exits += 1;
+    }).detached();
+
+    expect(exits).toBe(0);
   });
 });

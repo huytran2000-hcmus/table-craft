@@ -1,5 +1,13 @@
 export { CoreError, type CoreErrorCode } from "./errors.js";
-export { loadPlugins, type LoadedPlugin, type PluginLoadResult, type UnavailablePlugin } from "./plugins/loader.js";
+export {
+  discoverPlugins,
+  loadPlugins,
+  type AvailablePlugin,
+  type LoadedPlugin,
+  type PluginDiscovery,
+  type PluginLoadResult,
+  type UnavailablePlugin,
+} from "./plugins/loader.js";
 export {
   RESULT_FETCH_CAP,
   RESULT_WINDOW_ROWS,

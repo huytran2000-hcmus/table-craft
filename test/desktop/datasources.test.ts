@@ -1,0 +1,97 @@
+import { describe, expect, it } from "vitest";
+import {
+  createDatasourceStore,
+  DATASOURCES_FILE,
+  normalizeFolder,
+  toDatasource,
+} from "@table-craft/desktop/main/datasources.js";
+import type { Datasource } from "@table-craft/desktop/preload/bridge.js";
+import { POSTGRES_MANIFEST } from "../support/manifests.js";
+import { memoryFiles } from "../support/memoryFiles.js";
+
+const DIRECTORY = "/profile";
+const PATH = `${DIRECTORY}/${DATASOURCES_FILE}`;
+const NOW = 1_700_000_000_000;
+
+const LOCAL_PG: Datasource = {
+  id: "8f0c6a8e-2f0b-4f5e-9d38-2d5b8f0e6a11",
+  name: "Local PG",
+  pluginId: "postgres",
+  folder: "Docker/Main",
+  color: "red",
+  readOnly: true,
+  comment: "the compose database",
+  config: { host: "127.0.0.1", port: 55432, database: "table_craft", user: "table_craft", sslMode: "disable" },
+  secretModes: { password: "forever" },
+};
+
+function store(files = memoryFiles()) {
+  return { files, store: createDatasourceStore({ directory: DIRECTORY, files, now: () => NOW }) };
+}
+
+describe("datasource store", () => {
+  it("givenNoFile_whenLoaded_thenEmptyWithoutWarning", async () => {
+    expect(await store().store.load()).toEqual({ datasources: [], warning: null });
+  });
+
+  it("givenDatasourcesFileV1_whenLoaded_thenRoundTrips", async () => {
+    const { files, store: first } = store();
+    await first.save([LOCAL_PG]);
+
+    const reloaded = await createDatasourceStore({ directory: DIRECTORY, files }).load();
+
+    expect(JSON.parse(files.contents.get(PATH) ?? "")).toMatchObject({ version: 1 });
+    expect(reloaded).toEqual({ datasources: [LOCAL_PG], warning: null });
+  });
+
+  it("givenCorruptDatasourcesFile_whenLoaded_thenBackedUpAndEmptyListWithWarning", async () => {
+    const { files, store: corrupt } = store(memoryFiles({ [PATH]: "{ not json" }));
+
+    const loaded = await corrupt.load();
+
+    expect(loaded.datasources).toEqual([]);
+    expect(loaded.warning).toContain(`${PATH}.corrupt-${String(NOW)}`);
+    expect(files.contents.get(`${PATH}.corrupt-${String(NOW)}`)).toBe("{ not json");
+    expect(files.contents.has(PATH)).toBe(false);
+  });
+
+  it("givenFileFromNewerVersion_whenLoaded_thenSetAsideRatherThanMisread", async () => {
+    const newer = JSON.stringify({ version: 2, datasources: [] });
+    const loaded = await store(memoryFiles({ [PATH]: newer })).store.load();
+
+    expect(loaded.warning).toContain("version");
+  });
+
+  it("givenSaveWrite_whenProcessDiesMidWrite_thenPreviousFileIntact", async () => {
+    const { files, store: saving } = store();
+    await saving.save([LOCAL_PG]);
+    const before = files.contents.get(PATH);
+    files.dieDuringNextWrite();
+
+    await expect(saving.save([])).rejects.toThrow("killed mid-write");
+
+    expect(files.contents.get(PATH)).toBe(before);
+    expect((await saving.load()).datasources).toEqual([LOCAL_PG]);
+  });
+});
+
+describe("datasource records", () => {
+  it("givenMessyFolderPath_whenNormalized_thenTrimmedSlashSeparated", () => {
+    expect(normalizeFolder(" Docker / /Main/ ")).toBe("Docker/Main");
+    expect(normalizeFolder(" / ")).toBeNull();
+    expect(normalizeFolder(null)).toBeNull();
+  });
+
+  it("givenDraftCarryingSecretAndUnknownKeys_whenStored_thenOnlyDeclaredNonSecretConfigKept", () => {
+    const draft = {
+      ...LOCAL_PG,
+      name: "  Local PG ",
+      config: { ...LOCAL_PG.config, password: "hunter2", extra: "x" },
+    };
+
+    const stored = toDatasource(draft, LOCAL_PG.id, POSTGRES_MANIFEST.connection.fields);
+
+    expect(stored.config).toEqual(LOCAL_PG.config);
+    expect(stored.name).toBe("Local PG");
+  });
+});

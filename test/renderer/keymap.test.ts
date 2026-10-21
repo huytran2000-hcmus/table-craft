@@ -98,4 +98,36 @@ describe("keymap", () => {
     expect(ran).not.toHaveBeenCalled();
     expect(event.prevented()).toBe(false);
   });
+
+  it("givenShortcutScopedToDatabasePane_whenPressedInEditor_thenPassesThroughAndRunsInPane", () => {
+    const created = vi.fn();
+    const registry = createActionRegistry(() => IDLE_CONTEXT);
+    registry.register([
+      defineAction({
+        id: "new",
+        title: "New Data Source",
+        category: "Database",
+        shortcut: "Mod+N",
+        shortcutRegion: "database",
+        run: created,
+      }),
+    ]);
+    let region: "editor" | "database" = "editor";
+    const dispatch = createKeyDispatcher({
+      registry,
+      platform: "mac",
+      paletteOpen: () => false,
+      focusedRegion: () => region,
+    });
+
+    const inEditor = keydown({ key: "n", metaKey: true });
+    dispatch(inEditor);
+    region = "database";
+    const inPane = keydown({ key: "n", metaKey: true });
+    dispatch(inPane);
+
+    expect(inEditor.prevented()).toBe(false);
+    expect(inPane.prevented()).toBe(true);
+    expect(created).toHaveBeenCalledTimes(1);
+  });
 });

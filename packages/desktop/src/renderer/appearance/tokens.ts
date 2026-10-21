@@ -1,4 +1,7 @@
 /** The colours every surface draws from (decision 012). Plan 001 ships the Dark set alone. */
+/** Mirrors `DATASOURCE_COLORS` in the bridge; a datasource stores the name, the theme the value. */
+export type DatasourceTint = "red" | "orange" | "yellow" | "green" | "blue" | "violet";
+
 export interface ColorTokens {
   readonly canvas: string;
   readonly panel: string;
@@ -14,6 +17,8 @@ export interface ColorTokens {
   readonly gridStripe: string;
   /** The pressed stripe button and the hovered row; one step above `panel`. */
   readonly selection: string;
+  /** The tints a datasource can carry (decision 011): its swatch, tab and console border. */
+  readonly datasource: Readonly<Record<DatasourceTint, string>>;
 }
 
 export interface FontToken {
@@ -39,6 +44,11 @@ export interface DensityTokens {
   readonly statusBarHeightPx: number;
   readonly iconPx: number;
   readonly paletteWidthPx: number;
+  /** The Data Sources dialog. */
+  readonly dialogWidthPx: number;
+  readonly dialogHeightPx: number;
+  /** The datasource list inside it. */
+  readonly dialogListWidthPx: number;
 }
 
 export interface Appearance {
@@ -64,6 +74,14 @@ export const DARK_COLORS: ColorTokens = {
   success: "#5fb865",
   gridStripe: "#26282b",
   selection: "#2e436e",
+  datasource: {
+    red: "#c75450",
+    orange: "#d08b46",
+    yellow: "#c9ae4a",
+    green: "#5e9f62",
+    blue: "#4f80c9",
+    violet: "#9670c7",
+  },
 };
 
 export const DEFAULT_FONTS: FontTokens = {
@@ -83,6 +101,9 @@ export const COMFORTABLE_DENSITY: DensityTokens = {
   statusBarHeightPx: 24,
   iconPx: 16,
   paletteWidthPx: 576,
+  dialogWidthPx: 880,
+  dialogHeightPx: 580,
+  dialogListWidthPx: 240,
 };
 
 export const DEFAULT_APPEARANCE: Appearance = {

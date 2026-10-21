@@ -9,7 +9,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { MYSQL_CONFIG, POSTGRES_CONFIG, withWrongPassword } from "../support/databases.js";
 import {
   activeEditorTab,
-  captureWindow,
+  evidenceFor,
   datasourceStatus,
   DATABASES_ENABLED,
   editorTabs,
@@ -28,6 +28,8 @@ import {
   type Datasource,
   type RunningApp,
 } from "./harness.js";
+
+const captureWindow = evidenceFor("003");
 
 const POSTGRES: Datasource = { id: "postgres", pluginId: "postgres", config: POSTGRES_CONFIG };
 const MYSQL_WRONG_PASSWORD: Datasource = { id: "mysql", pluginId: "mysql", config: withWrongPassword(MYSQL_CONFIG) };
@@ -55,10 +57,10 @@ describe.runIf(DATABASES_ENABLED)("shell live test", () => {
     async () => {
       const page = await launchPostgres();
 
-      await expect.poll(() => datasourceStatus(page).textContent()).toBe("PostgreSQL · connected");
+      await expect.poll(() => datasourceStatus(page).textContent()).toMatch(/^postgres · connected · PostgreSQL \d/);
       const node = toolWindow(page, "Database").getByRole("treeitem");
       expect(await node.getAttribute("data-state")).toBe("connected");
-      expect(await editorTabs(page).allTextContents()).toEqual(["console"]);
+      expect(await editorTabs(page).allTextContents()).toEqual(["console [postgres]"]);
       expect(await toolWindow(page, "Services").getByRole("option").allTextContents()).toHaveLength(1);
       await captureWindow(page, "shell-default");
     },
@@ -101,8 +103,10 @@ describe.runIf(DATABASES_ENABLED)("shell live test", () => {
 
       await findAction(page, "new con");
 
-      await expect.poll(() => editorTabs(page).allTextContents()).toEqual(["console", "console_1"]);
-      expect(await activeEditorTab(page).textContent()).toBe("console_1");
+      await expect
+        .poll(() => editorTabs(page).allTextContents())
+        .toEqual(["console [postgres]", "console_1 [postgres]"]);
+      expect(await activeEditorTab(page).textContent()).toBe("console_1 [postgres]");
       await waitUntilReady(page);
       await expect.poll(() => page.evaluate(FOCUSED_LABEL)).toBe("SQL console");
       await captureWindow(page, "find-action");
@@ -144,10 +148,10 @@ describe.runIf(DATABASES_ENABLED)("shell live test", () => {
       expect(customers.headers).toContain("email");
 
       await editorTabs(page)
-        .filter({ hasText: /^console$/ })
+        .filter({ hasText: /^console \[postgres\]$/ })
         .click();
       await expect.poll(async () => (await gridText(page)).cells).toEqual(["1"]);
-      await editorTabs(page).filter({ hasText: "console_1" }).click();
+      await editorTabs(page).filter({ hasText: "console_1 " }).click();
       await expect.poll(() => gridText(page)).toEqual(customers);
 
       const consoles = toolWindow(page, "Services").getByRole("option");
@@ -164,22 +168,26 @@ describe.runIf(DATABASES_ENABLED)("shell live test", () => {
       const page = await launchPostgres();
       await pressChord(page, "Shift+L");
       await pressChord(page, "Shift+L");
-      await expect.poll(() => editorTabs(page).allTextContents()).toEqual(["console", "console_1", "console_2"]);
-      expect(await activeEditorTab(page).textContent()).toBe("console_2");
+      await expect
+        .poll(() => editorTabs(page).allTextContents())
+        .toEqual(["console [postgres]", "console_1 [postgres]", "console_2 [postgres]"]);
+      expect(await activeEditorTab(page).textContent()).toBe("console_2 [postgres]");
 
       await pressChord(page, "Shift+BracketRight");
-      await expect.poll(() => activeEditorTab(page).textContent()).toBe("console");
+      await expect.poll(() => activeEditorTab(page).textContent()).toBe("console [postgres]");
       await pressChord(page, "Shift+BracketLeft");
-      await expect.poll(() => activeEditorTab(page).textContent()).toBe("console_2");
+      await expect.poll(() => activeEditorTab(page).textContent()).toBe("console_2 [postgres]");
       await pressChord(page, "w");
-      await expect.poll(() => editorTabs(page).allTextContents()).toEqual(["console", "console_1"]);
-      expect(await activeEditorTab(page).textContent()).toBe("console_1");
+      await expect
+        .poll(() => editorTabs(page).allTextContents())
+        .toEqual(["console [postgres]", "console_1 [postgres]"]);
+      expect(await activeEditorTab(page).textContent()).toBe("console_1 [postgres]");
 
       await editorTabs(page)
-        .filter({ hasText: /^console$/ })
+        .filter({ hasText: /^console \[postgres\]$/ })
         .click({ button: "right" });
       await page.getByRole("menuitem", { name: /^Close Other Tabs/ }).click();
-      await expect.poll(() => editorTabs(page).allTextContents()).toEqual(["console"]);
+      await expect.poll(() => editorTabs(page).allTextContents()).toEqual(["console [postgres]"]);
 
       await pressChord(page, "w");
       await expect.poll(() => editorTabs(page).count()).toBe(0);
@@ -199,9 +207,11 @@ describe.runIf(DATABASES_ENABLED)("shell live test", () => {
       expect(await datasourceStatus(page).textContent()).toMatch(/Could not connect/);
 
       await pressChord(page, "Shift+A");
-      await paletteInput(page, "Find Action").fill("run");
-      const run = paletteRows(page).filter({ hasText: /^Run/ }).first();
-      expect(await run.getAttribute("aria-disabled")).toBe("true");
+      await paletteInput(page, "Find Action").fill("disconnect");
+      const disconnect = paletteRows(page)
+        .filter({ hasText: /^Disconnect/ })
+        .first();
+      expect(await disconnect.getAttribute("aria-disabled")).toBe("true");
       await captureWindow(page, "connect-failed-shell");
     },
     SCENARIO_TIMEOUT_MS,

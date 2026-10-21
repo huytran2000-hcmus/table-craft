@@ -1,11 +1,16 @@
 import postgres from "@table-craft/plugin-postgres";
 import { runPluginContract } from "@table-craft/plugin-api/testing";
 import { POSTGRES_CONFIG, withWrongPassword } from "../support/databases.js";
-import { TYPE_PROBE_EXPECTED } from "../support/typeProbe.js";
+import { POSTGRES_MANIFEST } from "../support/manifests.js";
+import { TYPE_PROBE_EXPECTED, TYPE_PROBE_WRITE } from "../support/typeProbe.js";
 
 runPluginContract(postgres, {
+  manifest: POSTGRES_MANIFEST,
   config: POSTGRES_CONFIG,
   wrongPasswordConfig: withWrongPassword(POSTGRES_CONFIG),
-  statements: { sleep: (seconds) => `SELECT pg_sleep(${String(seconds)})` },
+  statements: {
+    write: TYPE_PROBE_WRITE,
+    sleep: (seconds) => `SELECT pg_sleep(${String(seconds)})`,
+  },
   typeProbe: { expected: TYPE_PROBE_EXPECTED },
 });

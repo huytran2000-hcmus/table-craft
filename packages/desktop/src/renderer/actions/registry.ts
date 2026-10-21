@@ -1,11 +1,25 @@
 import type { Chord } from "@table-craft/desktop/renderer/actions/chords.js";
-import type { ActionContext } from "@table-craft/desktop/renderer/actions/context.js";
+import type { ActionContext, FocusRegion } from "@table-craft/desktop/renderer/actions/context.js";
 
 /** Every command the app has is one of these (decision 015): menus, palette, keymap and buttons only `invoke`. */
-export type ActionCategory = "Console" | "Editor Tabs" | "Tool Windows" | "Navigation";
+export type ActionCategory = "Console" | "Database" | "Editor Tabs" | "Tool Windows" | "Navigation";
 
 /** Names, not components, so the registry stays free of React; `ui/icons.ts` maps them. */
-export type ActionIcon = "run" | "cancel" | "newConsole" | "close" | "database" | "services" | "search";
+export type ActionIcon =
+  | "run"
+  | "cancel"
+  | "newConsole"
+  | "close"
+  | "database"
+  | "services"
+  | "search"
+  | "add"
+  | "properties"
+  | "duplicate"
+  | "delete"
+  | "connect"
+  | "disconnect"
+  | "folder";
 
 export interface Action<A = void> {
   readonly id: string;
@@ -13,6 +27,8 @@ export interface Action<A = void> {
   readonly category: ActionCategory;
   readonly icon?: ActionIcon;
   readonly shortcut?: Chord;
+  /** The shortcut works only while focus is in this region; menus, buttons and the palette still run it. */
+  readonly shortcutRegion?: FocusRegion;
   /** Whether the action can run now; absent means always. */
   readonly when?: (context: ActionContext) => boolean;
   readonly run: (context: ActionContext, args: A) => void | Promise<void>;

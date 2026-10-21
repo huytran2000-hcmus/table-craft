@@ -1,0 +1,146 @@
+import { join } from "node:path";
+import { z } from "@table-craft/plugin-api";
+import { writeAtomically, type FileSystem } from "@table-craft/desktop/main/files.js";
+import {
+  DATASOURCE_COLORS,
+  SECRET_MODES,
+  type ConnectionField,
+  type Datasource,
+  type DatasourceDraft,
+} from "@table-craft/desktop/preload/bridge.js";
+
+export const DATASOURCES_FILE = "datasources.json";
+/** Bumped with a migration in `migrate` whenever the file's shape changes (decision 010). */
+export const DATASOURCES_VERSION = 1;
+const BACKUP_SUFFIX = ".corrupt-";
+const FOLDER_SEPARATOR = "/";
+const JSON_INDENT = 2;
+
+const configValue = z.union([z.string(), z.number(), z.boolean()]);
+
+const datasourceSchema = z.strictObject({
+  id: z.string().min(1),
+  name: z.string().min(1),
+  pluginId: z.string().min(1),
+  folder: z.string().min(1).nullable(),
+  color: z.enum(DATASOURCE_COLORS).nullable(),
+  readOnly: z.boolean(),
+  comment: z.string(),
+  config: z.record(z.string(), configValue),
+  secretModes: z.record(z.string(), z.enum(SECRET_MODES)),
+}) satisfies z.ZodType<Datasource>;
+
+/** What the dialog sends; main assigns the id of a new one. */
+export const draftSchema = datasourceSchema.extend({
+  id: z.string().min(1).optional(),
+  name: z.string().trim().min(1, { message: "Give the data source a name." }),
+  folder: z.string().nullable(),
+}) satisfies z.ZodType<DatasourceDraft>;
+
+const fileSchema = z.strictObject({
+  version: z.literal(DATASOURCES_VERSION),
+  datasources: z.array(datasourceSchema),
+});
+
+export interface LoadedDatasources {
+  readonly datasources: readonly Datasource[];
+  /** Why the file was set aside, for the one-time warning; null when it read cleanly. */
+  readonly warning: string | null;
+}
+
+export interface DatasourceStore {
+  load(): Promise<LoadedDatasources>;
+  save(datasources: readonly Datasource[]): Promise<void>;
+}
+
+export interface DatasourceStoreOptions {
+  readonly directory: string;
+  readonly files: FileSystem;
+  readonly now?: () => number;
+}
+
+/**
+ * Each older version's upgrade to the next, keyed by the version it reads. Empty while version 1
+ * is the only one; a file from a newer table-craft fails validation and is set aside.
+ */
+const MIGRATIONS: ReadonlyMap<number, (file: Record<string, unknown>) => Record<string, unknown>> = new Map();
+
+function migrate(json: unknown): unknown {
+  let file = json as Record<string, unknown> | null;
+  while (typeof file?.version === "number" && MIGRATIONS.has(file.version)) {
+    file = MIGRATIONS.get(file.version)?.(file) ?? file;
+  }
+  return file;
+}
+
+/** `/`-separated, trimmed, without empty segments; null for the top level. */
+export function normalizeFolder(folder: string | null): string | null {
+  const segments = (folder ?? "")
+    .split(FOLDER_SEPARATOR)
+    .map((segment) => segment.trim())
+    .filter((segment) => segment !== "");
+  return segments.length === 0 ? null : segments.join(FOLDER_SEPARATOR);
+}
+
+/** Drops config keys the form does not declare and every secret value, whatever the renderer sent. */
+export function toDatasource(draft: DatasourceDraft, id: string, fields: readonly ConnectionField[]): Datasource {
+  const config: Record<string, Datasource["config"][string]> = {};
+  const secretModes: Record<string, Datasource["secretModes"][string]> = {};
+  for (const field of fields) {
+    if (field.secret === true) {
+      const mode = draft.secretModes[field.key];
+      if (mode !== undefined) secretModes[field.key] = mode;
+      continue;
+    }
+    const value = draft.config[field.key];
+    if (value !== undefined) config[field.key] = value;
+  }
+  return {
+    id,
+    name: draft.name.trim(),
+    pluginId: draft.pluginId,
+    folder: normalizeFolder(draft.folder),
+    color: draft.color,
+    readOnly: draft.readOnly,
+    comment: draft.comment,
+    config,
+    secretModes,
+  };
+}
+
+export function createDatasourceStore(options: DatasourceStoreOptions): DatasourceStore {
+  const path = join(options.directory, DATASOURCES_FILE);
+  const now = options.now ?? Date.now;
+
+  async function setAside(reason: string): Promise<LoadedDatasources> {
+    const backup = `${path}${BACKUP_SUFFIX}${String(now())}`;
+    await options.files.rename(path, backup);
+    return {
+      datasources: [],
+      warning: `${DATASOURCES_FILE} could not be read (${reason}). It was moved to ${backup}, and the data source list starts empty.`,
+    };
+  }
+
+  return {
+    async load() {
+      const text = await options.files.readText(path);
+      if (text === null) return { datasources: [], warning: null };
+      let json: unknown;
+      try {
+        json = JSON.parse(text);
+      } catch (cause) {
+        return setAside(`not JSON: ${cause instanceof Error ? cause.message : String(cause)}`);
+      }
+      const parsed = fileSchema.safeParse(migrate(json));
+      if (!parsed.success) {
+        const issues = parsed.error.issues.map((issue) => `${issue.path.join(".") || "(root)"}: ${issue.message}`);
+        return setAside(issues.join("; "));
+      }
+      return { datasources: parsed.data.datasources, warning: null };
+    },
+    async save(datasources) {
+      const file = { version: DATASOURCES_VERSION, datasources };
+      await writeAtomically(options.files, path, `${JSON.stringify(file, null, JSON_INDENT)}\n`);
+    },
+  };
+}

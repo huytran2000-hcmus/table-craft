@@ -13,6 +13,10 @@ export const RESULT_FETCH_CAP = 10_000;
 export const ENGINE_BOOT_MESSAGE = "engine.boot";
 /** What main posts on the engine's parent port alongside a fresh renderer port. */
 export const ENGINE_PORT_MESSAGE = "engine.port";
+/** What main posts on the engine's parent port to have it close every session and exit. */
+export const ENGINE_SHUTDOWN_MESSAGE = "engine.shutdown";
+/** What a probe engine posts on its parent port, once, before it exits. */
+export const ENGINE_PROBED_MESSAGE = "engine.probed";
 
 /** Mirrors `WireValue` in plugin-api. */
 export type WireValue =
@@ -36,18 +40,42 @@ export interface Column {
 /** Mirrors `Capability` in plugin-api. The renderer branches on these, never on a plugin id (decision 007). */
 export type Capability = "sql" | "cancel";
 
-/** The one datasource an engine host serves; main picks it (decision 018). */
+/**
+ * The one datasource an engine host serves. Main assembles it from `datasources.json` and the
+ * secret store, so `config` carries decrypted secrets and never travels to the renderer.
+ */
 export interface DatasourceConfig {
   readonly id: string;
   readonly pluginId: string;
   readonly config: unknown;
+  /** Every session asks the database to refuse writes (decision 011). */
+  readonly readOnly: boolean;
 }
+
+/** `serve` answers renderer ports until the last closes; `probe` tests one connection and exits. */
+export type EngineMode = "serve" | "probe";
 
 export interface EngineBoot {
   readonly kind: typeof ENGINE_BOOT_MESSAGE;
+  readonly mode: EngineMode;
   readonly datasource: DatasourceConfig;
   /** Directories whose subdirectories are plugins, in precedence order (decision 005). */
   readonly pluginRoots: readonly string[];
+}
+
+/** What Test Connection shows: the server that answered, or why none did. */
+export type ProbeResult =
+  | {
+      readonly ok: true;
+      readonly pluginName: string;
+      readonly serverVersion: string | null;
+      readonly elapsedMs: number;
+    }
+  | { readonly ok: false; readonly error: EngineError };
+
+export interface EngineProbed {
+  readonly kind: typeof ENGINE_PROBED_MESSAGE;
+  readonly result: ProbeResult;
 }
 
 export interface ResultWindow {
@@ -70,6 +98,8 @@ export interface OpenedSession {
   /** The datasource's plugin, by its manifest name, for display only. */
   readonly pluginName: string;
   readonly capabilities: readonly Capability[];
+  /** What the server reports about itself, for the status bar; null when it reports nothing. */
+  readonly serverVersion: string | null;
 }
 
 /** The engine's calls: what each request carries and what its response answers with. */
@@ -110,6 +140,7 @@ export type EngineErrorCode =
   | "statementFailed"
   | "cancelled"
   | "invalidRequest"
+  | "timedOut"
   | "internal";
 
 export interface EngineError {

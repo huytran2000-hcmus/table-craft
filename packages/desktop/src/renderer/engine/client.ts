@@ -6,10 +6,10 @@ import type {
   EngineResponse,
   ResultOf,
 } from "@table-craft/desktop/engine/protocol.js";
-import { ENGINE_PORT_WINDOW_MESSAGE } from "@table-craft/desktop/preload/bridge.js";
+import { ENGINE_PORT_WINDOW_MESSAGE, type EnginePortWindowMessage } from "@table-craft/desktop/preload/bridge.js";
 import { bridge } from "@table-craft/desktop/renderer/bridge.js";
 
-/** A request the engine answered with `engine.error`. */
+/** A request the engine answered with `engine.error`, or one that can no longer be answered. */
 export class EngineRequestError extends Error {
   override readonly name = "EngineRequestError";
   readonly code: EngineErrorCode;
@@ -24,6 +24,8 @@ export class EngineRequestError extends Error {
 
 export interface EngineClient {
   call<M extends EngineMethod>(type: M, params: EngineCalls[M]["params"]): Promise<ResultOf<M>>;
+  /** Rejects every pending and later call with `error` and closes the port: its engine is gone. */
+  fail(error: EngineError): void;
 }
 
 interface Pending {
@@ -31,9 +33,10 @@ interface Pending {
   reject(error: Error): void;
 }
 
-function clientFor(port: MessagePort): EngineClient {
+export function clientFor(port: MessagePort): EngineClient {
   const pending = new Map<number, Pending>();
   let nextId = 1;
+  let failure: EngineError | null = null;
 
   port.addEventListener("message", (event: MessageEvent<EngineResponse>) => {
     const response = event.data;
@@ -53,26 +56,60 @@ function clientFor(port: MessagePort): EngineClient {
 
   return {
     call(type, params) {
+      if (failure !== null) return Promise.reject(new EngineRequestError(failure));
       const id = nextId++;
       return new Promise((resolve, reject) => {
         pending.set(id, { resolve, reject });
         port.postMessage({ ...params, id, type });
       });
     },
+    fail(error) {
+      if (failure !== null) return;
+      failure = error;
+      for (const waiting of pending.values()) waiting.reject(new EngineRequestError(error));
+      pending.clear();
+      port.close();
+    },
   };
 }
 
-/** Asks main for an engine port and resolves once preload has relayed it. */
-export function connectEngine(): Promise<EngineClient> {
-  return new Promise((resolve) => {
-    function receive(event: MessageEvent<{ kind?: unknown } | null>): void {
-      if (event.source !== window || event.data?.kind !== ENGINE_PORT_WINDOW_MESSAGE) return;
-      const port = event.ports[0];
-      if (port === undefined) return;
-      window.removeEventListener("message", receive);
-      resolve(clientFor(port));
-    }
+export type EngineConnection =
+  | { readonly status: "connected"; readonly client: EngineClient }
+  | { readonly status: "needsSecrets"; readonly keys: readonly string[] }
+  | { readonly status: "failed"; readonly error: EngineError };
+
+function isPortMessage(data: unknown, datasourceId: string): data is EnginePortWindowMessage {
+  const message = data as Partial<EnginePortWindowMessage> | null;
+  return message?.kind === ENGINE_PORT_WINDOW_MESSAGE && message.datasourceId === datasourceId;
+}
+
+/**
+ * Asks main for a port to the datasource's engine. The port can arrive before main's answer, so
+ * the listener is in place first; preload relays it as a window message naming the datasource.
+ */
+export async function connectEngine(
+  datasourceId: string,
+  secrets?: Readonly<Record<string, string>>,
+): Promise<EngineConnection> {
+  let receive: ((event: MessageEvent) => void) | undefined;
+  const port = new Promise<MessagePort>((resolve) => {
+    receive = (event: MessageEvent) => {
+      if (event.source !== window || !isPortMessage(event.data, datasourceId)) return;
+      const received = event.ports[0];
+      if (received !== undefined) resolve(received);
+    };
     window.addEventListener("message", receive);
-    bridge().connectEngine();
   });
+  try {
+    const answer = await bridge().connectEngine(datasourceId, secrets);
+    if (!answer.ok) return { status: "failed", error: { code: "connectionFailed", ...answer.error } };
+    const result = answer.value;
+    if (result.status === "needsSecrets") return result;
+    if (result.status === "failed") {
+      return { status: "failed", error: { code: "connectionFailed", message: result.message, hint: result.hint } };
+    }
+    return { status: "connected", client: clientFor(await port) };
+  } finally {
+    if (receive !== undefined) window.removeEventListener("message", receive);
+  }
 }

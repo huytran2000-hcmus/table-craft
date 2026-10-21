@@ -9,6 +9,7 @@ const ENTRY_FILE = "index.mjs";
 const INCOMPATIBLE_API_VERSION = "0.99.0";
 /** Plan 002 broke the contract by adding `cancel` and `PluginError`; plugins built before it must not load. */
 const PREVIOUS_API_VERSION = "0.1.0";
+const CONNECTION = { fields: [{ key: "path", label: "Path", kind: "text" }] };
 
 function pluginSource(id: string): string {
   return `export default {
@@ -47,6 +48,7 @@ async function writePlugin(root: string, directoryName: string, files: PluginFil
     entry: ENTRY_FILE,
     capabilities: ["sql"],
     highlight: "sql",
+    connection: CONNECTION,
   };
   await writeFile(join(directory, MANIFEST_FILE), JSON.stringify(manifest));
   await writeFile(join(directory, ENTRY_FILE), files.source ?? pluginSource(files.id));
@@ -124,7 +126,13 @@ describe("loadPlugins", () => {
     const manifest = { id: "escape", name: "escape", version: "1.0.0", apiVersion: API_VERSION };
     await writeFile(
       join(directory, MANIFEST_FILE),
-      JSON.stringify({ ...manifest, entry: "../index.mjs", capabilities: ["sql"], highlight: "sql" }),
+      JSON.stringify({
+        ...manifest,
+        entry: "../index.mjs",
+        capabilities: ["sql"],
+        highlight: "sql",
+        connection: CONNECTION,
+      }),
     );
 
     const [result] = await loadPlugins([join(workspace, "builtin")]);

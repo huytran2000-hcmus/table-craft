@@ -1,15 +1,13 @@
 import { create } from "zustand";
-import {
-  RESULT_WINDOW_ROWS,
-  type Capability,
-  type Column,
-  type EngineError,
-  type Row,
-} from "@table-craft/desktop/engine/protocol.js";
-import { connectEngine, EngineRequestError, type EngineClient } from "@table-craft/desktop/renderer/engine/client.js";
+import { RESULT_WINDOW_ROWS, type Column, type EngineError, type Row } from "@table-craft/desktop/engine/protocol.js";
+import { EngineRequestError, type EngineClient } from "@table-craft/desktop/renderer/engine/client.js";
+import { useDatasources } from "@table-craft/desktop/renderer/state/datasources.js";
 
-/** One console's session: `failed` when it could not open, after which it never runs. */
-export type ConsoleStatus = "connecting" | "ready" | "running" | "failed";
+/**
+ * One console's session. `failed` when it could not open and `disconnected` when its engine went
+ * away; Run opens a new session from either.
+ */
+export type ConsoleStatus = "connecting" | "ready" | "running" | "failed" | "disconnected";
 
 export interface ShownResult {
   readonly handle: string;
@@ -27,6 +25,7 @@ export interface LastRun {
 }
 
 export interface ConsoleSession {
+  readonly datasourceId: string;
   readonly sessionId: string | null;
   readonly status: ConsoleStatus;
   readonly error: EngineError | null;
@@ -37,25 +36,16 @@ export interface ConsoleSession {
   readonly lastRun: LastRun | null;
 }
 
-export type DatasourceStatus = "connecting" | "connected" | "failed";
-
-/** What the latest session open said about the one datasource (decision 018). */
-export interface DatasourceState {
-  readonly status: DatasourceStatus;
-  readonly error: EngineError | null;
-  /** The plugin's manifest name, once a session has opened. */
-  readonly pluginName: string | null;
-  readonly capabilities: readonly Capability[];
-}
-
 export interface ConsolesState {
-  readonly datasource: DatasourceState;
   readonly consoles: Readonly<Record<string, ConsoleSession>>;
-  /** Opens a session for a new console tab. */
-  readonly open: (id: string, sql?: string) => Promise<void>;
+  /** Opens a session on `datasourceId` for a new console tab. */
+  readonly open: (id: string, datasourceId: string, sql?: string) => Promise<void>;
   /** Forgets the console and closes its session, which releases its result. */
   readonly close: (id: string) => void;
+  /** Marks the datasource's consoles disconnected; `error` says why when it was not asked for. */
+  readonly detach: (datasourceId: string, error: EngineError | null) => void;
   readonly setSql: (id: string, sql: string) => void;
+  /** Runs the console's SQL, opening a new session first when it has none. */
   readonly run: (id: string) => Promise<void>;
   /** Asks the engine to cancel the running statement; `run` then reports it as cancelled. */
   readonly cancel: (id: string) => Promise<void>;
@@ -80,25 +70,35 @@ export function rowAt(windows: ConsoleSession["windows"], index: number): Row | 
   return windows[offset]?.[index - offset];
 }
 
+/** Whether Run can start from this status; it reconnects from the last two. */
+export function canRun(status: ConsoleStatus): boolean {
+  return status === "ready" || status === "disconnected" || status === "failed";
+}
+
 export interface ConsolesDependencies {
-  /** Called once per window, on the first console: the port is one per window (decision 002). */
-  readonly connect: () => Promise<EngineClient>;
+  /** The datasource's engine, connected on first use; one port per datasource per window. */
+  readonly connect: (datasourceId: string) => Promise<EngineClient>;
   readonly now: () => number;
 }
 
-function newConsole(sql: string): ConsoleSession {
-  return { sessionId: null, status: "connecting", error: null, sql, result: null, windows: {}, lastRun: null };
+function newConsole(datasourceId: string, sql: string): ConsoleSession {
+  return {
+    datasourceId,
+    sessionId: null,
+    status: "connecting",
+    error: null,
+    sql,
+    result: null,
+    windows: {},
+    lastRun: null,
+  };
 }
 
 export function createConsolesStore(dependencies: ConsolesDependencies) {
-  let client: Promise<EngineClient> | null = null;
-  /** Window requests in flight per console; not state, because nothing renders from it. */
+  /** The client each console's session lives on; not state, because nothing renders from it. */
+  const clients = new Map<string, EngineClient>();
+  /** Window requests in flight per console. */
   const requested = new Map<string, Set<number>>();
-
-  function engine(): Promise<EngineClient> {
-    client ??= dependencies.connect();
-    return client;
-  }
 
   return create<ConsolesState>()((set, get) => {
     function patch(id: string, change: Partial<ConsoleSession>): void {
@@ -107,34 +107,34 @@ export function createConsolesStore(dependencies: ConsolesDependencies) {
       set({ consoles: { ...get().consoles, [id]: { ...current, ...change } } });
     }
 
+    /** Opens a session for the console; false when it could not, with the console marked failed. */
+    async function openSession(id: string): Promise<boolean> {
+      const current = get().consoles[id];
+      if (current === undefined) return false;
+      patch(id, { status: "connecting", error: null });
+      try {
+        const client = await dependencies.connect(current.datasourceId);
+        const opened = await client.call("session.open", {});
+        if (get().consoles[id] === undefined) {
+          // Its tab closed while the session opened.
+          void client.call("session.close", { sessionId: opened.sessionId }).catch(() => undefined);
+          return false;
+        }
+        clients.set(id, client);
+        patch(id, { sessionId: opened.sessionId, status: "ready", error: null });
+        return true;
+      } catch (cause) {
+        patch(id, { status: "failed", error: toError(cause) });
+        return false;
+      }
+    }
+
     return {
-      datasource: { status: "connecting", error: null, pluginName: null, capabilities: [] },
       consoles: {},
 
-      async open(id, sql = INITIAL_SQL) {
-        set({ consoles: { ...get().consoles, [id]: newConsole(sql) } });
-        try {
-          const engineClient = await engine();
-          const opened = await engineClient.call("session.open", {});
-          if (get().consoles[id] === undefined) {
-            // Its tab closed while the session opened.
-            void engineClient.call("session.close", { sessionId: opened.sessionId }).catch(() => undefined);
-            return;
-          }
-          set({
-            datasource: {
-              status: "connected",
-              error: null,
-              pluginName: opened.pluginName,
-              capabilities: opened.capabilities,
-            },
-          });
-          patch(id, { sessionId: opened.sessionId, status: "ready", error: null });
-        } catch (cause) {
-          const error = toError(cause);
-          set({ datasource: { ...get().datasource, status: "failed", error } });
-          patch(id, { status: "failed", error });
-        }
+      async open(id, datasourceId, sql = INITIAL_SQL) {
+        set({ consoles: { ...get().consoles, [id]: newConsole(datasourceId, sql) } });
+        await openSession(id);
       },
 
       close(id) {
@@ -143,9 +143,28 @@ export function createConsolesStore(dependencies: ConsolesDependencies) {
         const { [id]: _closed, ...rest } = get().consoles;
         set({ consoles: rest });
         requested.delete(id);
-        if (closing.sessionId === null || client === null) return;
-        const { sessionId } = closing;
-        void client.then((engineClient) => engineClient.call("session.close", { sessionId })).catch(() => undefined);
+        const client = clients.get(id);
+        clients.delete(id);
+        if (closing.sessionId === null || client === undefined) return;
+        void client.call("session.close", { sessionId: closing.sessionId }).catch(() => undefined);
+      },
+
+      detach(datasourceId, error) {
+        const consoles = { ...get().consoles };
+        let changed = false;
+        for (const [id, session] of Object.entries(consoles)) {
+          if (session.datasourceId !== datasourceId) continue;
+          clients.delete(id);
+          requested.delete(id);
+          consoles[id] = {
+            ...session,
+            sessionId: null,
+            status: error === null ? "disconnected" : "failed",
+            error: error ?? session.error,
+          };
+          changed = true;
+        }
+        if (changed) set({ consoles });
       },
 
       setSql(id, sql) {
@@ -153,17 +172,20 @@ export function createConsolesStore(dependencies: ConsolesDependencies) {
       },
 
       async run(id) {
+        const before = get().consoles[id];
+        if (before === undefined || !canRun(before.status)) return;
+        if (before.status !== "ready" && !(await openSession(id))) return;
         const current = get().consoles[id];
-        if (client === null || current?.sessionId == null || current.status !== "ready") return;
+        const client = clients.get(id);
+        if (current?.sessionId == null || current.status !== "ready" || client === undefined) return;
         const { sessionId, sql, result: previous } = current;
         const startedAt = dependencies.now();
         patch(id, { status: "running", error: null });
         const finished = (outcome: RunOutcome): LastRun => ({ durationMs: dependencies.now() - startedAt, outcome });
         try {
-          const engineClient = await client;
-          const executed = await engineClient.call("statement.execute", { sessionId, sql });
+          const executed = await client.call("statement.execute", { sessionId, sql });
           requested.get(id)?.clear();
-          if (previous !== null) void engineClient.call("result.release", { handle: previous.handle });
+          if (previous !== null) void client.call("result.release", { handle: previous.handle }).catch(() => undefined);
           const { firstWindow, ...result } = executed;
           patch(id, {
             status: "ready",
@@ -173,8 +195,10 @@ export function createConsolesStore(dependencies: ConsolesDependencies) {
           });
         } catch (cause) {
           const error = toError(cause);
+          const latest = get().consoles[id];
           patch(id, {
-            status: "ready",
+            // A detach while running already said the session is gone, and why.
+            status: latest?.status === "disconnected" || latest?.status === "failed" ? latest.status : "ready",
             error,
             lastRun: finished(error.code === "cancelled" ? "cancelled" : "failed"),
           });
@@ -183,10 +207,10 @@ export function createConsolesStore(dependencies: ConsolesDependencies) {
 
       async cancel(id) {
         const current = get().consoles[id];
-        if (client === null || current?.sessionId == null || current.status !== "running") return;
-        const { sessionId } = current;
+        const client = clients.get(id);
+        if (current?.sessionId == null || current.status !== "running" || client === undefined) return;
         try {
-          await (await client).call("statement.cancel", { sessionId });
+          await client.call("statement.cancel", { sessionId: current.sessionId });
         } catch (cause) {
           patch(id, { error: toError(cause) });
         }
@@ -194,14 +218,15 @@ export function createConsolesStore(dependencies: ConsolesDependencies) {
 
       ensureWindow(id, offset) {
         const current = get().consoles[id];
-        if (client === null || current?.result == null || offset in current.windows) return;
+        const client = clients.get(id);
+        if (current?.result == null || client === undefined || offset in current.windows) return;
         const inFlight = requested.get(id) ?? new Set<number>();
         requested.set(id, inFlight);
         if (inFlight.has(offset)) return;
         inFlight.add(offset);
         const { handle } = current.result;
         client
-          .then((engineClient) => engineClient.call("result.window", { handle, offset, limit: RESULT_WINDOW_ROWS }))
+          .call("result.window", { handle, offset, limit: RESULT_WINDOW_ROWS })
           .then((window) => {
             const latest = get().consoles[id];
             if (latest?.result?.handle !== handle) return;
@@ -216,4 +241,14 @@ export function createConsolesStore(dependencies: ConsolesDependencies) {
 
 export type ConsolesStore = ReturnType<typeof createConsolesStore>;
 
-export const useConsoles = createConsolesStore({ connect: connectEngine, now: () => performance.now() });
+export const useConsoles = createConsolesStore({
+  connect: (datasourceId) => useDatasources.getState().connect(datasourceId),
+  now: () => performance.now(),
+});
+
+/** The consoles open on a datasource, by console id. */
+export function consolesOf(consoles: ConsolesState["consoles"], datasourceId: string): readonly string[] {
+  return Object.entries(consoles)
+    .filter(([, session]) => session.datasourceId === datasourceId)
+    .map(([id]) => id);
+}

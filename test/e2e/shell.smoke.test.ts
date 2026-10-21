@@ -9,7 +9,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 import {
   activeEditorTab,
-  captureWindow,
+  evidenceFor,
   datasourceStatus,
   editorTabs,
   findAction,
@@ -22,6 +22,8 @@ import {
   waitUntilReady,
   type RunningApp,
 } from "./harness.js";
+
+const captureWindow = evidenceFor("003");
 
 /** How far the Database tool window's edge is dragged, in CSS pixels. */
 const RESIZE_DRAG_PX = 120;
@@ -62,8 +64,8 @@ describe.runIf(SMOKE_ENABLED)("shell smoke", () => {
 
       await expect.poll(() => toolWindow(page, "Database").isVisible()).toBe(true);
       expect(await toolWindow(page, "Services").isVisible()).toBe(true);
-      expect(await editorTabs(page).allTextContents()).toEqual(["console"]);
-      expect(await datasourceStatus(page).textContent()).toBe("SQLite · connected");
+      expect(await editorTabs(page).allTextContents()).toEqual(["console [scratch]"]);
+      await expect.poll(() => datasourceStatus(page).textContent()).toMatch(/^scratch · connected · SQLite \d/);
     },
     SCENARIO_TIMEOUT_MS,
   );
@@ -93,7 +95,7 @@ describe.runIf(SMOKE_ENABLED)("shell smoke", () => {
       await findAction(page, "new console");
 
       await expect.poll(() => editorTabs(page).count()).toBe(2);
-      expect(await activeEditorTab(page).textContent()).toBe("console_1");
+      expect(await activeEditorTab(page).textContent()).toBe("console_1 [scratch]");
     },
     SCENARIO_TIMEOUT_MS,
   );
