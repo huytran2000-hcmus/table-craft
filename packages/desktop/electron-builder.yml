@@ -1,0 +1,18 @@
+# How the Vite bundles become an installable app. `bun run build` produces `dist/`; electron-builder
+# only wraps it. Packaging is untested until its own plan (plan 001, out of scope).
+appId: dev.table-craft.desktop
+productName: table-craft
+
+directories:
+  output: release
+
+# Every runtime dependency is inlined by Vite, so `dist/` is the whole app.
+files:
+  - dist/**
+
+npmRebuild: false
+
+mac:
+  category: public.app-category.developer-tools
+  # Ad-hoc signing. A real identity belongs to whoever ships the build.
+  identity: null

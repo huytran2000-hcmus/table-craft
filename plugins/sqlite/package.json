@@ -1,0 +1,14 @@
+{
+  "name": "@table-craft/plugin-sqlite",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Built-in sqlite datasource plugin for table-craft",
+  "license": "MIT",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@table-craft/plugin-api": "workspace:*"
+  }
+}

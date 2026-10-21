@@ -1,0 +1,11 @@
+{
+  "name": "@table-craft/plugin-postgres",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Built-in postgres datasource plugin for table-craft",
+  "license": "MIT",
+  "type": "module",
+  "dependencies": {
+    "@table-craft/plugin-api": "workspace:*"
+  }
+}

@@ -1,0 +1,43 @@
+@import "tailwindcss";
+
+/* Values come from `appearance/apply.ts`; this file only names them for Tailwind (decision 012). */
+@theme inline {
+  --color-canvas: var(--tc-canvas);
+  --color-panel: var(--tc-panel);
+  --color-raised: var(--tc-raised);
+  --color-line: var(--tc-border);
+  --color-ink: var(--tc-ink);
+  --color-ink-muted: var(--tc-ink-muted);
+  --color-accent: var(--tc-accent);
+  --color-accent-ink: var(--tc-accent-ink);
+  --color-danger: var(--tc-danger);
+  --color-grid-stripe: var(--tc-grid-stripe);
+
+  --font-ui: var(--tc-font-ui);
+  --font-editor: var(--tc-font-editor);
+  --font-grid: var(--tc-font-grid);
+  --text-ui: var(--tc-font-ui-size);
+  --text-editor: var(--tc-font-editor-size);
+  --text-grid: var(--tc-font-grid-size);
+
+  --spacing-row: var(--tc-row-height);
+  --spacing-cell: var(--tc-cell-padding);
+  --spacing-gap: var(--tc-gap);
+  --spacing-column: var(--tc-grid-column-width);
+  --spacing-console: var(--tc-console-height);
+}
+
+html,
+body,
+#app {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  overflow: hidden;
+  background: var(--color-canvas);
+  color: var(--color-ink);
+  font-family: var(--font-ui);
+  font-size: var(--text-ui);
+}

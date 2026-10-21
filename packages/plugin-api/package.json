@@ -1,0 +1,22 @@
+{
+  "name": "@table-craft/plugin-api",
+  "version": "0.0.0",
+  "description": "The datasource plugin contract for table-craft",
+  "license": "MIT",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./testing": "./src/testing/index.ts"
+  },
+  "dependencies": {
+    "zod": "^4.1.0"
+  },
+  "peerDependencies": {
+    "vitest": "^4.1.11"
+  },
+  "peerDependenciesMeta": {
+    "vitest": {
+      "optional": true
+    }
+  }
+}

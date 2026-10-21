@@ -1,0 +1,31 @@
+{
+  "name": "@table-craft/desktop",
+  "version": "0.0.0",
+  "private": true,
+  "description": "The table-craft Electron app",
+  "license": "MIT",
+  "type": "module",
+  "dependencies": {
+    "@table-craft/core": "workspace:*",
+    "@table-craft/plugin-api": "workspace:*"
+  },
+  "main": "dist/main/main.js",
+  "scripts": {
+    "build": "vite build --config vite.plugins.config.ts && vite build --config vite.engine.config.ts && vite build --config vite.preload.config.ts && vite build --config vite.renderer.config.ts && vite build --config vite.main.config.ts",
+    "start": "electron dist/main/main.js",
+    "package": "electron-builder --config electron-builder.yml"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "^4.3.3",
+    "@tanstack/react-virtual": "^3.14.10",
+    "@types/react": "^19.2.18",
+    "@types/react-dom": "^19.2.4",
+    "@vitejs/plugin-react": "^6.1.0",
+    "electron": "^43.4.1",
+    "electron-builder": "^26.15.3",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8",
+    "tailwindcss": "^4.3.3",
+    "zustand": "^5.0.15"
+  }
+}

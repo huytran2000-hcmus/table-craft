@@ -1,0 +1,11 @@
+{
+  "name": "@table-craft/core",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Plugin loader, sessions and result sets; interface-agnostic",
+  "license": "MIT",
+  "type": "module",
+  "dependencies": {
+    "@table-craft/plugin-api": "workspace:*"
+  }
+}

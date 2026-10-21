@@ -1,0 +1,36 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2022"],
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "baseUrl": ".",
+    "paths": {
+      "@table-craft/plugin-api": ["packages/plugin-api/src/index.ts"],
+      "@table-craft/plugin-api/*": ["packages/plugin-api/src/*"],
+      "@table-craft/core": ["packages/core/src/index.ts"],
+      "@table-craft/core/*": ["packages/core/src/*"],
+      "@table-craft/desktop/*": ["packages/desktop/src/*"],
+      "@table-craft/plugin-sqlite": ["plugins/sqlite/src/index.ts"]
+    },
+    "types": ["node"],
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "noImplicitOverride": true,
+    "esModuleInterop": true,
+    "resolveJsonModule": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "noEmit": true,
+    "verbatimModuleSyntax": true
+  },
+  "include": [
+    "packages/*/src/**/*.ts",
+    "packages/*/vite.*.ts",
+    "plugins/*/src/**/*.ts",
+    "test/**/*.ts",
+    "vitest.config.ts"
+  ],
+  // The renderer targets a browser, not Node: it gets its own program, with DOM, in plan 001.
+  "exclude": ["packages/desktop/src/renderer/**", "test/renderer/**"]
+}
