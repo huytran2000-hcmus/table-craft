@@ -231,6 +231,40 @@ describe("engine", () => {
     expect(cancels()).toBe(1);
   });
 
+  it("givenOpenSession_whenClosed_thenItsHandlesAreReleased", async () => {
+    const connection = connected();
+    const closing = await openSession(connection);
+    const kept = await openSession(connection);
+    const { handle: closedHandle } = resultOf<ExecutedStatement>(
+      await connection.handle({ id: 2, type: "statement.execute", sessionId: closing, sql: "SELECT 1" }),
+    );
+    const { handle: keptHandle } = resultOf<ExecutedStatement>(
+      await connection.handle({ id: 3, type: "statement.execute", sessionId: kept, sql: "SELECT 2" }),
+    );
+
+    const closed = await connection.handle({ id: 4, type: "session.close", sessionId: closing });
+
+    expect(closed).toEqual({ id: 4, type: "session.close", result: null });
+    expect(
+      await connection.handle({ id: 5, type: "result.window", handle: closedHandle, offset: 0, limit: 1 }),
+    ).toMatchObject({ type: "engine.error", error: { code: "unknownHandle" } });
+    expect(
+      resultOf<ResultWindow>(
+        await connection.handle({ id: 6, type: "result.window", handle: keptHandle, offset: 0, limit: 1 }),
+      ).rows,
+    ).toEqual([[2]]);
+  });
+
+  it("givenClosedSession_whenExecuted_thenUnknownSessionError", async () => {
+    const connection = connected();
+    const sessionId = await openSession(connection);
+    await connection.handle({ id: 2, type: "session.close", sessionId });
+
+    const response = await connection.handle({ id: 3, type: "statement.execute", sessionId, sql: "SELECT 1" });
+
+    expect(response).toMatchObject({ id: 3, type: "engine.error", error: { code: "unknownSession" } });
+  });
+
   it("givenIdleSession_whenCancelled_thenAnswersNullWithoutCallingThePlugin", async () => {
     const { plugin, cancels } = cancellablePlugin();
     const connection = connectedToCancellable(plugin);

@@ -1,0 +1,114 @@
+import {
+  chordKey,
+  createDoubleTapDetector,
+  DOUBLE_TAP_WINDOW_MS,
+  matches,
+  parseChord,
+  type ParsedChord,
+  type Platform,
+  type TimedKey,
+} from "@table-craft/desktop/renderer/actions/chords.js";
+import type { ActionRegistry, AnyAction } from "@table-craft/desktop/renderer/actions/registry.js";
+
+/** The parts of a `KeyboardEvent` the keymap reads and acts on. */
+export interface KeyEventLike extends TimedKey {
+  readonly isComposing?: boolean;
+  preventDefault(): void;
+  stopPropagation(): void;
+}
+
+export interface KeymapOptions {
+  readonly registry: ActionRegistry;
+  readonly platform: Platform;
+  /** While the palette is open its input owns the keyboard. */
+  readonly paletteOpen: () => boolean;
+  readonly doubleTapWindowMs?: number;
+}
+
+const MODIFIER_KEYS = new Set(["Shift", "Control", "Alt", "Meta"]);
+
+/** The keydown handler: runs the action whose chord this is, if it is enabled, exactly once. */
+export function createKeyDispatcher(options: KeymapOptions): (event: KeyEventLike) => void {
+  const { registry, platform, paletteOpen } = options;
+  const doubleTaps = createDoubleTapDetector(options.doubleTapWindowMs ?? DOUBLE_TAP_WINDOW_MS);
+  const parsed = new Map<string, ParsedChord>();
+
+  function chordOf(action: AnyAction): ParsedChord | null {
+    if (action.shortcut === undefined) return null;
+    let chord = parsed.get(action.id);
+    if (chord === undefined) {
+      chord = parseChord(action.shortcut, platform);
+      parsed.set(action.id, chord);
+    }
+    return chord;
+  }
+
+  function dispatch(event: KeyEventLike, candidates: readonly AnyAction[]): void {
+    for (const action of candidates) {
+      if (registry.invoke(action.id) !== "ran") continue;
+      event.preventDefault();
+      event.stopPropagation();
+      return;
+    }
+  }
+
+  return (event) => {
+    if (event.isComposing === true) return;
+    if (paletteOpen()) {
+      doubleTaps.reset();
+      return;
+    }
+    const actions = registry.all();
+    const tapped = doubleTaps.feed(event);
+    if (tapped !== null) {
+      dispatch(
+        event,
+        actions.filter((action) => {
+          const chord = chordOf(action);
+          return chord?.kind === "doubleTap" && chord.modifier === tapped;
+        }),
+      );
+      return;
+    }
+    if (MODIFIER_KEYS.has(event.key)) return;
+    dispatch(
+      event,
+      actions.filter((action) => {
+        const chord = chordOf(action);
+        return chord !== null && matches(chord, event);
+      }),
+    );
+  };
+}
+
+/** Listens in the capture phase, so a chord reaches the registry before any focused control. */
+export function installKeymap(
+  target: Pick<Window, "addEventListener" | "removeEventListener">,
+  options: KeymapOptions,
+) {
+  const dispatcher = createKeyDispatcher(options);
+  const listener = (event: KeyboardEvent) => dispatcher(event);
+  target.addEventListener("keydown", listener, { capture: true });
+  return () => target.removeEventListener("keydown", listener, { capture: true });
+}
+
+export interface Clash {
+  readonly platform: Platform;
+  readonly chord: string;
+  readonly ids: readonly string[];
+}
+
+/** Chords two or more actions declare; the keymap test fails on any. */
+export function findClashes(actions: readonly AnyAction[]): readonly Clash[] {
+  const clashes: Clash[] = [];
+  for (const platform of ["mac", "other"] as const) {
+    const byChord = new Map<string, string[]>();
+    for (const action of actions) {
+      if (action.shortcut === undefined) continue;
+      const key = chordKey(parseChord(action.shortcut, platform));
+      byChord.set(key, [...(byChord.get(key) ?? []), action.id]);
+    }
+    for (const [chord, ids] of byChord) if (ids.length > 1) clashes.push({ platform, chord, ids });
+  }
+  return clashes;
+}

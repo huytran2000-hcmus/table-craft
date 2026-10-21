@@ -4,16 +4,24 @@ import { RESULT_WINDOW_ROWS } from "@table-craft/desktop/engine/protocol.js";
 import { DEFAULT_APPEARANCE } from "@table-craft/desktop/renderer/appearance/tokens.js";
 import { formatCell } from "@table-craft/desktop/renderer/grid/format.js";
 import { columnChars, columnTemplate } from "@table-craft/desktop/renderer/grid/widths.js";
-import { rowAt, useResults, windowOffsetOf, type ShownResult } from "@table-craft/desktop/renderer/state/results.js";
+import {
+  rowAt,
+  useConsoles,
+  windowOffsetOf,
+  type ConsoleSession,
+  type ShownResult,
+} from "@table-craft/desktop/renderer/state/consoles.js";
 
 const OVERSCAN_ROWS = 20;
 const ROW_HEIGHT_PX = DEFAULT_APPEARANCE.density.rowHeightPx;
 const PLACEHOLDER_TEXT = "…";
 const STRIPE_EVERY = 2;
 
-function Rows({ result }: { result: ShownResult }) {
-  const windows = useResults((state) => state.windows);
-  const ensureWindow = useResults((state) => state.ensureWindow);
+const NO_WINDOWS: ConsoleSession["windows"] = {};
+
+function Rows({ consoleId, result }: { consoleId: string; result: ShownResult }) {
+  const windows = useConsoles((state) => state.consoles[consoleId]?.windows ?? NO_WINDOWS);
+  const ensureWindow = useConsoles((state) => state.ensureWindow);
   const scrollRef = useRef<HTMLDivElement>(null);
   const virtualizer = useVirtualizer({
     count: result.rowCount,
@@ -27,8 +35,9 @@ function Rows({ result }: { result: ShownResult }) {
 
   useEffect(() => {
     if (first === undefined || last === undefined) return;
-    for (let offset = windowOffsetOf(first); offset <= last; offset += RESULT_WINDOW_ROWS) ensureWindow(offset);
-  }, [first, last, ensureWindow]);
+    for (let offset = windowOffsetOf(first); offset <= last; offset += RESULT_WINDOW_ROWS)
+      ensureWindow(consoleId, offset);
+  }, [first, last, consoleId, ensureWindow]);
 
   const sample = windows[0];
   const template = useMemo(() => columnTemplate(columnChars(result.columns, sample ?? [])), [result.columns, sample]);
@@ -82,14 +91,18 @@ function summaryText(result: ShownResult): string {
   return result.truncated ? `${rows} (truncated)` : rows;
 }
 
-export function ResultGrid() {
-  const result = useResults((state) => state.result);
+export function ResultGrid({ consoleId }: { consoleId: string }) {
+  const result = useConsoles((state) => state.consoles[consoleId]?.result ?? null);
   if (result === null) {
     return <div className="flex-1 p-gap text-ink-muted">Run a statement to see its result.</div>;
   }
   return (
     <div role="grid" aria-rowcount={result.rowCount} className="flex min-h-0 flex-1 flex-col">
-      {result.columns.length > 0 ? <Rows key={result.handle} result={result} /> : <div className="flex-1" />}
+      {result.columns.length > 0 ? (
+        <Rows key={result.handle} consoleId={consoleId} result={result} />
+      ) : (
+        <div className="flex-1" />
+      )}
       <div className="h-row border-t border-line bg-panel px-gap leading-(--spacing-row) text-ink-muted">
         {summaryText(result)}
       </div>

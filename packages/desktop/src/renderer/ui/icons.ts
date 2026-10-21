@@ -1,0 +1,34 @@
+import {
+  CircleNotch,
+  Database,
+  HardDrives,
+  MagnifyingGlass,
+  Minus,
+  Play,
+  Plus,
+  Stop,
+  Terminal,
+  X,
+  type Icon,
+} from "@phosphor-icons/react";
+import type { ActionIcon } from "@table-craft/desktop/renderer/actions/registry.js";
+
+/** Every glyph the app draws, in one family (Phosphor), so this file is the audit. */
+export {
+  CircleNotch as SpinnerIcon,
+  Database as DatabaseIcon,
+  HardDrives as ServicesIcon,
+  Minus as HideIcon,
+  Terminal as ConsoleIcon,
+  X as CloseIcon,
+};
+
+export const ACTION_ICONS: Readonly<Record<ActionIcon, Icon>> = {
+  run: Play,
+  cancel: Stop,
+  newConsole: Plus,
+  close: X,
+  database: Database,
+  services: HardDrives,
+  search: MagnifyingGlass,
+};

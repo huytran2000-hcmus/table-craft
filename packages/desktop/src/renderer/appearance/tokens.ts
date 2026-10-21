@@ -9,7 +9,11 @@ export interface ColorTokens {
   readonly accent: string;
   readonly accentInk: string;
   readonly danger: string;
+  /** A healthy state: the connected datasource's dot. */
+  readonly success: string;
   readonly gridStripe: string;
+  /** The pressed stripe button and the hovered row; one step above `panel`. */
+  readonly selection: string;
 }
 
 export interface FontToken {
@@ -29,6 +33,12 @@ export interface DensityTokens {
   readonly gapPx: number;
   readonly gridColumnMaxWidthPx: number;
   readonly consoleHeightPx: number;
+  /** The tool-window stripes at either edge of the window. */
+  readonly stripeWidthPx: number;
+  readonly tabHeightPx: number;
+  readonly statusBarHeightPx: number;
+  readonly iconPx: number;
+  readonly paletteWidthPx: number;
 }
 
 export interface Appearance {
@@ -51,7 +61,9 @@ export const DARK_COLORS: ColorTokens = {
   accent: "#3574f0",
   accentInk: "#ffffff",
   danger: "#f75464",
+  success: "#5fb865",
   gridStripe: "#26282b",
+  selection: "#2e436e",
 };
 
 export const DEFAULT_FONTS: FontTokens = {
@@ -66,6 +78,11 @@ export const COMFORTABLE_DENSITY: DensityTokens = {
   gapPx: 8,
   gridColumnMaxWidthPx: 320,
   consoleHeightPx: 128,
+  stripeWidthPx: 36,
+  tabHeightPx: 32,
+  statusBarHeightPx: 24,
+  iconPx: 16,
+  paletteWidthPx: 576,
 };
 
 export const DEFAULT_APPEARANCE: Appearance = {

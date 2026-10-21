@@ -11,7 +11,9 @@
   --color-accent: var(--tc-accent);
   --color-accent-ink: var(--tc-accent-ink);
   --color-danger: var(--tc-danger);
+  --color-success: var(--tc-success);
   --color-grid-stripe: var(--tc-grid-stripe);
+  --color-selection: var(--tc-selection);
 
   --font-ui: var(--tc-font-ui);
   --font-editor: var(--tc-font-editor);
@@ -25,6 +27,11 @@
   --spacing-gap: var(--tc-gap);
   --spacing-column-max: var(--tc-grid-column-max-width);
   --spacing-console: var(--tc-console-height);
+  --spacing-stripe: var(--tc-stripe-width);
+  --spacing-tab: var(--tc-tab-height);
+  --spacing-status-bar: var(--tc-status-bar-height);
+  --spacing-icon: var(--tc-icon);
+  --spacing-palette: var(--tc-palette-width);
 }
 
 html,
@@ -32,6 +39,11 @@ body,
 #app {
   height: 100%;
   margin: 0;
+}
+
+html {
+  /* Native scrollbars and form controls follow the dark theme. */
+  color-scheme: dark;
 }
 
 body {

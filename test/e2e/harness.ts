@@ -3,8 +3,9 @@
  * grid, and save window screenshots as plan evidence (decision 016). Needs a fresh build of
  * `packages/desktop` and a display.
  */
-import { mkdirSync } from "node:fs";
+import { mkdirSync, mkdtempSync } from "node:fs";
 import { createRequire } from "node:module";
+import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { _electron, type ElectronApplication, type Page } from "playwright-core";
 import { expect } from "vitest";
@@ -22,9 +23,11 @@ const REPOSITORY_ROOT = resolve(import.meta.dirname, "../..");
 const DESKTOP_ROOT = join(REPOSITORY_ROOT, "packages/desktop");
 const MAIN_ENTRY = join(DESKTOP_ROOT, "dist/main/main.js");
 const DATASOURCE_ENV = "TABLE_CRAFT_DATASOURCE";
+const USER_DATA_ENV = "TABLE_CRAFT_USER_DATA";
+const USER_DATA_PREFIX = "table-craft-smoke-";
 
-/** Small enough to keep evidence PNGs light, wide enough for the `type_probe` columns. */
-export const EVIDENCE_WINDOW = { width: 1280, height: 300 } as const;
+/** The window's default size, so evidence shows the whole shell (plan 003). */
+export const EVIDENCE_WINDOW = { width: 1200, height: 800 } as const;
 
 export interface Datasource {
   readonly id: string;
@@ -35,6 +38,13 @@ export interface Datasource {
 export interface RunningApp {
   readonly app: ElectronApplication;
   readonly page: Page;
+  /** The profile directory; pass it to `launchApp` again to relaunch with the same layout. */
+  readonly userDataDir: string;
+}
+
+export interface LaunchOptions {
+  /** Defaults to a fresh temporary directory, so nothing persists between launches. */
+  readonly userDataDir?: string;
 }
 
 export interface GridText {
@@ -48,13 +58,15 @@ function electronBinary(): string {
 }
 
 /** Launches the app; without a datasource it opens the in-memory SQLite scratch database. */
-export async function launchApp(datasource?: Datasource): Promise<RunningApp> {
+export async function launchApp(datasource?: Datasource, options: LaunchOptions = {}): Promise<RunningApp> {
   const env = { ...process.env } as Record<string, string>;
   delete env[DATASOURCE_ENV];
   if (datasource !== undefined) env[DATASOURCE_ENV] = JSON.stringify(datasource);
+  const userDataDir = options.userDataDir ?? mkdtempSync(join(tmpdir(), USER_DATA_PREFIX));
+  env[USER_DATA_ENV] = userDataDir;
   const app = await _electron.launch({ executablePath: electronBinary(), args: [MAIN_ENTRY], env });
   const page = await app.firstWindow();
-  return { app, page };
+  return { app, page, userDataDir };
 }
 
 export async function setWindowSize(app: ElectronApplication, size: { width: number; height: number }): Promise<void> {
@@ -63,16 +75,25 @@ export async function setWindowSize(app: ElectronApplication, size: { width: num
   }, size);
 }
 
+/** Exact, because other controls' names contain "Run" (e.g. a palette row "Run ⌘↩"). */
+export function runButton(page: Page) {
+  return page.getByRole("button", { name: "Run", exact: true });
+}
+
+export function cancelButton(page: Page) {
+  return page.getByRole("button", { name: "Cancel", exact: true });
+}
+
 /** Resolves once the session is open and Run is enabled. */
 export async function waitUntilReady(page: Page): Promise<void> {
-  const run = page.getByRole("button", { name: "Run" });
+  const run = runButton(page);
   await expect.poll(() => run.isEnabled(), { timeout: LAUNCH_TIMEOUT_MS }).toBe(true);
 }
 
 /** Types `sql` into the console and presses Run, without waiting for the answer. */
 export async function startStatement(page: Page, sql: string): Promise<void> {
   await page.getByLabel("SQL console").fill(sql);
-  await page.getByRole("button", { name: "Run" }).click();
+  await runButton(page).click();
 }
 
 /** Runs a row-returning or failing `sql` and resolves once its grid or its error is shown. */
@@ -91,6 +112,49 @@ export async function gridText(page: Page): Promise<GridText> {
 
 export function consoleAlert(page: Page) {
   return page.getByRole("alert");
+}
+
+/** A tool window by title, e.g. "Database"; absent from the page while hidden. */
+export function toolWindow(page: Page, title: string) {
+  return page.getByRole("region", { name: title, exact: true });
+}
+
+export function editorTabs(page: Page) {
+  return page.getByRole("tablist", { name: "Editor tabs" }).getByRole("tab");
+}
+
+export function activeEditorTab(page: Page) {
+  return page.getByRole("tablist", { name: "Editor tabs" }).getByRole("tab", { selected: true });
+}
+
+export function datasourceStatus(page: Page) {
+  return page.getByTestId("status-datasource");
+}
+
+/** Presses a chord with the platform's Mod (⌘ on macOS, Ctrl elsewhere), e.g. `pressChord(page, "Shift+A")`. */
+export async function pressChord(page: Page, keys: string): Promise<void> {
+  await page.keyboard.press(`ControlOrMeta+${keys}`);
+}
+
+/** Two Shift taps, well inside the double-tap window. */
+export async function pressDoubleShift(page: Page): Promise<void> {
+  await page.keyboard.press("Shift");
+  await page.keyboard.press("Shift");
+}
+
+export function paletteInput(page: Page, mode: "Find Action" | "Search Everywhere") {
+  return page.getByRole("textbox", { name: mode, exact: true });
+}
+
+export function paletteRows(page: Page) {
+  return page.getByRole("listbox", { name: "Results" }).getByRole("option");
+}
+
+/** Opens Find Action, types `query` and runs the top result. */
+export async function findAction(page: Page, query: string): Promise<void> {
+  await pressChord(page, "Shift+A");
+  await paletteInput(page, "Find Action").fill(query);
+  await page.keyboard.press("Enter");
 }
 
 /** Saves the window as `<EVIDENCE_DIR>/<name>.png` at CSS pixel scale, when evidence is wanted. */

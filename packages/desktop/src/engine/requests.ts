@@ -8,6 +8,7 @@ const sessionId = z.string().min(1);
 /** The renderer is untrusted input: every request is parsed before it is routed. */
 export const engineRequestSchema = z.discriminatedUnion("type", [
   z.strictObject({ id: requestId, type: z.literal("session.open") }),
+  z.strictObject({ id: requestId, type: z.literal("session.close"), sessionId }),
   z.strictObject({
     id: requestId,
     type: z.literal("statement.execute"),

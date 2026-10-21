@@ -1,6 +1,17 @@
 # Plan: Build the DataGrip-shaped shell on one action registry
 
-Status: not started
+Status: done. The window is now DataGrip's shell: Database on the left, editor tabs in the middle,
+Services at the bottom, an empty right stripe and a status bar, laid out with
+`react-resizable-panels` and remembered across launches. Fourteen actions live in one registry, and
+the buttons, the keymap, the tab context menu, Find Action / Search Everywhere and the native menu
+all run them through the same `invoke`. Each console tab owns its own engine session, and closing
+the tab sends the new `session.close`. All nine live-test rows passed against PostgreSQL, MySQL and
+SQLite on the first run of the finished scenarios; looking at the screenshots found no bug, but it
+showed that a datasource whose connect fails is drawn as "Datasource", because the renderer only
+learns the plugin name from a successful `session.open` (left for plan 004). Reality differed in
+where renderer tests live (`test/renderer/`, a third typecheck program), in a profile-directory
+seam for the smoke runs, and in tab cycling being "select next", as DataGrip does, rather than
+reordering.
 
 ## The issue
 
@@ -169,23 +180,48 @@ Run the built app with `TABLE_CRAFT_DATASOURCE` against the `test:db` Postgres u
 otherwise, drive it with the harness in `test/e2e/harness.ts`, and save one PNG per row to
 `docs/evidence/003/`. Capture at the window's full 1200×800 so the shell is visible.
 
-| #   | Scenario                                                                                                                                                     | Database | Result | Evidence                   |
-| --- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ | -------- | ------ | -------------------------- |
-| 1   | Launch: Database left with the datasource node, editor with one console tab, Services bottom, status bar "PostgreSQL · connected"                            | postgres |        | `shell-default.png`        |
-| 2   | `⌘1` hides Database, `⌘8` hides Services, `⌘⇧F12` hides all, `⌘1` brings Database back — each toggles exactly once                                           | postgres |        | `shell-tool-windows.png`   |
-| 3   | `⌘⇧A`, type `new con`, Enter: second console tab opens and is active                                                                                         | postgres |        | `find-action.png`          |
-| 4   | `⇧⇧` opens Search Everywhere on `All`; `Actions` tab lists actions with shortcuts; a disabled action is greyed                                               | postgres |        | `search-everywhere.png`    |
-| 5   | Two consoles: run `SELECT 1` in tab 1 and `SELECT * FROM customers` in tab 2; switching tabs shows each one's own result; Services lists both with durations | postgres |        | `two-consoles.png`         |
-| 6   | `⌘⇧]` / `⌘⇧[` cycle tabs, `⌘W` closes, tab context menu "Close Others"; closing the last shows the empty state                                               | postgres |        | `tabs.png`                 |
-| 7   | Native menu View ▸ Tool Windows ▸ Services toggles Services once (via `Menu.getApplicationMenu()` in `electronApp.evaluate`)                                 | sqlite   |        | `menu-dispatch.png`        |
-| 8   | Resize Database and close Services, relaunch: layout restored                                                                                                | sqlite   |        | `layout-restored.png`      |
-| 9   | Wrong password: status bar shows the connect error, `Run` greyed in Find Action, Database node marked failed                                                 | mysql    |        | `connect-failed-shell.png` |
+| #   | Scenario                                                                                                                                                     | Database | Result                                                                                                                                                                                                                                                                     | Evidence                   |
+| --- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ | -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------- |
+| 1   | Launch: Database left with the datasource node, editor with one console tab, Services bottom, status bar "PostgreSQL · connected"                            | postgres | Pass. Datasource node "PostgreSQL · connected", tab `console`, Services lists it idle, status bar "PostgreSQL · connected"                                                                                                                                                 | `shell-default.png`        |
+| 2   | `⌘1` hides Database, `⌘8` hides Services, `⌘⇧F12` hides all, `⌘1` brings Database back — each toggles exactly once                                           | postgres | Pass. Each chord toggled once (state asserted after every press, so a double dispatch would show as no change); `⌘⇧F12` hid both, `⌘1` then brought Database back alone                                                                                                    | `shell-tool-windows.png`   |
+| 3   | `⌘⇧A`, type `new con`, Enter: second console tab opens and is active                                                                                         | postgres | Pass. `console_1` opened, active, with focus in its SQL console                                                                                                                                                                                                            | `find-action.png`          |
+| 4   | `⇧⇧` opens Search Everywhere on `All`; `Actions` tab lists actions with shortcuts; a disabled action is greyed                                               | postgres | Pass. Opened on `All`; `Actions` lists all 14 with shortcuts (`⇧⌘A`, `⇧⇧`, …); Cancel, Close Other Tabs, Select Next/Previous Tab and Back to Editor greyed                                                                                                                | `search-everywhere.png`    |
+| 5   | Two consoles: run `SELECT 1` in tab 1 and `SELECT * FROM customers` in tab 2; switching tabs shows each one's own result; Services lists both with durations | postgres | Pass. Tab 1 kept `1`, tab 2 kept the two customers; Services shows both idle, 6 ms and 28 ms                                                                                                                                                                               | `two-consoles.png`         |
+| 6   | `⌘⇧]` / `⌘⇧[` cycle tabs, `⌘W` closes, tab context menu "Close Others"; closing the last shows the empty state                                               | postgres | Pass. Cycling wraps both ways, `⌘W` on the rightmost tab activated its left neighbour `console_1`, Close Other Tabs left `console`, the last `⌘W` shows "No open consoles. Press ⇧⌘L…"                                                                                     | `tabs.png`                 |
+| 7   | Native menu View ▸ Tool Windows ▸ Services toggles Services once (via `Menu.getApplicationMenu()` in `electronApp.evaluate`)                                 | sqlite   | Pass. One click hid Services, a second showed it again                                                                                                                                                                                                                     | `menu-dispatch.png`        |
+| 8   | Resize Database and close Services, relaunch: layout restored                                                                                                | sqlite   | Pass. Database dragged 120 px wider and Services closed; after relaunch on the same profile both were restored to within 2 px                                                                                                                                              | `layout-restored.png`      |
+| 9   | Wrong password: status bar shows the connect error, `Run` greyed in Find Action, Database node marked failed                                                 | mysql    | Pass. Status bar and console show MySQL's "Could not connect: Access denied…", the node is red "failed", `Run` greyed in Find Action. The node reads "Datasource", not "MySQL": the plugin name only arrives with a successful `session.open` — plan 004 names datasources | `connect-failed-shell.png` |
 
 Bugs found here are fixed in this plan with a regression test, and the row says so.
 
 ---
 
 ## Deviations taken while implementing
+
+- **Renderer tests live in `test/renderer/`, not `test/desktop/`.** The root program has no DOM lib
+  and excludes the renderer; `test/renderer/tsconfig.json` (DOM, JSX) is a third `typecheck`
+  program, as in `../preman`. There is no jsdom: the keymap tests feed fake key events and targets.
+  `test/desktop/engine.test.ts` gained `session.close` as planned.
+- **`tab.next` / `tab.previous` select the neighbouring tab, wrapping**, rather than reordering
+  (decision 12). DataGrip's `⇧⌘]` / `⇧⌘[` are Select Next/Previous Tab; reordering waits for drag.
+- **macOS shortcuts are formatted in Apple's modifier order**, `⌃⌥⇧⌘`, so Find Action reads `⇧⌘A`,
+  as macOS menus and DataGrip show it, not the plan's `⌘⇧A`. The test
+  `givenModShiftA_whenFormattedOnMac_thenReadsCmdShiftA` asserts `⇧⌘A`.
+- **`TABLE_CRAFT_USER_DATA` sets the profile directory.** The harness gives every launch a fresh
+  temporary profile, so the persisted layout cannot leak between smoke runs, and relaunches on the
+  same one for live-test row 8. A test seam like decision 018; unset means the usual userData path.
+- **Menu shape.** Help is a submenu with Find Action… (Electron's `help` role adds nothing useful
+  here). View also carries Toggle Developer Tools. The Window role is macOS-only: elsewhere it adds
+  Close with a registered `Ctrl+W`, which would close the window instead of the tab.
+- **Shortcuts are matched on `KeyboardEvent.code`**, so `⇧⌘]` still matches when Shift turns the key
+  into `}` and on non-US layouts' physical keys.
+- **The palette's width is a token** (`density.paletteWidthPx`), not preman's literal `36rem`.
+- **Live-test row 2 toggles each tool window off and back on** before `⌘⇧F12`, because with both
+  already hidden Hide All restores what it last hid instead of hiding.
+- **Live-test rows run as Vitest scenarios** in `test/e2e/shell.smoke.test.ts` (SQLite rows 7, 8 plus
+  the three planned smoke cases) and `test/e2e/shell.databases.smoke.test.ts` (PostgreSQL rows 1–6,
+  MySQL row 9). Playwright's keys are synthesised in the renderer, so they prove the keymap runs a
+  chord once but not what macOS's native key-equivalent path does with a real keypress.
 
 ---
 

@@ -171,6 +171,9 @@ handles belong to the port that created them and are released when it closes.
 | `statement.cancel`  | `sessionId`                 | `null`; stops the running statement, a no-op when idle                |
 | `result.window`     | `handle`, `offset`, `limit` | `{ offset, rows }`, at most `RESULT_WINDOW_ROWS` rows                 |
 | `result.release`    | `handle`                    | `null`; releasing twice is not an error                               |
+| `session.close`     | `sessionId`                 | `null`; releases the session's handles, then closes it                |
+
+A statement still running when its session closes is answered with `unknownSession`.
 
 | Constant             | Value  | Meaning                                                   |
 | -------------------- | ------ | --------------------------------------------------------- |
@@ -194,6 +197,59 @@ was unreadable. `hint` says what to do next.
 | `cancelled`         | `statement.cancel` stopped the statement                             |
 | `invalidRequest`    | The request did not parse, or cancels on a plugin without `cancel`   |
 | `internal`          | Anything else; a bug                                                 |
+
+## Shell and actions
+
+One window (decision 010), laid out the way DataGrip is (`datagrip-inventory.md` §1): a left
+stripe and the Database tool window, the editor's tabs in the middle, the Services tool window at
+the bottom, an empty right stripe, and a status bar. Which tool windows are open and their sizes
+persist in the renderer's `localStorage` under `table-craft.layout.v1`; a value that does not parse
+falls back to the default layout.
+
+Each console tab owns an engine session; closing the tab sends `session.close`. The Database tool
+window shows the datasource as one node with its plugin name and connection state; Services lists
+the open consoles as idle, running or failed with the last statement's duration. The status bar
+shows "PostgreSQL · connected", or the connect error's message, on the left and a running
+indicator on the right; later plans add items to its slot list (`renderer/shell/statusItems.tsx`).
+
+Every command is an action in one registry (decision 015, `renderer/actions/`). Buttons, the
+keymap, the palette and the native menu all call `invoke(id, args?)`, which answers `ran`,
+`disabled` or `unknown`. An action's `when(context)` decides whether it is enabled from a snapshot
+of the stores; a disabled action shows greyed and does not run.
+
+| Action id                    | Title                 | macOS   | Windows / Linux  |
+| ---------------------------- | --------------------- | ------- | ---------------- |
+| `console.run`                | Run                   | `⌘↩`    | `Ctrl+Enter`     |
+| `console.cancel`             | Cancel                |         |                  |
+| `console.new`                | New Console           | `⇧⌘L`   | `Ctrl+Shift+L`   |
+| `tab.close`                  | Close Tab             | `⌘W`    | `Ctrl+W`         |
+| `tab.closeOthers`            | Close Other Tabs      |         |                  |
+| `tab.closeAll`               | Close All Tabs        |         |                  |
+| `tab.next`                   | Select Next Tab       | `⇧⌘]`   | `Ctrl+Shift+]`   |
+| `tab.previous`               | Select Previous Tab   | `⇧⌘[`   | `Ctrl+Shift+[`   |
+| `toolWindow.database.toggle` | Database              | `⌘1`    | `Ctrl+1`         |
+| `toolWindow.services.toggle` | Services              | `⌘8`    | `Ctrl+8`         |
+| `toolWindow.hideAll`         | Hide All Tool Windows | `⇧⌘F12` | `Ctrl+Shift+F12` |
+| `focus.editor`               | Back to Editor        | `⎋`     | `Esc`            |
+| `palette.findAction`         | Find Action…          | `⇧⌘A`   | `Ctrl+Shift+A`   |
+| `palette.searchEverywhere`   | Search Everywhere     | `⇧⇧`    | Double Shift     |
+
+Shortcuts are declared as platform-neutral chords (`Mod+Shift+A`, `Shift Shift`) and dispatched by
+one capture-phase `keydown` listener on the window. A chord whose action is disabled reaches the
+focused element; no two actions share a chord (a unit test checks the registry). While the palette
+is open the keymap stands aside. Hide All Tool Windows restores what it hid when pressed again with
+nothing open. Back to Editor applies only with focus in a tool window.
+
+Find Action (`⇧⌘A`) and Search Everywhere (`⇧⇧`) are one palette. Search Everywhere has scope tabs,
+`All` and `Actions`, fed by `SearchProvider`s (`renderer/palette/providers.ts`); `Tab` moves between
+them. Results are ranked by an in-house fuzzy scorer, and with an empty query the most recently
+run actions come first.
+
+The native menu is declared in `preload/menu.ts` and built by main: File (New Console, Close Tab),
+Edit (role), View (Tool Windows ▸ Database, Services; Hide All Tool Windows; Find Action…; Search
+Everywhere; Toggle Developer Tools), Window (role, macOS only), Help (Find Action…). An item shows its
+action's accelerator with `registerAccelerator: false` and, when clicked, sends the action id to
+the renderer on `table-craft:invoke-action`; main never decides whether an action is enabled.
 
 ## Storage
 

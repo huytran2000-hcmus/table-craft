@@ -12,12 +12,14 @@ import { MYSQL_CONFIG, POSTGRES_CONFIG, withWrongPassword } from "../support/dat
 import { seededSqliteFile } from "../support/sqliteFixture.js";
 import { TYPE_PROBE_EXPECTED } from "../support/typeProbe.js";
 import {
+  cancelButton,
   captureWindow,
   consoleAlert,
   DATABASES_ENABLED,
   EVIDENCE_WINDOW,
   gridText,
   launchApp,
+  runButton,
   runStatement,
   SCENARIO_TIMEOUT_MS,
   setWindowSize,
@@ -101,7 +103,7 @@ describe.runIf(DATABASES_ENABLED)("desktop against real databases", () => {
 
         expect(await gridText(page)).toEqual({ headers: TYPE_PROBE_HEADERS, cells: TYPE_PROBE_CELLS });
         const cancelButtons = target.sleepSql === undefined ? 0 : 1;
-        expect(await page.getByRole("button", { name: "Cancel" }).count()).toBe(cancelButtons);
+        expect(await cancelButton(page).count()).toBe(cancelButtons);
         await captureWindow(page, `${target.name}-type-probe`);
       },
       SCENARIO_TIMEOUT_MS,
@@ -128,7 +130,7 @@ describe.runIf(DATABASES_ENABLED)("desktop against real databases", () => {
       async () => {
         const { page } = await open(target.datasource());
         await waitUntilReady(page);
-        const cancel = page.getByRole("button", { name: "Cancel" });
+        const cancel = cancelButton(page);
 
         await startStatement(page, target.sleepSql ?? "");
         await expect.poll(() => cancel.isEnabled()).toBe(true);
@@ -156,7 +158,7 @@ describe.runIf(DATABASES_ENABLED)("desktop against real databases", () => {
         await consoleAlert(page).waitFor({ timeout: SCENARIO_TIMEOUT_MS });
 
         expect(await consoleAlert(page).textContent()).toContain("Could not connect");
-        expect(await page.getByRole("button", { name: "Run" }).isEnabled()).toBe(false);
+        expect(await runButton(page).isEnabled()).toBe(false);
         await captureWindow(page, `${target.name}-wrong-password`);
       },
       SCENARIO_TIMEOUT_MS,

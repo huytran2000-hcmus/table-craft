@@ -1,18 +1,36 @@
 import { useEffect } from "react";
-import { Console } from "@table-craft/desktop/renderer/console/Console.js";
-import { ResultGrid } from "@table-craft/desktop/renderer/grid/ResultGrid.js";
-import { useResults } from "@table-craft/desktop/renderer/state/results.js";
+import { ACTION_IDS } from "@table-craft/desktop/renderer/actions/appActions.js";
+import { currentPlatform } from "@table-craft/desktop/renderer/actions/chords.js";
+import { invoke, registry } from "@table-craft/desktop/renderer/actions/index.js";
+import { installKeymap } from "@table-craft/desktop/renderer/actions/keymap.js";
+import { bridge } from "@table-craft/desktop/renderer/bridge.js";
+import { Palette } from "@table-craft/desktop/renderer/palette/Palette.js";
+import { Shell } from "@table-craft/desktop/renderer/shell/Shell.js";
+import { usePalette } from "@table-craft/desktop/renderer/state/palette.js";
+import { useTabs } from "@table-craft/desktop/renderer/state/tabs.js";
+import { TooltipProvider } from "@table-craft/desktop/renderer/ui/Tooltip.js";
 
 export function App() {
-  const connect = useResults((state) => state.connect);
+  useEffect(
+    () =>
+      installKeymap(window, {
+        registry,
+        platform: currentPlatform(),
+        paletteOpen: () => usePalette.getState().mode !== null,
+      }),
+    [],
+  );
+
+  useEffect(() => bridge().onInvokeAction((actionId) => invoke(actionId)), []);
+
   useEffect(() => {
-    void connect();
-  }, [connect]);
+    if (useTabs.getState().tabs.length === 0) invoke(ACTION_IDS.newConsole);
+  }, []);
 
   return (
-    <main className="flex h-full flex-col bg-canvas text-ink">
-      <Console />
-      <ResultGrid />
-    </main>
+    <TooltipProvider>
+      <Shell />
+      <Palette />
+    </TooltipProvider>
   );
 }

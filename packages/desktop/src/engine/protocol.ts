@@ -75,6 +75,8 @@ export interface OpenedSession {
 /** The engine's calls: what each request carries and what its response answers with. */
 export interface EngineCalls {
   "session.open": { params: Record<never, never>; result: OpenedSession };
+  /** Closes the session and releases every result it produced. */
+  "session.close": { params: { readonly sessionId: string }; result: null };
   "statement.execute": { params: { readonly sessionId: string; readonly sql: string }; result: ExecutedStatement };
   /** Cancels the statement running in the session, if any; its `statement.execute` fails with `cancelled`. */
   "statement.cancel": { params: { readonly sessionId: string }; result: null };

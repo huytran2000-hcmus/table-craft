@@ -6,7 +6,8 @@ import type {
   EngineResponse,
   ResultOf,
 } from "@table-craft/desktop/engine/protocol.js";
-import { BRIDGE_KEY, ENGINE_PORT_WINDOW_MESSAGE, type TableCraftBridge } from "@table-craft/desktop/preload/bridge.js";
+import { ENGINE_PORT_WINDOW_MESSAGE } from "@table-craft/desktop/preload/bridge.js";
+import { bridge } from "@table-craft/desktop/renderer/bridge.js";
 
 /** A request the engine answered with `engine.error`. */
 export class EngineRequestError extends Error {
@@ -28,10 +29,6 @@ export interface EngineClient {
 interface Pending {
   resolve(result: unknown): void;
   reject(error: Error): void;
-}
-
-function bridge(): TableCraftBridge {
-  return (window as unknown as Record<typeof BRIDGE_KEY, TableCraftBridge>)[BRIDGE_KEY];
 }
 
 function clientFor(port: MessagePort): EngineClient {

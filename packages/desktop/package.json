@@ -16,6 +16,10 @@
     "package": "electron-builder --config electron-builder.yml"
   },
   "devDependencies": {
+    "@phosphor-icons/react": "^2.1.10",
+    "@radix-ui/react-context-menu": "^2.3.7",
+    "@radix-ui/react-dialog": "^1.1.23",
+    "@radix-ui/react-tooltip": "^1.2.16",
     "@tailwindcss/vite": "^4.3.3",
     "@tanstack/react-virtual": "^3.14.10",
     "@types/react": "^19.2.18",
@@ -25,6 +29,7 @@
     "electron-builder": "^26.15.3",
     "react": "^19.2.8",
     "react-dom": "^19.2.8",
+    "react-resizable-panels": "^4.12.3",
     "tailwindcss": "^4.3.3",
     "zustand": "^5.0.15"
   }

@@ -13,7 +13,9 @@ export function appearanceVariables(appearance: Appearance): Readonly<Record<str
     "--tc-accent": colors.accent,
     "--tc-accent-ink": colors.accentInk,
     "--tc-danger": colors.danger,
+    "--tc-success": colors.success,
     "--tc-grid-stripe": colors.gridStripe,
+    "--tc-selection": colors.selection,
     "--tc-font-ui": fonts.ui.family,
     "--tc-font-ui-size": `${fonts.ui.sizePx}px`,
     "--tc-font-editor": fonts.editor.family,
@@ -25,6 +27,11 @@ export function appearanceVariables(appearance: Appearance): Readonly<Record<str
     "--tc-gap": `${density.gapPx}px`,
     "--tc-grid-column-max-width": `${density.gridColumnMaxWidthPx}px`,
     "--tc-console-height": `${density.consoleHeightPx}px`,
+    "--tc-stripe-width": `${density.stripeWidthPx}px`,
+    "--tc-tab-height": `${density.tabHeightPx}px`,
+    "--tc-status-bar-height": `${density.statusBarHeightPx}px`,
+    "--tc-icon": `${density.iconPx}px`,
+    "--tc-palette-width": `${density.paletteWidthPx}px`,
   };
 }
 

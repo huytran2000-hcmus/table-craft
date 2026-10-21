@@ -98,7 +98,16 @@ export function createEngine(options: EngineOptions): Engine {
 
   function connect(): EngineConnection {
     const sessions = new Map<string, OpenSession>();
-    const handles = new Set<string>();
+    /** Each live result handle, mapped to the session that produced it. */
+    const handles = new Map<string, string>();
+
+    function releaseHandlesOf(sessionId: string): void {
+      for (const [handle, owner] of handles) {
+        if (owner !== sessionId) continue;
+        handles.delete(handle);
+        results.release(handle);
+      }
+    }
 
     function sessionFor(sessionId: string): OpenSession {
       const session = sessions.get(sessionId);
@@ -134,6 +143,13 @@ export function createEngine(options: EngineOptions): Engine {
         sessions.set(sessionId, { session, capabilities: plugin.capabilities, running: 0 });
         return { sessionId, pluginName: plugin.name, capabilities: plugin.capabilities };
       },
+      "session.close": async ({ sessionId }) => {
+        const open = sessionFor(sessionId);
+        sessions.delete(sessionId);
+        releaseHandlesOf(sessionId);
+        await open.session.close();
+        return null;
+      },
       "statement.execute": async ({ sessionId, sql }) => {
         const open = sessionFor(sessionId);
         open.running += 1;
@@ -144,7 +160,12 @@ export function createEngine(options: EngineOptions): Engine {
             .catch((cause: unknown) => {
               throw statementFailed(cause);
             });
-          handles.add(summary.handle);
+          if (sessions.get(sessionId) !== open) {
+            // The session closed while the statement ran; nobody is left to release this result.
+            results.release(summary.handle);
+            sessionFor(sessionId);
+          }
+          handles.set(summary.handle, sessionId);
           return { ...summary, firstWindow: results.window(summary.handle, 0) };
         } finally {
           open.running -= 1;
@@ -197,7 +218,7 @@ export function createEngine(options: EngineOptions): Engine {
         }
       },
       async close() {
-        for (const handle of handles) results.release(handle);
+        for (const handle of handles.keys()) results.release(handle);
         handles.clear();
         const open = [...sessions.values()];
         sessions.clear();

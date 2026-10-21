@@ -1,0 +1,54 @@
+import { describe, expect, it } from "vitest";
+import {
+  createLayoutStore,
+  DEFAULT_LAYOUT,
+  LAYOUT_STORAGE_KEY,
+  loadLayout,
+  memoryStorage,
+} from "@table-craft/desktop/renderer/state/layout.js";
+
+describe("layout", () => {
+  it("givenSavedLayout_whenLoaded_thenToolWindowsRestored", () => {
+    const storage = memoryStorage();
+    const first = createLayoutStore(storage);
+    first.getState().toggle("services");
+    first.getState().resize("database", 35);
+
+    const restored = createLayoutStore(storage).getState().layout;
+
+    expect(restored.visible).toEqual({ database: true, services: false });
+    expect(restored.sizes.database).toBe(35);
+  });
+
+  it("givenCorruptLayoutJson_whenLoaded_thenDefaultsUsed", () => {
+    const storage = memoryStorage();
+    storage.setItem(LAYOUT_STORAGE_KEY, "{not json");
+
+    expect(loadLayout(storage)).toBe(DEFAULT_LAYOUT);
+  });
+
+  it("givenWellFormedJsonOfTheWrongShape_whenLoaded_thenDefaultsUsed", () => {
+    const storage = memoryStorage();
+    storage.setItem(LAYOUT_STORAGE_KEY, JSON.stringify({ visible: { database: "yes" }, sizes: {} }));
+
+    expect(loadLayout(storage)).toBe(DEFAULT_LAYOUT);
+  });
+
+  it("givenOpenToolWindows_whenHideAllPressedTwice_thenTheyComeBack", () => {
+    const store = createLayoutStore(memoryStorage());
+    store.getState().toggle("services");
+
+    store.getState().hideAll();
+    expect(store.getState().layout.visible).toEqual({ database: false, services: false });
+    store.getState().hideAll();
+    expect(store.getState().layout.visible).toEqual({ database: true, services: false });
+  });
+
+  it("givenExtremeSize_whenResized_thenClamped", () => {
+    const store = createLayoutStore(memoryStorage());
+
+    store.getState().resize("database", 99);
+
+    expect(store.getState().layout.sizes.database).toBe(80);
+  });
+});

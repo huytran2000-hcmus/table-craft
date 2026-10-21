@@ -19,13 +19,16 @@ Run from the repository root.
 - `bun run test:smoke:db` - the same against PostgreSQL, MySQL and SQLite; set
   `TABLE_CRAFT_EVIDENCE_DIR=docs/evidence/NNN` to save a window PNG per scenario for a plan's
   live test. `test/e2e/harness.ts` holds the launch, run and capture helpers
-- `bun run typecheck` - `tsc --noEmit`, every program
+- `bun run typecheck` - `tsc --noEmit`, every program: the root one, the renderer
+  (`packages/desktop/src/renderer/tsconfig.json`) and the renderer tests (`test/renderer/tsconfig.json`)
 - `bun run lint` / `bun run lint:fix` - ESLint, including the architecture fences
 - `bun run format:check` / `bun run format` - Prettier
 - `bun run desktop` - build and launch the app. It connects to in-memory SQLite unless
   `TABLE_CRAFT_DATASOURCE` holds a datasource as JSON, e.g.
   `{"id":"pg","pluginId":"postgres","config":{"host":"127.0.0.1","port":55432,"database":"table_craft","user":"table_craft","password":"table_craft"}}`
-  for the `test:db` Postgres. A development seam until connections land (decision 018)
+  for the `test:db` Postgres. A development seam until connections land (decision 018).
+  `TABLE_CRAFT_USER_DATA` points the profile (layout, user plugins) at another directory; the smoke
+  harness gives every launch a fresh one
 - `bun run desktop:package` - electron-builder; macOS is first-class, Windows and Linux best-effort
 
 Bun is the toolchain only. Electron runs Node, so nothing under `packages/*/src` or
@@ -49,16 +52,20 @@ packages/core/             @table-craft/core: plugin loader, session manager, re
                            store, edit batches, history. Knows nothing about Electron
 packages/desktop/          @table-craft/desktop, the Electron app
   src/main/                lifecycle, the window, menus, one engine host per datasource
-  src/preload/             contextBridge; hands the engine port to the renderer
+  src/preload/             contextBridge; hands the engine port to the renderer and relays
+                           menu clicks. `menu.ts` declares the native menu as data
   src/engine/              the utilityProcess; `protocol.ts` is the only module the
                            engine and renderer share
-  src/renderer/            React 19, Zustand, Tailwind v4, CodeMirror 6; a pure view
+  src/renderer/            React 19, Zustand, Tailwind v4, CodeMirror 6; a pure view.
+                           `actions/` is the one command registry and keymap; `shell/`,
+                           `panes/`, `palette/` the DataGrip-shaped window
 plugins/<id>/              built-in plugins (@table-craft/plugin-<id>): postgres, mysql,
                            sqlite. Each depends on plugin-api and its driver alone, and
                            ships a `table-craft-plugin.json` beside `src/`
 test/                      Vitest suites, `givenX_whenY_thenZ`
   db/                      compose.yml, the fixture schema per dialect, contract runs per database
   e2e/                     Playwright `_electron` suites and the shared harness
+  renderer/                renderer unit tests, typechecked with the DOM lib; no jsdom
   support/                 fixtures shared across suites (type_probe rows, seeded SQLite, configs)
 docs/design/               specification.md, design-system.md
 docs/decisions/            one numbered file per durable decision
@@ -78,6 +85,9 @@ docs/evidence/NNN/         screenshots from each plan's live test (decision 016)
 - SQL knowledge belongs to the plugin (decision 008). The renderer asks the engine for completions
   and statement boundaries; it does not parse SQL itself.
 - Result rows stay in the engine; the renderer sees a handle and windows (decision 009).
+- Every command is an action in `renderer/actions/` and runs through `invoke` (decision 015).
+  Buttons, menus, shortcuts and the palette never call store methods directly; a new chord must not
+  clash with an existing one (`test/renderer/keymap.test.ts` checks).
 - Secrets go through `safeStorage` and are never written to `datasources.json` or logs.
 - TypeScript strict, ESM, `verbatimModuleSyntax`. No magic literals: hoist them to a named
   module constant. Errors are typed and say what to do next.

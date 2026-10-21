@@ -1,0 +1,175 @@
+import * as Dialog from "@radix-ui/react-dialog";
+import { useMemo, useRef, useState, type KeyboardEvent } from "react";
+import { currentPlatform, formatChord } from "@table-craft/desktop/renderer/actions/chords.js";
+import { registry } from "@table-craft/desktop/renderer/actions/index.js";
+import {
+  ALL_TAB,
+  paletteResults,
+  paletteTabs,
+  type PaletteMode,
+  type SearchItem,
+  type SearchProvider,
+} from "@table-craft/desktop/renderer/model/palette.js";
+import { actionsProvider } from "@table-craft/desktop/renderer/palette/providers.js";
+import { focusRegion } from "@table-craft/desktop/renderer/shell/focus.js";
+import { usePalette } from "@table-craft/desktop/renderer/state/palette.js";
+import { cn } from "@table-craft/desktop/renderer/ui/cn.js";
+
+/** Search Everywhere's providers; plan 005 appends the tables provider here. */
+const PROVIDERS: readonly SearchProvider[] = [actionsProvider(registry)];
+const MODE_TITLE: Readonly<Record<PaletteMode, string>> = {
+  findAction: "Find Action",
+  searchEverywhere: "Search Everywhere",
+};
+const MODE_PLACEHOLDER: Readonly<Record<PaletteMode, string>> = {
+  findAction: "Type an action name",
+  searchEverywhere: "Type to search everything",
+};
+
+function Row({ item, selected, onRun }: { item: SearchItem; selected: boolean; onRun: (item: SearchItem) => void }) {
+  return (
+    <li
+      role="option"
+      aria-selected={selected}
+      aria-disabled={!item.enabled}
+      data-enabled={item.enabled}
+      className={cn(
+        "flex h-row cursor-default items-center gap-gap rounded px-gap",
+        selected && "bg-selection",
+        !item.enabled && "text-ink-muted opacity-60",
+      )}
+      // Keeps focus in the input, so typing continues after a click on a row.
+      onMouseDown={(event) => event.preventDefault()}
+      onClick={() => onRun(item)}
+    >
+      <span className="truncate">{item.title}</span>
+      {item.detail === undefined ? null : <span className="truncate text-ink-muted">{item.detail}</span>}
+      {item.shortcut === undefined ? null : (
+        <kbd className="ml-auto shrink-0 font-ui text-ink-muted">{formatChord(item.shortcut, currentPlatform())}</kbd>
+      )}
+    </li>
+  );
+}
+
+function Body({ mode, onRun }: { mode: PaletteMode; onRun: (item: SearchItem) => void }) {
+  const [query, setQuery] = useState("");
+  const [selected, setSelected] = useState(0);
+  const tab = usePalette((state) => (mode === "searchEverywhere" ? state.tab : ALL_TAB));
+  const selectTab = usePalette((state) => state.selectTab);
+  const recent = usePalette((state) => state.recent);
+  const tabs = useMemo(() => paletteTabs(PROVIDERS), []);
+  const results = useMemo(() => paletteResults(PROVIDERS, query, recent, tab), [query, recent, tab]);
+  const current = Math.min(selected, Math.max(results.length - 1, 0));
+
+  function onKeyDown(event: KeyboardEvent<HTMLInputElement>): void {
+    if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+      event.preventDefault();
+      const step = event.key === "ArrowDown" ? 1 : -1;
+      setSelected((current + step + results.length) % Math.max(results.length, 1));
+    } else if (event.key === "Enter") {
+      event.preventDefault();
+      const item = results[current];
+      if (item !== undefined) onRun(item);
+    } else if (event.key === "Tab" && mode === "searchEverywhere") {
+      event.preventDefault();
+      const index = tabs.findIndex((entry) => entry.id === tab);
+      const next = tabs[(index + (event.shiftKey ? -1 : 1) + tabs.length) % tabs.length];
+      if (next !== undefined) selectTab(next.id);
+      setSelected(0);
+    }
+  }
+
+  return (
+    <>
+      <input
+        autoFocus
+        aria-label={MODE_TITLE[mode]}
+        placeholder={MODE_PLACEHOLDER[mode]}
+        className="h-tab w-full border-b border-line bg-transparent px-gap text-ink outline-none"
+        value={query}
+        onChange={(event) => {
+          setQuery(event.target.value);
+          setSelected(0);
+        }}
+        onKeyDown={onKeyDown}
+      />
+      {mode === "searchEverywhere" ? (
+        <div role="tablist" aria-label="Search scope" className="flex gap-1 border-b border-line px-1">
+          {tabs.map((entry) => (
+            <button
+              key={entry.id}
+              type="button"
+              role="tab"
+              aria-selected={entry.id === tab}
+              tabIndex={-1}
+              className={cn(
+                "h-row border-b-2 px-gap",
+                entry.id === tab ? "border-accent text-ink" : "border-transparent text-ink-muted hover:text-ink",
+              )}
+              onMouseDown={(event) => event.preventDefault()}
+              onClick={() => {
+                selectTab(entry.id);
+                setSelected(0);
+              }}
+            >
+              {entry.title}
+            </button>
+          ))}
+        </div>
+      ) : null}
+      {results.length === 0 ? (
+        <p className="p-gap text-ink-muted">Nothing found.</p>
+      ) : (
+        <ul role="listbox" aria-label="Results" className="max-h-96 overflow-y-auto p-1">
+          {results.map((item, index) => (
+            <Row key={item.key} item={item} selected={index === current} onRun={onRun} />
+          ))}
+        </ul>
+      )}
+    </>
+  );
+}
+
+/** Find Action and Search Everywhere: one dialog, two modes (plan 003, decision 6). */
+export function Palette() {
+  const mode = usePalette((state) => state.mode);
+  const ran = useRef(false);
+
+  function run(item: SearchItem): void {
+    if (!item.enabled) return;
+    ran.current = true;
+    const palette = usePalette.getState();
+    palette.hide();
+    if (item.recentId !== undefined) palette.remember(item.recentId);
+    item.run();
+  }
+
+  return (
+    <Dialog.Root
+      open={mode !== null}
+      onOpenChange={(open) => {
+        if (!open) usePalette.getState().hide();
+      }}
+    >
+      <Dialog.Portal>
+        <Dialog.Overlay className="fixed inset-0 z-40 bg-canvas/50" />
+        <Dialog.Content
+          aria-describedby={undefined}
+          className="fixed top-24 left-1/2 z-50 w-palette max-w-[90vw] -translate-x-1/2 overflow-hidden rounded-lg border border-line bg-panel text-ui text-ink shadow-2xl"
+          onOpenAutoFocus={() => {
+            ran.current = false;
+          }}
+          onCloseAutoFocus={(event) => {
+            // An action that ran decides where focus goes, e.g. a new console's editor.
+            if (!ran.current) return;
+            event.preventDefault();
+            if (document.activeElement === document.body) focusRegion("editor");
+          }}
+        >
+          <Dialog.Title className="sr-only">{mode === null ? "" : MODE_TITLE[mode]}</Dialog.Title>
+          {mode === null ? null : <Body key={mode} mode={mode} onRun={run} />}
+        </Dialog.Content>
+      </Dialog.Portal>
+    </Dialog.Root>
+  );
+}

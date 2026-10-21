@@ -23,7 +23,7 @@
     "test:smoke": "bun run --filter '@table-craft/desktop' build && TABLE_CRAFT_SMOKE=1 vitest run test/e2e",
     "test:smoke:db": "docker compose -f test/db/compose.yml up -d --wait && bun run --filter '@table-craft/desktop' build && TABLE_CRAFT_SMOKE=1 TABLE_CRAFT_SMOKE_DATABASES=1 vitest run test/e2e",
     "test:db": "docker compose -f test/db/compose.yml up -d --wait && vitest run --config vitest.db.config.ts",
-    "typecheck": "tsc --noEmit && tsc --noEmit -p packages/desktop/src/renderer",
+    "typecheck": "tsc --noEmit && tsc --noEmit -p packages/desktop/src/renderer && tsc --noEmit -p test/renderer",
     "desktop": "bun run --filter '@table-craft/desktop' build && bun run --cwd packages/desktop start",
     "desktop:package": "bun run --filter '@table-craft/desktop' build && bun run --cwd packages/desktop package"
   },

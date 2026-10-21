@@ -29,6 +29,13 @@ ipcRenderer.on(CHANNELS.enginePort, (event: IpcRendererEvent) => {
 
 const bridge: TableCraftBridge = {
   connectEngine: () => ipcRenderer.send(CHANNELS.connectEngine),
+  onInvokeAction(listener) {
+    const relay = (_event: IpcRendererEvent, actionId: unknown) => {
+      if (typeof actionId === "string") listener(actionId);
+    };
+    ipcRenderer.on(CHANNELS.invokeAction, relay);
+    return () => ipcRenderer.off(CHANNELS.invokeAction, relay);
+  },
 };
 
 contextBridge.exposeInMainWorld(BRIDGE_KEY, bridge);
