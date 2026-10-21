@@ -1,0 +1,9 @@
+{
+  "id": "mysql",
+  "name": "MySQL",
+  "version": "0.0.0",
+  "apiVersion": "0.2.0",
+  "entry": "index.js",
+  "capabilities": ["sql", "cancel"],
+  "highlight": "mysql"
+}

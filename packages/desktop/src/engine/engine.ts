@@ -1,5 +1,5 @@
 import { CoreError, openSession, ResultStore, type PluginLoadResult } from "@table-craft/core";
-import type { Session } from "@table-craft/plugin-api";
+import { isPluginError, type Capability, type Session } from "@table-craft/plugin-api";
 import type {
   DatasourceConfig,
   EngineError,
@@ -11,6 +11,7 @@ import type {
 import { engineRequestSchema, readRequestId } from "@table-craft/desktop/engine/requests.js";
 
 const SESSION_PREFIX = "session-";
+const BUG_HINT = "This is a table-craft bug; restart the app and report it.";
 
 export interface EngineOptions {
   readonly datasource: DatasourceConfig;
@@ -37,12 +38,58 @@ function toEngineError(cause: unknown): EngineError {
   if (cause instanceof EngineFailure) return cause.error;
   if (cause instanceof CoreError) return { code: cause.code, message: cause.message, hint: cause.hint };
   const message = cause instanceof Error ? cause.message : String(cause);
-  return { code: "internal", message, hint: "This is a table-craft bug; restart the app and report it." };
+  return { code: "internal", message, hint: BUG_HINT };
+}
+
+function messageOf(cause: unknown): string {
+  return cause instanceof Error ? cause.message : String(cause);
+}
+
+function connectionFailed(cause: unknown): unknown {
+  if (!isPluginError(cause) || cause.code !== "connectionFailed") return cause;
+  return new EngineFailure({
+    code: "connectionFailed",
+    message: `Could not connect: ${cause.message}`,
+    hint: "Check that the database is running and that the host, port, user and password are right.",
+  });
 }
 
 function statementFailed(cause: unknown): EngineFailure {
-  const message = cause instanceof Error ? cause.message : String(cause);
-  return new EngineFailure({ code: "statementFailed", message, hint: "Fix the statement and run it again." });
+  if (isPluginError(cause) && cause.code === "cancelled") {
+    return new EngineFailure({
+      code: "cancelled",
+      message: "The statement was cancelled.",
+      hint: "Run it again when ready.",
+    });
+  }
+  return new EngineFailure({
+    code: "statementFailed",
+    message: messageOf(cause),
+    hint: "Fix the statement and run it again.",
+  });
+}
+
+interface OpenSession {
+  readonly session: Session;
+  readonly capabilities: readonly Capability[];
+  /** Statements in flight: `statement.execute` calls that have not answered yet. */
+  running: number;
+}
+
+function loadedPlugin(
+  plugins: readonly PluginLoadResult[],
+  pluginId: string,
+): {
+  readonly name: string;
+  readonly capabilities: readonly Capability[];
+} {
+  for (const entry of plugins) {
+    if (entry.status === "loaded" && entry.manifest.id === pluginId) {
+      return { name: entry.manifest.name, capabilities: entry.plugin.capabilities };
+    }
+  }
+  // openSession has just connected through this plugin, so it is loaded.
+  throw new Error(`Plugin "${pluginId}" opened a session but is not loaded.`);
 }
 
 export function createEngine(options: EngineOptions): Engine {
@@ -50,10 +97,10 @@ export function createEngine(options: EngineOptions): Engine {
   let nextSession = 1;
 
   function connect(): EngineConnection {
-    const sessions = new Map<string, Session>();
+    const sessions = new Map<string, OpenSession>();
     const handles = new Set<string>();
 
-    function sessionFor(sessionId: string): Session {
+    function sessionFor(sessionId: string): OpenSession {
       const session = sessions.get(sessionId);
       if (session === undefined) {
         throw new EngineFailure({
@@ -78,21 +125,42 @@ export function createEngine(options: EngineOptions): Engine {
 
     const routes: { [M in EngineMethod]: (request: RequestOf<M>) => Promise<ResultOf<M>> } = {
       "session.open": async () => {
-        const session = await openSession(options.plugins, options.datasource.pluginId, options.datasource.config);
+        const { pluginId, config } = options.datasource;
+        const session = await openSession(options.plugins, pluginId, config).catch((cause: unknown) => {
+          throw connectionFailed(cause);
+        });
+        const plugin = loadedPlugin(options.plugins, pluginId);
         const sessionId = `${SESSION_PREFIX}${nextSession++}`;
-        sessions.set(sessionId, session);
-        return { sessionId };
+        sessions.set(sessionId, { session, capabilities: plugin.capabilities, running: 0 });
+        return { sessionId, pluginName: plugin.name, capabilities: plugin.capabilities };
       },
       "statement.execute": async ({ sessionId, sql }) => {
-        const session = sessionFor(sessionId);
-        const summary = await session
-          .execute(sql)
-          .then((result) => results.put(result))
-          .catch((cause: unknown) => {
-            throw statementFailed(cause);
+        const open = sessionFor(sessionId);
+        open.running += 1;
+        try {
+          const summary = await open.session
+            .execute(sql)
+            .then((result) => results.put(result))
+            .catch((cause: unknown) => {
+              throw statementFailed(cause);
+            });
+          handles.add(summary.handle);
+          return { ...summary, firstWindow: results.window(summary.handle, 0) };
+        } finally {
+          open.running -= 1;
+        }
+      },
+      "statement.cancel": async ({ sessionId }) => {
+        const open = sessionFor(sessionId);
+        if (!open.capabilities.includes("cancel") || open.session.cancel === undefined) {
+          throw new EngineFailure({
+            code: "invalidRequest",
+            message: "This datasource's plugin does not declare the cancel capability.",
+            hint: BUG_HINT,
           });
-        handles.add(summary.handle);
-        return { ...summary, firstWindow: results.window(summary.handle, 0) };
+        }
+        if (open.running > 0) await open.session.cancel();
+        return null;
       },
       "result.window": ({ handle, offset, limit }) =>
         Promise.resolve(results.window(ownedHandle(handle), offset, limit)),
@@ -118,7 +186,7 @@ export function createEngine(options: EngineOptions): Engine {
             error: {
               code: "invalidRequest",
               message: `The engine could not read the request: ${parsed.error.message}`,
-              hint: "This is a table-craft bug; restart the app and report it.",
+              hint: BUG_HINT,
             },
           };
         }
@@ -133,7 +201,7 @@ export function createEngine(options: EngineOptions): Engine {
         handles.clear();
         const open = [...sessions.values()];
         sessions.clear();
-        await Promise.allSettled(open.map((session) => session.close()));
+        await Promise.allSettled(open.map((entry) => entry.session.close()));
       },
     };
   }

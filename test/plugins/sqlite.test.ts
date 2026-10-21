@@ -1,11 +1,14 @@
 import { openSession, ResultStore, type PluginLoadResult } from "@table-craft/core";
-import { API_VERSION, type Row } from "@table-craft/plugin-api";
+import { API_VERSION, isPluginError, type Row } from "@table-craft/plugin-api";
 import { runPluginContract } from "@table-craft/plugin-api/testing";
 import sqlite from "@table-craft/plugin-sqlite";
 import { describe, expect, it } from "vitest";
+import { seededSqliteFile } from "../support/sqliteFixture.js";
+import { TYPE_PROBE_EXPECTED } from "../support/typeProbe.js";
 
 const IN_MEMORY = { path: ":memory:" };
 const BEYOND_SAFE_INTEGER = "9007199254740993";
+const UNREACHABLE = { path: "/nonexistent-table-craft-directory/fixture.sqlite" };
 
 const LOADED: PluginLoadResult[] = [
   {
@@ -30,7 +33,10 @@ async function collect(rows: AsyncIterable<Row>): Promise<Row[]> {
   return collected;
 }
 
-runPluginContract(sqlite, { config: IN_MEMORY });
+runPluginContract(sqlite, {
+  config: { path: seededSqliteFile() },
+  typeProbe: { expected: TYPE_PROBE_EXPECTED },
+});
 
 describe("sqlite plugin", () => {
   it("givenSqliteSession_whenSelectOne_thenReturnsColumnsAndOneRow", async () => {
@@ -62,6 +68,12 @@ describe("sqlite plugin", () => {
     } finally {
       await session.close();
     }
+  });
+
+  it("givenPathInMissingDirectory_whenConnecting_thenRejectsWithConnectionFailed", async () => {
+    const failure: unknown = await sqlite.connect(UNREACHABLE).catch((error: unknown) => error);
+
+    expect(isPluginError(failure) && failure.code).toBe("connectionFailed");
   });
 
   it("givenLoadedSqlite_whenOpenedThroughCore_thenResultIsStored", async () => {

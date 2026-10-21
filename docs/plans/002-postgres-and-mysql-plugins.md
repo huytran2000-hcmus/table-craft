@@ -1,6 +1,14 @@
 # Plan: Ship the PostgreSQL and MySQL plugins behind one contract suite
 
-Status: not started
+Status: done. PostgreSQL (`pg` + `pg-cursor`) and MySQL (`mysql2`) ship as built-in plugins
+beside SQLite, all three pass one contract suite against the same seeded `type_probe`, and the app,
+pointed at each through `TABLE_CRAFT_DATASOURCE`, draws identical cells for
+`SELECT * FROM type_probe` and cancels `pg_sleep(30)` / `SLEEP(30)` from a Cancel button long before
+they would end. The live test found three bugs no unit test could: the built Postgres and MySQL bundles
+could not load in the engine at all (CommonJS drivers in an ESM bundle without `require`), the grid
+clipped CJK and emoji, and error message and hint ran together. Reality also differed in the
+build (one Vite run per plugin), in how a `PluginError` is recognised across bundles, and in the
+engine gaining `connectionFailed` and `cancelled` error codes.
 
 ## The issue
 
@@ -110,13 +118,80 @@ Every phase ends with `bun run typecheck` and `bun run test` green; phases 1–3
 
 ## Live test
 
-_To be filled in. At minimum: the app against Postgres, MySQL and SQLite running
-`SELECT * FROM type_probe` (one screenshot each, cells identical); `SELECT pg_sleep(30)` and
-`SELECT SLEEP(30)` cancelled from the button; an invalid statement showing its error._
+The built app (`packages/desktop/dist`) driven by Playwright `_electron` through
+`test/e2e/databases.smoke.test.ts`, each scenario in a fresh app with `TABLE_CRAFT_DATASOURCE`
+pointing at the `test/db/compose.yml` Postgres and MySQL or a freshly seeded SQLite file. Rerun with
+`TABLE_CRAFT_EVIDENCE_DIR=docs/evidence/002 bun run test:smoke:db` (15 passed, 2 skipped: SQLite
+declares no `cancel` and has no password). Every screenshot was opened and checked by eye.
+
+| #   | Scenario                                                                                    | Database | Result                                                                                                                                                                                                                                                                                                                                                      | Evidence                                           |
+| --- | ------------------------------------------------------------------------------------------- | -------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------- |
+| 1   | `SELECT * FROM type_probe`; Cancel button present                                           | postgres | Bug: the app never connected — the built bundle threw ``Calling `require` for "events"``. Fixed with `platform: "node"` in `vite.plugins.config.ts`; regression `test/e2e/builtPlugins.smoke.test.ts`. Second bug: `héllo, 世界 🌍` clipped; fixed by counting wide characters in `grid/widths.ts`, regression `test/desktop/gridWidths.test.ts`. Then pass | `docs/evidence/002/postgres-type-probe.png`        |
+| 2   | `SELECT * FROM type_probe`; Cancel button present                                           | mysql    | Pass after the bundle fix in row 1; cells identical to row 1                                                                                                                                                                                                                                                                                                | `docs/evidence/002/mysql-type-probe.png`           |
+| 3   | `SELECT * FROM type_probe`; no Cancel button                                                | sqlite   | Pass; cells identical to rows 1 and 2                                                                                                                                                                                                                                                                                                                       | `docs/evidence/002/sqlite-type-probe.png`          |
+| 4   | `SELECT pg_sleep(30)`, Cancel clicked after 500 ms; then `type_probe` runs                  | postgres | Pass: "The statement was cancelled." inside the 10 s deadline, session reused                                                                                                                                                                                                                                                                               | `docs/evidence/002/postgres-cancelled.png`         |
+| 5   | `SELECT SLEEP(30)`, Cancel clicked after 500 ms; then `type_probe` runs                     | mysql    | Pass, same as row 4                                                                                                                                                                                                                                                                                                                                         | `docs/evidence/002/mysql-cancelled.png`            |
+| 6   | `SELEC * FROM type_probe` shows the driver's error; the next statement runs                 | postgres | Bug: message and hint ran together. Fixed in `Console.tsx` (hint as its own muted span), asserted by the alert text in `databases.smoke.test.ts`. Then pass                                                                                                                                                                                                 | `docs/evidence/002/postgres-invalid-statement.png` |
+| 7   | Same                                                                                        | mysql    | Pass                                                                                                                                                                                                                                                                                                                                                        | `docs/evidence/002/mysql-invalid-statement.png`    |
+| 8   | Same                                                                                        | sqlite   | Pass                                                                                                                                                                                                                                                                                                                                                        | `docs/evidence/002/sqlite-invalid-statement.png`   |
+| 9   | App started with a wrong password: "Could not connect: …" with its hint, Run stays disabled | postgres | Pass                                                                                                                                                                                                                                                                                                                                                        | `docs/evidence/002/postgres-wrong-password.png`    |
+| 10  | Same                                                                                        | mysql    | Pass                                                                                                                                                                                                                                                                                                                                                        | `docs/evidence/002/mysql-wrong-password.png`       |
 
 ---
 
 ## Deviations taken while implementing
+
+**1. One Vite run per plugin, chosen with `--mode <id>`.** Rolldown refuses several inputs while
+`codeSplitting` is off, and turning it on would share chunks between plugins that must each stand
+alone in their own directory. `BUILT_IN_PLUGINS` in `packages/desktop/vite.plugins.config.ts` is the
+list; `test/desktop/build.test.ts` pins it to the plugin directories and to the build script.
+
+**2. Plugin bundles are built with `platform: "node"`.** `pg` and `mysql2` are CommonJS and
+`require` Node built-ins; an ESM bundle without it fails at import inside the engine. Vitest and
+`node -e` both provide a global `require`, so only a child `node --input-type=module` process
+(`test/e2e/builtPlugins.smoke.test.ts`) sees the failure.
+
+**3. `PluginError` is recognised with `isPluginError`, not `instanceof`.** Each built plugin
+bundles its own copy of `@table-craft/plugin-api`, so its class is not the host's. The check is by
+`name` and a known `code`.
+
+**4. The engine gained `connectionFailed` and `cancelled` error codes.** Mapping a refused password
+to `statementFailed` or `internal` would give the user the wrong next step; each code carries its
+own hint.
+
+**5. `session.open` also returns `pluginName`.** The console shows which database it talks to;
+the manifest name is display-only and the UI still branches on capabilities alone (decision 007).
+
+**6. A session runs one statement at a time; a second `execute` rejects `statementFailed`.**
+Neither driver multiplexes a connection, and `cancel` must know which statement it stops. The
+console's Run button is already disabled while a statement runs.
+
+**7. `execute` resolves after the first batch (Postgres) or first row (MySQL), not after the row
+description.** Until then the statement is running on the server: `SELECT SLEEP(30)` sends its
+column before it sleeps, so resolving on fields would end the "running" state and make Cancel a
+no-op. MySQL's interrupted `SLEEP` returns 1 instead of an error, so the plugin remembers that a
+cancel was requested and rejects `cancelled` itself.
+
+**8. SQLite maps declared `BOOLEAN` and `JSON` columns, and its `type_probe` keeps decimal and
+temporal values as `TEXT`.** SQLite has no such types; without the declared-type mapping its row
+would differ from the other two, and a `REAL` decimal would lose the 20 digits the probe checks.
+Recorded with the other value rules in decision 017.
+
+**9. The contract suite grew beyond the six named cases.** Invalid SQL must reject
+`statementFailed`, a failed statement must leave the session usable, and an idle `cancel` must be a
+no-op; the UI relies on all three. The large-result case reads 3 of
+100 000 rows from a portable cross join of digit tables.
+
+**10. Grid columns are sized from their content, capped by a token.** With one fixed width the
+`type_probe` evidence was unreadable. `gridColumnWidthPx` became `gridColumnMaxWidthPx`
+(`grid/widths.ts`, from the header and the first window, CJK and emoji counted as two cells).
+
+**11. The MySQL seed starts with `SET NAMES utf8mb4`.** The image's init client defaults to
+`latin1` and double-encoded the Unicode probe text.
+
+**12. The live test is a gated e2e suite.** `test/e2e/harness.ts` (launch with a datasource, run,
+read the grid, capture) and `test/e2e/databases.smoke.test.ts` run under `bun run test:smoke:db`;
+plain `test:smoke` skips them, so it still needs no Docker.
 
 ---
 

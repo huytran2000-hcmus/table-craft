@@ -27,7 +27,7 @@ export interface DensityTokens {
   readonly rowHeightPx: number;
   readonly cellPaddingPx: number;
   readonly gapPx: number;
-  readonly gridColumnWidthPx: number;
+  readonly gridColumnMaxWidthPx: number;
   readonly consoleHeightPx: number;
 }
 
@@ -64,7 +64,7 @@ export const COMFORTABLE_DENSITY: DensityTokens = {
   rowHeightPx: 24,
   cellPaddingPx: 8,
   gapPx: 8,
-  gridColumnWidthPx: 160,
+  gridColumnMaxWidthPx: 320,
   consoleHeightPx: 128,
 };
 

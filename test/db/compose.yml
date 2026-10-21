@@ -1,0 +1,48 @@
+# The databases `bun run test:db` runs the plugin contract against, seeded from ./schema.
+# Ports sit far from the defaults so a developer's own server keeps 5432 and 3306.
+name: table-craft-test-db
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: table_craft
+      POSTGRES_PASSWORD: table_craft
+      POSTGRES_DB: table_craft
+    ports:
+      - "127.0.0.1:55432:5432"
+    volumes:
+      - ./schema/postgres.sql:/docker-entrypoint-initdb.d/schema.sql:ro
+    tmpfs:
+      - /var/lib/postgresql/data
+    healthcheck:
+      # Over TCP and against the seeded table: the entrypoint's temporary server answers on the
+      # socket before the schema is loaded.
+      test: ["CMD-SHELL", "psql -h 127.0.0.1 -U table_craft -d table_craft -c 'SELECT 1 FROM type_probe LIMIT 1'"]
+      interval: 1s
+      timeout: 5s
+      retries: 60
+
+  mysql:
+    image: mysql:8.4
+    environment:
+      MYSQL_ROOT_PASSWORD: table_craft
+      MYSQL_USER: table_craft
+      MYSQL_PASSWORD: table_craft
+      MYSQL_DATABASE: table_craft
+    ports:
+      - "127.0.0.1:53306:3306"
+    volumes:
+      - ./schema/mysql.sql:/docker-entrypoint-initdb.d/schema.sql:ro
+    tmpfs:
+      - /var/lib/mysql
+    healthcheck:
+      # Over TCP for the same reason: the entrypoint's temporary server listens on the socket only.
+      test:
+        [
+          "CMD-SHELL",
+          "mysql -h 127.0.0.1 -u table_craft -ptable_craft table_craft -e 'SELECT 1 FROM type_probe LIMIT 1'",
+        ]
+      interval: 1s
+      timeout: 5s
+      retries: 120

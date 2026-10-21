@@ -2,7 +2,7 @@
   "id": "sqlite",
   "name": "SQLite",
   "version": "0.0.0",
-  "apiVersion": "0.1.0",
+  "apiVersion": "0.2.0",
   "entry": "index.js",
   "capabilities": ["sql"],
   "highlight": "sqlite"

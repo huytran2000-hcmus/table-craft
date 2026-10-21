@@ -14,6 +14,8 @@ export default defineConfig({
       "@table-craft/core": resolve(WORKSPACE_ROOT, "packages/core/src"),
       "@table-craft/desktop": resolve(WORKSPACE_ROOT, "packages/desktop/src"),
       "@table-craft/plugin-sqlite": resolve(WORKSPACE_ROOT, "plugins/sqlite/src/index.ts"),
+      "@table-craft/plugin-postgres": resolve(WORKSPACE_ROOT, "plugins/postgres/src/index.ts"),
+      "@table-craft/plugin-mysql": resolve(WORKSPACE_ROOT, "plugins/mysql/src/index.ts"),
     },
   },
   test: {

@@ -7,6 +7,8 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 const ENTRY_FILE = "index.mjs";
 const INCOMPATIBLE_API_VERSION = "0.99.0";
+/** Plan 002 broke the contract by adding `cancel` and `PluginError`; plugins built before it must not load. */
+const PREVIOUS_API_VERSION = "0.1.0";
 
 function pluginSource(id: string): string {
   return `export default {
@@ -71,6 +73,14 @@ describe("loadPlugins", () => {
 
     expect(result).toMatchObject({ status: "unavailable", manifest: { id: "alpha" } });
     expect(result?.status === "unavailable" && result.reason).toContain(INCOMPATIBLE_API_VERSION);
+  });
+
+  it("givenManifestWithApiVersion010_whenLoaded_thenPluginUnavailable", async () => {
+    await writePlugin("builtin", "alpha", { id: "alpha", apiVersion: PREVIOUS_API_VERSION });
+
+    const [result] = await loadPlugins([join(workspace, "builtin")]);
+
+    expect(result).toMatchObject({ status: "unavailable", manifest: { id: "alpha" } });
   });
 
   it("givenDuplicatePluginId_whenLoaded_thenErrorNamesBothPaths", async () => {

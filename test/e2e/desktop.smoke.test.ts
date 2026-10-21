@@ -4,47 +4,38 @@
  *
  *   bun run test:smoke
  */
-import { createRequire } from "node:module";
-import { join, resolve } from "node:path";
-import { _electron, type ElectronApplication } from "playwright-core";
 import { afterEach, describe, expect, it } from "vitest";
+import {
+  gridText,
+  launchApp,
+  runStatement,
+  SCENARIO_TIMEOUT_MS,
+  SMOKE_ENABLED,
+  waitUntilReady,
+  type RunningApp,
+} from "./harness.js";
 
-const SMOKE_ENABLED = process.env["TABLE_CRAFT_SMOKE"] === "1";
-
-const DESKTOP_ROOT = resolve(import.meta.dirname, "../../packages/desktop");
-const MAIN_ENTRY = join(DESKTOP_ROOT, "dist/main/main.js");
 const SMOKE_SQL = "SELECT 1 AS one, 'two' AS two";
-const LAUNCH_TIMEOUT_MS = 30_000;
-
-/** The `electron` package exports the path of the binary it installed, downloading it on first use. */
-function electronBinary(): string {
-  return createRequire(join(DESKTOP_ROOT, "package.json"))("electron") as string;
-}
 
 describe.runIf(SMOKE_ENABLED)("desktop smoke", () => {
-  let app: ElectronApplication | null = null;
+  let running: RunningApp | null = null;
 
   afterEach(async () => {
-    await app?.close();
-    app = null;
+    await running?.app.close();
+    running = null;
   });
 
   it(
     "givenBuiltApp_whenSelectOneRun_thenGridShowsTheRow",
     async () => {
-      app = await _electron.launch({ executablePath: electronBinary(), args: [MAIN_ENTRY] });
-      const page = await app.firstWindow();
+      running = await launchApp();
+      const { page } = running;
+      await waitUntilReady(page);
 
-      const run = page.getByRole("button", { name: "Run" });
-      await expect.poll(() => run.isEnabled(), { timeout: LAUNCH_TIMEOUT_MS }).toBe(true);
-      await page.getByLabel("SQL console").fill(SMOKE_SQL);
-      await run.click();
+      await runStatement(page, SMOKE_SQL);
 
-      const headers = page.getByRole("columnheader");
-      await headers.first().waitFor();
-      expect(await headers.allTextContents()).toEqual(["one", "two"]);
-      expect(await page.getByRole("gridcell").allTextContents()).toEqual(["1", "two"]);
+      expect(await gridText(page)).toEqual({ headers: ["one", "two"], cells: ["1", "two"] });
     },
-    LAUNCH_TIMEOUT_MS * 2,
+    SCENARIO_TIMEOUT_MS,
   );
 });

@@ -1,11 +1,8 @@
 import { join } from "node:path";
 import { app, BrowserWindow, ipcMain } from "electron";
-import type { DatasourceConfig } from "@table-craft/desktop/engine/protocol.js";
+import { datasourceFromEnvironment } from "@table-craft/desktop/main/datasource.js";
 import { createHostRegistry } from "@table-craft/desktop/main/hosts.js";
 import { CHANNELS } from "@table-craft/desktop/preload/bridge.js";
-
-/** Plan 001 has no connection form: every window talks to one private in-memory SQLite database. */
-const SCRATCH_DATASOURCE: DatasourceConfig = { id: "scratch", pluginId: "sqlite", config: { path: ":memory:" } };
 
 const APP_NAME = "table-craft";
 const WINDOW_WIDTH = 1200;
@@ -18,6 +15,8 @@ const APP_DATA = "appData";
 // this, userData and so the user plugin root would be `Electron`.
 app.setName(APP_NAME);
 app.setPath(USER_DATA, join(app.getPath(APP_DATA), APP_NAME));
+
+const datasource = datasourceFromEnvironment(process.env);
 
 function distPath(relative: string): string {
   return join(import.meta.dirname, relative);
@@ -45,7 +44,7 @@ function createWindow(): void {
   void window.loadFile(distPath("../renderer/index.html"));
 }
 
-ipcMain.on(CHANNELS.connectEngine, (event) => hosts.open(SCRATCH_DATASOURCE, event.sender));
+ipcMain.on(CHANNELS.connectEngine, (event) => hosts.open(datasource, event.sender));
 
 void app.whenReady().then(() => {
   createWindow();

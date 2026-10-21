@@ -5,7 +5,11 @@
   "description": "Built-in mysql datasource plugin for table-craft",
   "license": "MIT",
   "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
   "dependencies": {
-    "@table-craft/plugin-api": "workspace:*"
+    "@table-craft/plugin-api": "workspace:*",
+    "mysql2": "^3.24.6"
   }
 }

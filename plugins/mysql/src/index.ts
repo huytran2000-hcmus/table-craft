@@ -1,0 +1,333 @@
+import type { Readable } from "node:stream";
+import mysql from "mysql2";
+import {
+  PluginError,
+  toWireInteger,
+  toWireValue,
+  z,
+  type Capability,
+  type Column,
+  type DatasourcePlugin,
+  type ExecuteResult,
+  type Row,
+  type Session,
+  type WireValue,
+} from "@table-craft/plugin-api";
+
+const PLUGIN_ID = "mysql";
+const CAPABILITIES: readonly Capability[] = ["sql", "cancel"];
+
+const DEFAULT_PORT = 3306;
+const MAX_PORT = 65_535;
+const CONNECT_TIMEOUT_MS = 10_000;
+/** Rows buffered ahead of the reader before the connection is paused. */
+const FETCH_ROWS = 500;
+/** `ER_QUERY_INTERRUPTED`, raised by `KILL QUERY` in a statement that checks for it. */
+const QUERY_INTERRUPTED = 1317;
+/** The `binary` collation id; a string type carrying it holds bytes, not text. */
+const BINARY_CHARSET = 63;
+/** A `TINYINT(1)` is how MySQL spells `BOOLEAN`. */
+const BOOLEAN_DISPLAY_WIDTH = 1;
+
+const SSL_MODES = ["disable", "require", "verify-full"] as const;
+
+const connectionSchema = z.strictObject({
+  host: z.string().min(1),
+  port: z.number().int().min(1).max(MAX_PORT).default(DEFAULT_PORT),
+  database: z.string().min(1).optional(),
+  user: z.string().min(1),
+  password: z.string().default(""),
+  /** `require` encrypts without checking the certificate; `verify-full` checks it and the host name. */
+  sslMode: z.enum(SSL_MODES).default("disable"),
+});
+
+type MysqlConfig = z.output<typeof connectionSchema>;
+
+/** Column type numbers from `include/field_types.h` in the MySQL source. */
+const TYPE_NAMES: ReadonlyMap<number, string> = new Map([
+  [0, "decimal"],
+  [1, "tinyint"],
+  [2, "smallint"],
+  [3, "int"],
+  [4, "float"],
+  [5, "double"],
+  [6, "null"],
+  [7, "timestamp"],
+  [8, "bigint"],
+  [9, "mediumint"],
+  [10, "date"],
+  [11, "time"],
+  [12, "datetime"],
+  [13, "year"],
+  [14, "date"],
+  [15, "varchar"],
+  [16, "bit"],
+  [242, "vector"],
+  [245, "json"],
+  [246, "decimal"],
+  [247, "enum"],
+  [248, "set"],
+  [249, "tinytext"],
+  [250, "mediumtext"],
+  [251, "longtext"],
+  [252, "text"],
+  [253, "varchar"],
+  [254, "char"],
+  [255, "geometry"],
+]);
+
+/** The text spelling of a type whose binary-collation twin has another name. */
+const BINARY_TYPE_NAMES: ReadonlyMap<string, string> = new Map([
+  ["varchar", "varbinary"],
+  ["char", "binary"],
+  ["tinytext", "tinyblob"],
+  ["mediumtext", "mediumblob"],
+  ["longtext", "longblob"],
+  ["text", "blob"],
+]);
+
+function typeName(field: mysql.FieldPacket): string | null {
+  const name = field.columnType === undefined ? undefined : TYPE_NAMES.get(field.columnType);
+  if (name === undefined) return null;
+  return field.characterSet === BINARY_CHARSET ? (BINARY_TYPE_NAMES.get(name) ?? name) : name;
+}
+
+/**
+ * `dateStrings` and `bigNumberStrings` keep temporal and exact values as the server's text, so
+ * the cast below only decides what JavaScript can represent exactly (decision 017).
+ */
+function cast(field: mysql.TypeCastField, next: mysql.TypeCastNext): WireValue {
+  switch (field.type) {
+    case "JSON": {
+      const text = field.string("utf8");
+      return text === null ? null : { kind: "json", text };
+    }
+    case "LONGLONG": {
+      const value = next();
+      return value === null ? null : toWireInteger(value as string);
+    }
+    case "TINY": {
+      const value = next();
+      if (value === null || field.length !== BOOLEAN_DISPLAY_WIDTH) return toWireValue(value);
+      return value !== 0;
+    }
+    default:
+      return toWireValue(next());
+  }
+}
+
+const CONNECTION_OPTIONS = {
+  charset: "utf8mb4",
+  dateStrings: true,
+  supportBigNumbers: true,
+  bigNumberStrings: true,
+  connectTimeout: CONNECT_TIMEOUT_MS,
+} as const satisfies mysql.ConnectionOptions;
+
+function sslOption(mode: MysqlConfig["sslMode"]): mysql.ConnectionOptions["ssl"] {
+  switch (mode) {
+    case "disable":
+      return undefined;
+    case "require":
+      return { rejectUnauthorized: false };
+    case "verify-full":
+      return { rejectUnauthorized: true };
+  }
+}
+
+function messageOf(cause: unknown): string {
+  return cause instanceof Error ? cause.message : String(cause);
+}
+
+function openConnection(config: MysqlConfig): Promise<mysql.Connection> {
+  const connection = mysql.createConnection({
+    ...CONNECTION_OPTIONS,
+    host: config.host,
+    port: config.port,
+    user: config.user,
+    password: config.password,
+    ...(config.database === undefined ? {} : { database: config.database }),
+    ssl: sslOption(config.sslMode),
+  });
+  return new Promise((resolve, reject) => {
+    connection.connect((error) => {
+      if (error === null) resolve(connection);
+      else reject(new PluginError("connectionFailed", messageOf(error), { cause: error }));
+    });
+  });
+}
+
+function closeConnection(connection: mysql.Connection): Promise<void> {
+  return new Promise((resolve) => {
+    connection.end(() => resolve());
+  });
+}
+
+const NO_ROWS: AsyncIterable<Row> = {
+  [Symbol.asyncIterator]: () => ({ next: () => Promise.resolve({ done: true, value: undefined }) }),
+};
+
+interface Running {
+  cancelRequested: boolean;
+}
+
+/** One statement in flight; its rows arrive through a paused-when-full object stream. */
+interface InFlight {
+  readonly rows: AsyncIterator<unknown>;
+  readonly stream: Readable;
+  /** Settles when the driver is done with the statement, whatever its outcome. */
+  readonly ended: Promise<void>;
+  readonly fields: Promise<mysql.FieldPacket[] | undefined>;
+}
+
+function start(connection: mysql.Connection, sql: string): InFlight {
+  const query = connection.query({ sql, rowsAsArray: true, typeCast: cast });
+  // The stream reports the error; this listener stops the query's own emit from throwing.
+  query.on("error", () => undefined);
+  const ended = new Promise<void>((resolve) => query.once("end", () => resolve()));
+  const stream = query.stream({ highWaterMark: FETCH_ROWS });
+  const fields = new Promise<mysql.FieldPacket[] | undefined>((resolve, reject) => {
+    stream.once("fields", resolve);
+    stream.once("error", reject);
+  });
+  // `fields` may never be awaited when the first row read reports the same error.
+  fields.catch(() => undefined);
+  return { rows: stream[Symbol.asyncIterator](), stream, ended, fields };
+}
+
+class MysqlSession implements Session {
+  readonly #config: MysqlConfig;
+  readonly #connection: mysql.Connection;
+  /** Set by the connection's `error` event; a broken connection is reported, not thrown at random. */
+  #broken: Error | null = null;
+  #running: Running | null = null;
+  #cancelling: Promise<void> = Promise.resolve();
+
+  constructor(config: MysqlConfig, connection: mysql.Connection) {
+    this.#config = config;
+    this.#connection = connection;
+    connection.on("error", (error: Error) => {
+      this.#broken = error;
+    });
+  }
+
+  async execute(sql: string): Promise<ExecuteResult> {
+    if (this.#broken !== null) {
+      throw new PluginError("statementFailed", `The connection was lost: ${this.#broken.message}`);
+    }
+    if (this.#running !== null) {
+      throw new PluginError("statementFailed", "Another statement is still running in this session.");
+    }
+    await this.#cancelling.catch(() => undefined);
+    const running: Running = { cancelRequested: false };
+    this.#running = running;
+    const inFlight = start(this.#connection, sql);
+    try {
+      const fields = await inFlight.fields;
+      // Like Postgres, resolve once the first row is in: a statement that sends its columns and then
+      // computes (`SELECT SLEEP(30)`) is still running, and cancelling it must reject execute.
+      const first = await inFlight.rows.next();
+      if (running.cancelRequested) {
+        await this.#finish(inFlight, first.done !== true);
+        throw new PluginError("cancelled", "The statement was cancelled.");
+      }
+      if (fields === undefined) {
+        const header = first.value as mysql.ResultSetHeader;
+        await this.#finish(inFlight, false);
+        this.#running = null;
+        return { columns: [], rows: NO_ROWS, rowsAffected: header.affectedRows };
+      }
+      const columns: Column[] = fields.map((field) => ({ name: field.name, type: typeName(field) }));
+      return { columns, rows: this.#rows(inFlight, running, first), rowsAffected: null };
+    } catch (cause) {
+      this.#running = null;
+      throw this.#failure(cause, running);
+    }
+  }
+
+  async *#rows(
+    inFlight: InFlight,
+    running: Running,
+    first: IteratorResult<unknown>,
+  ): AsyncGenerator<Row, void, undefined> {
+    let next = first;
+    let exhausted = false;
+    try {
+      while (next.done !== true) {
+        yield next.value as Row;
+        try {
+          next = await inFlight.rows.next();
+        } catch (cause) {
+          exhausted = true;
+          throw this.#failure(cause, running);
+        }
+      }
+      exhausted = true;
+      if (running.cancelRequested) throw new PluginError("cancelled", "The statement was cancelled.");
+    } finally {
+      await this.#finish(inFlight, !exhausted);
+      this.#running = null;
+    }
+  }
+
+  /**
+   * Leave the connection ready for the next statement. Abandoned rows are killed server-side
+   * first, because the text protocol has no way to stop a result set but to read it to the end.
+   */
+  async #finish(inFlight: InFlight, abandoned: boolean): Promise<void> {
+    if (abandoned) {
+      await this.#killQuery().catch(() => undefined);
+      inFlight.stream.destroy();
+    }
+    await inFlight.ended;
+  }
+
+  #failure(cause: unknown, running: Running): PluginError {
+    if (cause instanceof PluginError) return cause;
+    const errno = (cause as { errno?: unknown }).errno;
+    if (running.cancelRequested || errno === QUERY_INTERRUPTED) {
+      return new PluginError("cancelled", "The statement was cancelled.", { cause });
+    }
+    return new PluginError("statementFailed", messageOf(cause), { cause });
+  }
+
+  cancel(): Promise<void> {
+    const running = this.#running;
+    if (running === null) return Promise.resolve();
+    running.cancelRequested = true;
+    this.#cancelling = this.#killQuery();
+    return this.#cancelling;
+  }
+
+  /** On a second connection, because the session's own is busy with the statement it kills. */
+  async #killQuery(): Promise<void> {
+    const killer = await openConnection(this.#config);
+    try {
+      await new Promise<void>((resolve, reject) => {
+        killer.query(`KILL QUERY ${String(this.#connection.threadId)}`, (error) => {
+          if (error === null) resolve();
+          else reject(error);
+        });
+      });
+    } finally {
+      await closeConnection(killer);
+    }
+  }
+
+  async close(): Promise<void> {
+    await this.#cancelling.catch(() => undefined);
+    await closeConnection(this.#connection);
+  }
+}
+
+const plugin: DatasourcePlugin = {
+  id: PLUGIN_ID,
+  capabilities: CAPABILITIES,
+  connectionSchema,
+  connect: async (config) => {
+    const parsed = connectionSchema.parse(config);
+    return new MysqlSession(parsed, await openConnection(parsed));
+  },
+};
+
+export default plugin;

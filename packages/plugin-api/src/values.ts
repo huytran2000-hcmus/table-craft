@@ -38,6 +38,13 @@ function toHex(bytes: Uint8Array): string {
   return hex;
 }
 
+/** A 64-bit integer as a number when it is exact in a double, tagged otherwise. */
+export function toWireInteger(value: bigint | string): number | BigIntValue {
+  const exact = BigInt(value);
+  if (exact >= BigInt(Number.MIN_SAFE_INTEGER) && exact <= BigInt(Number.MAX_SAFE_INTEGER)) return Number(exact);
+  return { kind: "bigint", value: exact.toString() };
+}
+
 /** Converts what a JavaScript driver typically returns into a `WireValue`. */
 export function toWireValue(value: unknown): WireValue {
   if (value === null || value === undefined) return null;

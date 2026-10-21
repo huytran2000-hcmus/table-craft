@@ -11,7 +11,9 @@
       "@table-craft/core": ["packages/core/src/index.ts"],
       "@table-craft/core/*": ["packages/core/src/*"],
       "@table-craft/desktop/*": ["packages/desktop/src/*"],
-      "@table-craft/plugin-sqlite": ["plugins/sqlite/src/index.ts"]
+      "@table-craft/plugin-sqlite": ["plugins/sqlite/src/index.ts"],
+      "@table-craft/plugin-postgres": ["plugins/postgres/src/index.ts"],
+      "@table-craft/plugin-mysql": ["plugins/mysql/src/index.ts"]
     },
     "types": ["node"],
     "strict": true,
@@ -29,7 +31,8 @@
     "packages/*/vite.*.ts",
     "plugins/*/src/**/*.ts",
     "test/**/*.ts",
-    "vitest.config.ts"
+    "vitest.config.ts",
+    "vitest.db.config.ts"
   ],
   // The renderer targets a browser, not Node: it gets its own program, with DOM, in plan 001.
   "exclude": ["packages/desktop/src/renderer/**", "test/renderer/**"]

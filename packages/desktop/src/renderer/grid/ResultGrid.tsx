@@ -1,18 +1,15 @@
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { useEffect, useRef } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import { RESULT_WINDOW_ROWS } from "@table-craft/desktop/engine/protocol.js";
 import { DEFAULT_APPEARANCE } from "@table-craft/desktop/renderer/appearance/tokens.js";
 import { formatCell } from "@table-craft/desktop/renderer/grid/format.js";
+import { columnChars, columnTemplate } from "@table-craft/desktop/renderer/grid/widths.js";
 import { rowAt, useResults, windowOffsetOf, type ShownResult } from "@table-craft/desktop/renderer/state/results.js";
 
 const OVERSCAN_ROWS = 20;
 const ROW_HEIGHT_PX = DEFAULT_APPEARANCE.density.rowHeightPx;
 const PLACEHOLDER_TEXT = "…";
 const STRIPE_EVERY = 2;
-
-function columnTemplate(result: ShownResult): string {
-  return `repeat(${result.columns.length}, var(--spacing-column))`;
-}
 
 function Rows({ result }: { result: ShownResult }) {
   const windows = useResults((state) => state.windows);
@@ -33,7 +30,8 @@ function Rows({ result }: { result: ShownResult }) {
     for (let offset = windowOffsetOf(first); offset <= last; offset += RESULT_WINDOW_ROWS) ensureWindow(offset);
   }, [first, last, ensureWindow]);
 
-  const template = columnTemplate(result);
+  const sample = windows[0];
+  const template = useMemo(() => columnTemplate(columnChars(result.columns, sample ?? [])), [result.columns, sample]);
   return (
     <div ref={scrollRef} className="min-h-0 flex-1 overflow-auto font-grid text-grid">
       <div

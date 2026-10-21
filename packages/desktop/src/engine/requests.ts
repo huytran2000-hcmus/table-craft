@@ -3,6 +3,7 @@ import type { EngineRequest } from "@table-craft/desktop/engine/protocol.js";
 
 const requestId = z.number().int().nonnegative();
 const handle = z.string().min(1);
+const sessionId = z.string().min(1);
 
 /** The renderer is untrusted input: every request is parsed before it is routed. */
 export const engineRequestSchema = z.discriminatedUnion("type", [
@@ -10,9 +11,10 @@ export const engineRequestSchema = z.discriminatedUnion("type", [
   z.strictObject({
     id: requestId,
     type: z.literal("statement.execute"),
-    sessionId: z.string().min(1),
+    sessionId,
     sql: z.string(),
   }),
+  z.strictObject({ id: requestId, type: z.literal("statement.cancel"), sessionId }),
   z.strictObject({
     id: requestId,
     type: z.literal("result.window"),

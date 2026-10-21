@@ -10,6 +10,9 @@ export function Console() {
   const status = useResults((state) => state.status);
   const error = useResults((state) => state.error);
   const run = useResults((state) => state.run);
+  const cancel = useResults((state) => state.cancel);
+  const canCancel = useResults((state) => state.capabilities.includes("cancel"));
+  const pluginName = useResults((state) => state.pluginName);
   const disabled = status !== "ready";
 
   function onKeyDown(event: KeyboardEvent<HTMLTextAreaElement>): void {
@@ -37,14 +40,25 @@ export function Console() {
         >
           Run
         </button>
+        {canCancel ? (
+          <button
+            type="button"
+            className="h-row rounded border border-line px-gap text-ink disabled:opacity-50"
+            disabled={status !== "running"}
+            onClick={() => void cancel()}
+          >
+            Cancel
+          </button>
+        ) : null}
         <span className="text-ink-muted">
           {status === "connecting" ? "Connecting…" : status === "running" ? "Running…" : ""}
         </span>
         {error === null ? null : (
           <span role="alert" className="text-danger">
-            {error.message} {error.hint}
+            {error.message} <span className="text-ink-muted">{error.hint}</span>
           </span>
         )}
+        {pluginName === null ? null : <span className="ml-auto text-ink-muted">{pluginName}</span>}
       </div>
     </section>
   );

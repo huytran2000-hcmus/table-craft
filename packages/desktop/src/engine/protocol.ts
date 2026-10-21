@@ -33,7 +33,10 @@ export interface Column {
   readonly type: string | null;
 }
 
-/** The one datasource an engine host serves. Plan 001 hard-wires it in main. */
+/** Mirrors `Capability` in plugin-api. The renderer branches on these, never on a plugin id (decision 007). */
+export type Capability = "sql" | "cancel";
+
+/** The one datasource an engine host serves; main picks it (decision 018). */
 export interface DatasourceConfig {
   readonly id: string;
   readonly pluginId: string;
@@ -62,10 +65,19 @@ export interface ExecutedStatement {
   readonly firstWindow: ResultWindow;
 }
 
+export interface OpenedSession {
+  readonly sessionId: string;
+  /** The datasource's plugin, by its manifest name, for display only. */
+  readonly pluginName: string;
+  readonly capabilities: readonly Capability[];
+}
+
 /** The engine's calls: what each request carries and what its response answers with. */
 export interface EngineCalls {
-  "session.open": { params: Record<never, never>; result: { readonly sessionId: string } };
+  "session.open": { params: Record<never, never>; result: OpenedSession };
   "statement.execute": { params: { readonly sessionId: string; readonly sql: string }; result: ExecutedStatement };
+  /** Cancels the statement running in the session, if any; its `statement.execute` fails with `cancelled`. */
+  "statement.cancel": { params: { readonly sessionId: string }; result: null };
   "result.window": {
     params: { readonly handle: string; readonly offset: number; readonly limit: number };
     result: ResultWindow;
@@ -92,7 +104,9 @@ export type EngineErrorCode =
   | "pluginUnavailable"
   | "invalidConfig"
   | "unknownSession"
+  | "connectionFailed"
   | "statementFailed"
+  | "cancelled"
   | "invalidRequest"
   | "internal";
 

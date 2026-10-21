@@ -13,12 +13,19 @@ Run from the repository root.
 
 - `bun install`
 - `bun run test` - Vitest, unit tests plus the plugin contract suite against SQLite
-- `bun run test:db` - the contract suite against PostgreSQL and MySQL in `docker compose`
+- `bun run test:db` - the contract suite against PostgreSQL (port 55432) and MySQL (port 53306)
+  in `docker compose`, seeded from `test/db/schema/`
 - `bun run test:smoke` - build the app and drive it under Playwright; needs a display
+- `bun run test:smoke:db` - the same against PostgreSQL, MySQL and SQLite; set
+  `TABLE_CRAFT_EVIDENCE_DIR=docs/evidence/NNN` to save a window PNG per scenario for a plan's
+  live test. `test/e2e/harness.ts` holds the launch, run and capture helpers
 - `bun run typecheck` - `tsc --noEmit`, every program
 - `bun run lint` / `bun run lint:fix` - ESLint, including the architecture fences
 - `bun run format:check` / `bun run format` - Prettier
-- `bun run desktop` - build and launch the app
+- `bun run desktop` - build and launch the app. It connects to in-memory SQLite unless
+  `TABLE_CRAFT_DATASOURCE` holds a datasource as JSON, e.g.
+  `{"id":"pg","pluginId":"postgres","config":{"host":"127.0.0.1","port":55432,"database":"table_craft","user":"table_craft","password":"table_craft"}}`
+  for the `test:db` Postgres. A development seam until connections land (decision 018)
 - `bun run desktop:package` - electron-builder; macOS is first-class, Windows and Linux best-effort
 
 Bun is the toolchain only. Electron runs Node, so nothing under `packages/*/src` or
@@ -50,6 +57,9 @@ plugins/<id>/              built-in plugins (@table-craft/plugin-<id>): postgres
                            sqlite. Each depends on plugin-api and its driver alone, and
                            ships a `table-craft-plugin.json` beside `src/`
 test/                      Vitest suites, `givenX_whenY_thenZ`
+  db/                      compose.yml, the fixture schema per dialect, contract runs per database
+  e2e/                     Playwright `_electron` suites and the shared harness
+  support/                 fixtures shared across suites (type_probe rows, seeded SQLite, configs)
 docs/design/               specification.md, design-system.md
 docs/decisions/            one numbered file per durable decision
 docs/plans/                one plan per feature, committed with its Live test section

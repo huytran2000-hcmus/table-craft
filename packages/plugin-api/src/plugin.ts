@@ -5,7 +5,7 @@ import type { WireValue } from "./values.js";
  * What a plugin can do. The UI branches on these, never on a plugin id (decision 007), and a
  * capability without contract-suite coverage cannot be declared (decision 013).
  */
-export const CAPABILITIES = ["sql"] as const;
+export const CAPABILITIES = ["sql", "cancel"] as const;
 
 export type Capability = (typeof CAPABILITIES)[number];
 
@@ -27,7 +27,16 @@ export interface ExecuteResult {
 }
 
 export interface Session {
+  /**
+   * Rejects with a `PluginError`: `cancelled` when `cancel` interrupted it, `statementFailed`
+   * otherwise. A session runs one statement at a time.
+   */
   execute(sql: string): Promise<ExecuteResult>;
+  /**
+   * Present exactly when the plugin declares `cancel`. Interrupts the running statement, which
+   * then rejects with `cancelled`, and leaves the session usable; a no-op when nothing runs.
+   */
+  cancel?(): Promise<void>;
   close(): Promise<void>;
 }
 
@@ -37,5 +46,6 @@ export interface DatasourcePlugin {
   readonly capabilities: readonly Capability[];
   /** Validates the configuration `connect` receives; the host parses before it calls. */
   readonly connectionSchema: z.ZodType;
+  /** Rejects with a `PluginError` coded `connectionFailed` when the database cannot be reached. */
   connect(config: unknown): Promise<Session>;
 }

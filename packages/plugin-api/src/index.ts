@@ -1,3 +1,4 @@
+export { isPluginError, PLUGIN_ERROR_CODES, PluginError, type PluginErrorCode } from "./errors.js";
 export { MANIFEST_FILE, pluginManifestSchema, type PluginManifest } from "./manifest.js";
 export {
   CAPABILITIES,
@@ -10,6 +11,7 @@ export {
 } from "./plugin.js";
 export {
   BYTES_PREVIEW_LENGTH,
+  toWireInteger,
   toWireValue,
   type BigIntValue,
   type BytesValue,

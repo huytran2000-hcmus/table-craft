@@ -1,6 +1,6 @@
 import { describe, expect, expectTypeOf, it } from "vitest";
 import { RESULT_FETCH_CAP, RESULT_WINDOW_ROWS, type CoreErrorCode, type ResultSummary } from "@table-craft/core";
-import { MANIFEST_FILE, type Column, type WireValue } from "@table-craft/plugin-api";
+import { MANIFEST_FILE, type Capability, type Column, type WireValue } from "@table-craft/plugin-api";
 import * as protocol from "@table-craft/desktop/engine/protocol.js";
 
 describe("engine protocol", () => {
@@ -12,6 +12,7 @@ describe("engine protocol", () => {
   it("givenProtocolWireTypes_whenComparedWithPluginApi_thenIdentical", () => {
     expectTypeOf<protocol.WireValue>().toEqualTypeOf<WireValue>();
     expectTypeOf<protocol.Column>().toEqualTypeOf<Column>();
+    expectTypeOf<protocol.Capability>().toEqualTypeOf<Capability>();
   });
 
   it("givenExecutedStatement_whenComparedWithCoreSummary_thenCarriesEveryField", () => {

@@ -23,7 +23,7 @@
   --spacing-row: var(--tc-row-height);
   --spacing-cell: var(--tc-cell-padding);
   --spacing-gap: var(--tc-gap);
-  --spacing-column: var(--tc-grid-column-width);
+  --spacing-column-max: var(--tc-grid-column-max-width);
   --spacing-console: var(--tc-console-height);
 }
 

@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { pluginManifestSchema } from "@table-craft/plugin-api";
+import {
+  API_VERSION,
+  PluginError,
+  pluginManifestSchema,
+  z,
+  type DatasourcePlugin,
+  type Session,
+} from "@table-craft/plugin-api";
 import type { PluginLoadResult } from "@table-craft/core";
 import sqlite from "@table-craft/plugin-sqlite";
 import { createEngine } from "@table-craft/desktop/engine/engine.js";
@@ -16,6 +23,52 @@ const LOADED_SQLITE: PluginLoadResult = {
 };
 const DATASOURCE = { id: "scratch", pluginId: "sqlite", config: { path: ":memory:" } };
 const ROWS_1200 = "WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 1200) SELECT i FROM n";
+
+const CANCELLABLE_ID = "cancellable";
+
+/** Its one statement runs until cancelled; enough to drive `statement.cancel` without a database. */
+function cancellablePlugin(): { plugin: DatasourcePlugin; cancels: () => number } {
+  let cancels = 0;
+  let stop: (() => void) | null = null;
+  const session: Session = {
+    execute: () =>
+      new Promise((_resolve, reject) => {
+        stop = () => reject(new PluginError("cancelled", "cancelled by the test"));
+      }),
+    cancel: () => {
+      cancels += 1;
+      stop?.();
+      stop = null;
+      return Promise.resolve();
+    },
+    close: () => Promise.resolve(),
+  };
+  const plugin: DatasourcePlugin = {
+    id: CANCELLABLE_ID,
+    capabilities: ["sql", "cancel"],
+    connectionSchema: z.object({}),
+    connect: () => Promise.resolve(session),
+  };
+  return { plugin, cancels: () => cancels };
+}
+
+function connectedToCancellable(plugin: DatasourcePlugin) {
+  const loaded: PluginLoadResult = {
+    status: "loaded",
+    directory: "plugins/cancellable",
+    manifest: pluginManifestSchema.parse({
+      id: CANCELLABLE_ID,
+      name: "Cancellable",
+      version: "0.0.0",
+      apiVersion: API_VERSION,
+      entry: "index.js",
+      capabilities: ["sql", "cancel"],
+      highlight: "sql",
+    }),
+    plugin,
+  };
+  return createEngine({ datasource: { id: "c", pluginId: CANCELLABLE_ID, config: {} }, plugins: [loaded] }).connect();
+}
 
 function connected() {
   return createEngine({ datasource: DATASOURCE, plugins: [LOADED_SQLITE] }).connect();
@@ -137,5 +190,55 @@ describe("engine", () => {
     const response = await connection.handle({ id: 3, type: "result.window", handle, offset: 0, limit: 1 });
 
     expect(response).toMatchObject({ type: "engine.error", error: { code: "unknownHandle" } });
+  });
+
+  it("givenSessionOpened_whenAnswered_thenCarriesPluginNameAndCapabilities", async () => {
+    const response = await connected().handle({ id: 1, type: "session.open" });
+
+    expect(resultOf(response)).toMatchObject({ pluginName: "SQLite", capabilities: ["sql"] });
+  });
+
+  it("givenUnreachableDatabase_whenSessionOpened_thenConnectionFailedError", async () => {
+    const connection = createEngine({
+      datasource: { ...DATASOURCE, config: { path: "/nonexistent-table-craft-directory/db.sqlite" } },
+      plugins: [LOADED_SQLITE],
+    }).connect();
+
+    const response = await connection.handle({ id: 1, type: "session.open" });
+
+    expect(response).toMatchObject({ type: "engine.error", error: { code: "connectionFailed" } });
+  });
+
+  it("givenCancelRequest_whenEngineHasNoCancelCapability_thenInvalidRequestError", async () => {
+    const connection = connected();
+    const sessionId = await openSession(connection);
+
+    const response = await connection.handle({ id: 2, type: "statement.cancel", sessionId });
+
+    expect(response).toMatchObject({ id: 2, type: "engine.error", error: { code: "invalidRequest" } });
+  });
+
+  it("givenRunningStatement_whenCancelled_thenExecuteFailsWithCancelled", async () => {
+    const { plugin, cancels } = cancellablePlugin();
+    const connection = connectedToCancellable(plugin);
+    const sessionId = await openSession(connection);
+    const running = connection.handle({ id: 2, type: "statement.execute", sessionId, sql: "SELECT forever()" });
+
+    const cancelled = await connection.handle({ id: 3, type: "statement.cancel", sessionId });
+
+    expect(cancelled).toEqual({ id: 3, type: "statement.cancel", result: null });
+    expect(await running).toMatchObject({ id: 2, type: "engine.error", error: { code: "cancelled" } });
+    expect(cancels()).toBe(1);
+  });
+
+  it("givenIdleSession_whenCancelled_thenAnswersNullWithoutCallingThePlugin", async () => {
+    const { plugin, cancels } = cancellablePlugin();
+    const connection = connectedToCancellable(plugin);
+    const sessionId = await openSession(connection);
+
+    const response = await connection.handle({ id: 2, type: "statement.cancel", sessionId });
+
+    expect(response).toEqual({ id: 2, type: "statement.cancel", result: null });
+    expect(cancels()).toBe(0);
   });
 });

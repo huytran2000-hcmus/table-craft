@@ -1,5 +1,11 @@
 import { create } from "zustand";
-import { RESULT_WINDOW_ROWS, type Column, type EngineError, type Row } from "@table-craft/desktop/engine/protocol.js";
+import {
+  RESULT_WINDOW_ROWS,
+  type Capability,
+  type Column,
+  type EngineError,
+  type Row,
+} from "@table-craft/desktop/engine/protocol.js";
 import { connectEngine, EngineRequestError, type EngineClient } from "@table-craft/desktop/renderer/engine/client.js";
 
 export type ConsoleStatus = "connecting" | "ready" | "running" | "failed";
@@ -16,10 +22,15 @@ export interface ResultState {
   readonly status: ConsoleStatus;
   readonly error: EngineError | null;
   readonly result: ShownResult | null;
+  /** The datasource plugin's manifest name, once a session is open. */
+  readonly pluginName: string | null;
+  readonly capabilities: readonly Capability[];
   /** Loaded windows keyed by their offset, a multiple of `RESULT_WINDOW_ROWS`. */
   readonly windows: Readonly<Record<number, readonly Row[]>>;
   readonly connect: () => Promise<void>;
   readonly run: (sql: string) => Promise<void>;
+  /** Asks the engine to cancel the running statement; `run` then reports it as cancelled. */
+  readonly cancel: () => Promise<void>;
   readonly ensureWindow: (offset: number) => void;
 }
 
@@ -49,13 +60,16 @@ export const useResults = create<ResultState>()((set, get) => ({
   status: "connecting",
   error: null,
   result: null,
+  pluginName: null,
+  capabilities: [],
   windows: {},
 
   async connect() {
     try {
       client = await connectEngine();
-      sessionId = (await client.call("session.open", {})).sessionId;
-      set({ status: "ready", error: null });
+      const opened = await client.call("session.open", {});
+      sessionId = opened.sessionId;
+      set({ status: "ready", error: null, pluginName: opened.pluginName, capabilities: opened.capabilities });
     } catch (cause) {
       set({ status: "failed", error: toError(cause) });
     }
@@ -73,6 +87,15 @@ export const useResults = create<ResultState>()((set, get) => ({
       set({ status: "ready", result, windows: { [firstWindow.offset]: firstWindow.rows } });
     } catch (cause) {
       set({ status: "ready", error: toError(cause) });
+    }
+  },
+
+  async cancel() {
+    if (client === null || sessionId === null || get().status !== "running") return;
+    try {
+      await client.call("statement.cancel", { sessionId });
+    } catch (cause) {
+      set({ error: toError(cause) });
     }
   },
 

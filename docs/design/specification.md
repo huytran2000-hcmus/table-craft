@@ -19,7 +19,7 @@ its own MessagePort (decision 002).
 
 A plugin is a directory with `table-craft-plugin.json` and an ESM entry exporting a
 `DatasourcePlugin` (decisions 005 to 008). The contract lives in `@table-craft/plugin-api`.
-`API_VERSION` is `0.1.0`; while it is `0.x` the contract is unstable and every minor is a break.
+`API_VERSION` is `0.2.0`; while it is `0.x` the contract is unstable and every minor is a break.
 
 ### Discovery
 
@@ -53,12 +53,23 @@ No other field is accepted.
 
 ### Capabilities
 
-| Capability | Promises                             | Contract cases                                                              |
-| ---------- | ------------------------------------ | --------------------------------------------------------------------------- |
-| `sql`      | `Session.execute` runs one statement | select literals, statement without rows, rows affected, invalid SQL rejects |
+| Capability | Promises                                                       | Contract cases                                                                                                                                                                        |
+| ---------- | -------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `sql`      | `Session.execute` runs one statement                           | select literals, statement without rows, rows affected, invalid SQL rejects `statementFailed`, session usable after a failure, `type_probe` cells, unshifted timestamps, early return |
+| `cancel`   | `Session.cancel` stops the running statement from another call | idle cancel is a no-op, a sleeping statement rejects `cancelled` well before it ends, the session runs the next statement                                                             |
+
+Every plugin, whatever it declares, is checked for a valid schema and, when the fixture gives a
+`wrongPasswordConfig`, for `connect` rejecting `connectionFailed`.
 
 `runPluginContract(plugin, fixture)` from `@table-craft/plugin-api/testing` registers the cases for
-each declared capability (decision 013).
+each declared capability (decision 013). The fixture carries what the suite cannot write portably:
+
+| Field                 | Meaning                                                                                |
+| --------------------- | -------------------------------------------------------------------------------------- |
+| `config`              | A config for a database seeded from `test/db/schema/<dialect>.sql`                     |
+| `wrongPasswordConfig` | Optional; the same database with a password it refuses                                 |
+| `statements.sleep(s)` | Optional; a statement that sleeps `s` seconds, required to exercise `cancel`           |
+| `typeProbe.expected`  | The `type_probe` rows as wire values; every dialect shares `test/support/typeProbe.ts` |
 
 ### DatasourcePlugin and Session
 
@@ -71,8 +82,13 @@ interface DatasourcePlugin {
 }
 
 interface Session {
-  execute(sql: string): Promise<ExecuteResult>; // rejects on a failed statement
+  execute(sql: string): Promise<ExecuteResult>; // one at a time; rejects with a PluginError
+  cancel?(): Promise<void>; // present exactly when `cancel` is declared; no-op when idle
   close(): Promise<void>;
+}
+
+class PluginError extends Error {
+  readonly code: "cancelled" | "connectionFailed" | "statementFailed";
 }
 
 interface ExecuteResult {
@@ -87,6 +103,13 @@ interface Column {
 }
 ```
 
+`connect` rejects with `connectionFailed`; `execute` rejects with `statementFailed`, or with
+`cancelled` when `cancel` stopped it. Each bundled plugin carries its own copy of the plugin API,
+so the host recognises a `PluginError` with `isPluginError` (by name and code), not `instanceof`.
+`cancel` reaches the database on a short-lived second connection (`pg_cancel_backend`,
+`KILL QUERY`). Returning the rows iterator early closes the cursor or stream and leaves the session
+usable.
+
 ### Wire values
 
 A cell is a `WireValue`: what crosses a MessagePort without loss or surprise (decision 009).
@@ -100,7 +123,19 @@ A cell is a `WireValue`: what crosses a MessagePort without loss or surprise (de
 | JSON document                    | `{ kind: "json", text }`                                            |
 | date or timestamp                | `{ kind: "date", iso }`                                             |
 
-`toWireValue` converts the JavaScript values drivers return.
+`toWireValue` converts the JavaScript values drivers return. Which shape a database type takes is
+fixed by decision 017, so the same row reads the same on every database:
+
+| Database type                                                   | Crosses as                                                  |
+| --------------------------------------------------------------- | ----------------------------------------------------------- |
+| `date`, `time`, `timestamp`, `timestamptz`, `DATETIME`          | the database's own text; no `Date`, so no time-zone shift   |
+| `numeric`, `DECIMAL`                                            | the database's text                                         |
+| 64-bit integer                                                  | a number when safe, else the `bigint` tag (`toWireInteger`) |
+| `boolean`, MySQL `TINYINT(1)`, SQLite column declared `BOOLEAN` | `true` / `false`                                            |
+| `json`, `jsonb`, MySQL `JSON`, SQLite column declared `JSON`    | the `json` tag with the database's text                     |
+| `bytea`, `BLOB`, `BINARY`, `VARBINARY`                          | the `bytes` tag                                             |
+
+The `date` tag stays for plugins whose driver only hands back a `Date`.
 
 ## Protocol
 
@@ -119,6 +154,10 @@ Main forks one engine per datasource and hands the other end of each port to the
 (`table-craft:connect-engine` over IPC, `table-craft:engine-port` back, relayed by preload as a
 window message). It never sees a request.
 
+Until connections exist (plan 004), the one datasource comes from `TABLE_CRAFT_DATASOURCE`, JSON
+`{ id, pluginId, config }`; unset or blank means in-memory SQLite, and a malformed value stops the
+app naming the variable. It is a development and test seam (decision 018).
+
 ### Renderer to engine (MessagePort)
 
 A request is `{ id, type, ...params }`; the engine answers `{ id, type, result }` with the same
@@ -127,8 +166,9 @@ handles belong to the port that created them and are released when it closes.
 
 | Request             | Params                      | Result                                                                |
 | ------------------- | --------------------------- | --------------------------------------------------------------------- |
-| `session.open`      | none                        | `{ sessionId }`, a session on the engine's datasource                 |
+| `session.open`      | none                        | `{ sessionId, pluginName, capabilities }` on the engine's datasource  |
 | `statement.execute` | `sessionId`, `sql`          | `{ handle, columns, rowCount, truncated, rowsAffected, firstWindow }` |
+| `statement.cancel`  | `sessionId`                 | `null`; stops the running statement, a no-op when idle                |
 | `result.window`     | `handle`, `offset`, `limit` | `{ offset, rows }`, at most `RESULT_WINDOW_ROWS` rows                 |
 | `result.release`    | `handle`                    | `null`; releasing twice is not an error                               |
 
@@ -149,8 +189,10 @@ was unreadable. `hint` says what to do next.
 | `invalidConfig`     | The datasource config fails the plugin's `connectionSchema`          |
 | `unknownSession`    | `sessionId` is not open on this port                                 |
 | `unknownHandle`     | The handle was released, or belongs to another port                  |
+| `connectionFailed`  | The plugin could not connect; the message is the driver's            |
 | `statementFailed`   | The database rejected the statement; the message is the driver's     |
-| `invalidRequest`    | The request did not parse                                            |
+| `cancelled`         | `statement.cancel` stopped the statement                             |
+| `invalidRequest`    | The request did not parse, or cancels on a plugin without `cancel`   |
 | `internal`          | Anything else; a bug                                                 |
 
 ## Storage

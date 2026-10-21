@@ -23,7 +23,7 @@ export function appearanceVariables(appearance: Appearance): Readonly<Record<str
     "--tc-row-height": `${density.rowHeightPx}px`,
     "--tc-cell-padding": `${density.cellPaddingPx}px`,
     "--tc-gap": `${density.gapPx}px`,
-    "--tc-grid-column-width": `${density.gridColumnWidthPx}px`,
+    "--tc-grid-column-max-width": `${density.gridColumnMaxWidthPx}px`,
     "--tc-console-height": `${density.consoleHeightPx}px`,
   };
 }
