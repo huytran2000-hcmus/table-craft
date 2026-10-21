@@ -52,7 +52,8 @@ plugins/<id>/              built-in plugins (@table-craft/plugin-<id>): postgres
 test/                      Vitest suites, `givenX_whenY_thenZ`
 docs/design/               specification.md, design-system.md
 docs/decisions/            one numbered file per durable decision
-docs/plans/                working plans; only the template is tracked
+docs/plans/                one plan per feature, committed with its Live test section
+docs/evidence/NNN/         screenshots from each plan's live test (decision 016)
 ```
 
 ## Conventions
@@ -89,4 +90,6 @@ or a named constant over a comment.
 - `docs/decisions/` records durable decisions. Start from `docs/decisions/TEMPLATE.md` when a
   meaningful alternative exists or a future reader would otherwise reopen the choice, and add the
   row to `docs/decisions/README.md`.
-- `docs/plans/` holds working implementation plans. Start from `docs/plans/TEMPLATE.md`.
+- `docs/plans/` holds implementation plans. Start from `docs/plans/TEMPLATE.md`. A plan is done
+  when its phases are green and its Live test section, with screenshots in `docs/evidence/NNN/`,
+  is filled in (decision 016).

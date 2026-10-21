@@ -25,3 +25,5 @@ started, not when it is merged.
 | 012 | [Appearance is data](012-appearance-is-data.md)                                                  |
 | 013 | [Every plugin passes one contract suite](013-every-plugin-passes-one-contract-suite.md)          |
 | 014 | [What v1 ships](014-what-v1-ships.md)                                                            |
+| 015 | [Every command is an action](015-every-command-is-an-action.md)                                  |
+| 016 | [Plans and evidence are tracked](016-plans-and-evidence-are-tracked.md)                          |

@@ -42,19 +42,19 @@ much harder to over-build._
 _Only when the feature "already looks configured but silently does nothing". For a green-field
 addition, skip this section — the intro paragraph is enough._
 
-| # | Cause |
-| - | ----- |
-| 1 | _`fn()` (`src/x.ts:30`) does A but not B_ |
-| 2 | _..._ |
+| #   | Cause                                     |
+| --- | ----------------------------------------- |
+| 1   | _`fn()` (`src/x.ts:30`) does A but not B_ |
+| 2   | _..._                                     |
 
 _Then any adjacent facts that shape the design but are not themselves causes._
 
 ## Decisions
 
-| #  | Decision |
-| -- | -------- |
-| 1  | _One ruling per row. Present tense, stated as the new behaviour, with the reason attached when it is not obvious: "…— matches DataGrip"_ |
-| 2  | _..._ |
+| #   | Decision                                                                                                                                 |
+| --- | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| 1   | _One ruling per row. Present tense, stated as the new behaviour, with the reason attached when it is not obvious: "…— matches DataGrip"_ |
+| 2   | _..._                                                                                                                                    |
 
 _A ruling that a future reader would reopen also gets a record in `docs/decisions/`._
 
@@ -92,15 +92,15 @@ const RESULT_WINDOW_ROWS = 500;
 
 _Where several files each get one job, a table reads better than prose:_
 
-| File | Responsibility |
-| ---- | -------------- |
+| File              | Responsibility                                |
+| ----------------- | --------------------------------------------- |
 | `src/x/target.ts` | _one sentence, plus the failure mode it owns_ |
 
 _Where behaviour has cases, tabulate them — this is also the test matrix:_
 
-| Situation | Result |
-| --------- | ------ |
-| _..._ | _warning, skip_ |
+| Situation | Result          |
+| --------- | --------------- |
+| _..._     | _warning, skip_ |
 
 ## Phase 1 — _..._
 
@@ -128,6 +128,22 @@ the section, not just the file._
 
 Every phase ends with `bun run typecheck` and `bun run test` both green; a phase touching a plugin
 also runs `bun run test:db`.
+
+---
+
+## Live test
+
+_Filled in by whoever implements the plan (decision 016). Build the app, drive it with Playwright
+(`playwright-core` `_electron`, as `test/e2e/` does), and exercise every user-visible behaviour the
+plan adds against every database it touches. Save one PNG per behaviour to `docs/evidence/NNN/`
+and list them here:_
+
+| #   | Scenario                   | Database                    | Result                               | Evidence                     |
+| --- | -------------------------- | --------------------------- | ------------------------------------ | ---------------------------- |
+| 1   | _what was done in the app_ | _sqlite / postgres / mysql_ | _pass, or the bug found and the fix_ | `docs/evidence/NNN/01-….png` |
+
+_Bugs found here are fixed before the plan is marked done, each with a regression test named in
+the row._
 
 ---
 
