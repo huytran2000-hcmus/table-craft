@@ -21,8 +21,27 @@ export interface ColorTokens {
   readonly searchMatch: string;
   /** A primary or unique key's glyph in the Database pane; foreign keys use `accent`. */
   readonly keyIcon: string;
+  /** Something to look at that is not a failure: a skipped statement, a cancelled run. */
+  readonly warning: string;
+  /** Behind the statement the console just ran, fading out (plan 006 decision 7). */
+  readonly statementFlash: string;
   /** The tints a datasource can carry (decision 011): its swatch, tab and console border. */
   readonly datasource: Readonly<Record<DatasourceTint, string>>;
+  readonly syntax: SyntaxColorTokens;
+}
+
+/** The SQL editor's highlighting; anything without a token draws in `ink`. */
+export interface SyntaxColorTokens {
+  readonly keyword: string;
+  readonly string: string;
+  readonly number: string;
+  readonly comment: string;
+  /** Quoted identifiers: `"order"`, `` `order` ``. */
+  readonly identifier: string;
+  readonly operator: string;
+  /** Bind parameters and variables: `$1`, `:name`, `@var`. */
+  readonly variable: string;
+  readonly bracketMatch: string;
 }
 
 export interface FontToken {
@@ -80,6 +99,8 @@ export const DARK_COLORS: ColorTokens = {
   selection: "#2e436e",
   searchMatch: "#6b5a1e",
   keyIcon: "#d9a343",
+  warning: "#e0a84a",
+  statementFlash: "#3d4a2e",
   datasource: {
     red: "#c75450",
     orange: "#d08b46",
@@ -87,6 +108,16 @@ export const DARK_COLORS: ColorTokens = {
     green: "#5e9f62",
     blue: "#4f80c9",
     violet: "#9670c7",
+  },
+  syntax: {
+    keyword: "#cf8e6d",
+    string: "#6aab73",
+    number: "#2aacb8",
+    comment: "#7a7e85",
+    identifier: "#c77dbb",
+    operator: "#bcbec4",
+    variable: "#56a8f5",
+    bracketMatch: "#43454a",
   },
 };
 

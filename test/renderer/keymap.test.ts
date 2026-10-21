@@ -1,7 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 import { ALL_ACTIONS } from "@table-craft/desktop/renderer/actions/allActions.js";
-import { createKeyDispatcher, findClashes } from "@table-craft/desktop/renderer/actions/keymap.js";
+import type { FocusRegion } from "@table-craft/desktop/renderer/actions/context.js";
+import { createKeyDispatcher, findClashes, findReservedClashes } from "@table-craft/desktop/renderer/actions/keymap.js";
 import { createActionRegistry, defineAction } from "@table-craft/desktop/renderer/actions/registry.js";
+import { EDITOR_CHORDS } from "@table-craft/desktop/renderer/console/editorKeys.js";
 import { IDLE_CONTEXT, keydown } from "./support.js";
 
 function dispatcherWith(enabled: boolean, paletteOpen = false) {
@@ -26,6 +28,78 @@ function dispatcherWith(enabled: boolean, paletteOpen = false) {
 describe("keymap", () => {
   it("givenRegisteredActions_whenShortcutsCompared_thenNoTwoShareAChord", () => {
     expect(findClashes(ALL_ACTIONS)).toEqual([]);
+  });
+
+  it("givenEditorChords_whenComparedWithKeymap_thenNoClash", () => {
+    expect(findReservedClashes(ALL_ACTIONS, EDITOR_CHORDS, "editor")).toEqual([]);
+  });
+
+  it("givenActionOnEditorChordOutsideEditorOnly_whenCompared_thenNoClashButUnscopedOneClashes", () => {
+    const run = () => undefined;
+    const scoped = defineAction({
+      id: "scoped",
+      title: "Scoped",
+      category: "Database",
+      shortcut: "Mod+D",
+      shortcutRegion: ["database", "services"],
+      run,
+    });
+    const unscoped = defineAction({ id: "unscoped", title: "Unscoped", category: "Console", shortcut: "Mod+/", run });
+
+    const clashes = findReservedClashes([scoped, unscoped], EDITOR_CHORDS, "editor");
+
+    expect(clashes.map((clash) => clash.ids)).toEqual([["unscoped"], ["unscoped"]]);
+  });
+
+  it("givenReservedChord_whenPressedInEditor_thenRegistryLetsItPass", () => {
+    const ran = vi.fn();
+    const registry = createActionRegistry(() => IDLE_CONTEXT);
+    registry.register([defineAction({ id: "undo", title: "Undo", category: "Console", shortcut: "Mod+Z", run: ran })]);
+    let reserved: readonly string[] = EDITOR_CHORDS;
+    const dispatch = createKeyDispatcher({
+      registry,
+      platform: "mac",
+      paletteOpen: () => false,
+      reservedChords: () => reserved,
+    });
+
+    const inEditor = keydown({ key: "z", metaKey: true });
+    dispatch(inEditor);
+    reserved = [];
+    const elsewhere = keydown({ key: "z", metaKey: true });
+    dispatch(elsewhere);
+
+    expect(inEditor.prevented()).toBe(false);
+    expect(elsewhere.prevented()).toBe(true);
+    expect(ran).toHaveBeenCalledTimes(1);
+  });
+
+  it("givenActionScopedToSeveralRegions_whenFocusMoves_thenFiresOnlyInThem", () => {
+    const ran = vi.fn();
+    const registry = createActionRegistry(() => IDLE_CONTEXT);
+    registry.register([
+      defineAction({
+        id: "back",
+        title: "Back",
+        category: "Navigation",
+        shortcut: "Escape",
+        shortcutRegion: ["database", "services"],
+        run: ran,
+      }),
+    ]);
+    let region: FocusRegion = "services";
+    const dispatch = createKeyDispatcher({
+      registry,
+      platform: "mac",
+      paletteOpen: () => false,
+      focusedRegion: () => region,
+    });
+
+    dispatch(keydown({ key: "Escape" }));
+    region = "editor";
+    dispatch(keydown({ key: "Escape" }));
+
+    expect(ran).toHaveBeenCalledTimes(1);
   });
 
   it("givenTwoActionsOnOneChord_whenCompared_thenClashNamesBoth", () => {

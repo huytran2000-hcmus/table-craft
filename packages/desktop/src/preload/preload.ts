@@ -48,6 +48,10 @@ const bridge: TableCraftBridge = {
   connectEngine: (datasourceId, secrets) => invoke(INVOKE_CHANNELS.connectEngine, { datasourceId, secrets }),
   disconnectEngine: (datasourceId) => invoke(INVOKE_CHANNELS.disconnectEngine, { datasourceId }),
   chooseFile: (title) => invoke(INVOKE_CHANNELS.chooseFile, { title }),
+  listConsoles: (datasourceId) => invoke(INVOKE_CHANNELS.listConsoles, { datasourceId }),
+  readConsole: (datasourceId, name) => invoke(INVOKE_CHANNELS.readConsole, { datasourceId, name }),
+  writeConsole: (datasourceId, name, text) => invoke(INVOKE_CHANNELS.writeConsole, { datasourceId, name, text }),
+  deleteConsole: (datasourceId, name) => invoke(INVOKE_CHANNELS.deleteConsole, { datasourceId, name }),
   onDatasourcesChanged: (listener) => subscribe<DatasourceList>(CHANNELS.datasourcesChanged, listener),
   onEngineExited: (listener) => subscribe<EngineExited>(CHANNELS.engineExited, listener),
   onInvokeAction(listener) {
@@ -55,6 +59,8 @@ const bridge: TableCraftBridge = {
       if (typeof actionId === "string") listener(actionId);
     });
   },
+  onCloseRequested: (listener) => subscribe<unknown>(CHANNELS.closeRequested, () => listener()),
+  answerClose: (proceed) => invoke(INVOKE_CHANNELS.answerClose, { proceed }),
 };
 
 contextBridge.exposeInMainWorld(BRIDGE_KEY, bridge);

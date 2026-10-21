@@ -23,7 +23,7 @@ import {
   pressDoubleShift,
   SCENARIO_TIMEOUT_MS,
   setWindowSize,
-  startStatement,
+  sqlEditor,
   toolWindow,
   waitUntilReady,
   type Datasource,
@@ -300,15 +300,14 @@ describe.runIf(DATABASES_ENABLED)("database explorer live test", () => {
   );
 
   it(
-    "givenTableCreatedInConsole_whenSynchronized_thenItAppearsAndStatusShowsTheNewSync",
+    "givenTableCreatedOutsideTheApp_whenSynchronized_thenItAppearsAndStatusShowsTheNewSync",
     async () => {
       const page = await launchExplored(POSTGRES);
       await expand(page, "tables 3");
       const before = await syncStatus(page).textContent();
 
-      await startStatement(page, `CREATE TABLE ${NEW_TABLE} (id integer PRIMARY KEY, note text)`);
-      await page.getByText("0 rows affected").waitFor({ timeout: LAUNCH_TIMEOUT_MS });
-      await waitUntilReady(page);
+      // Outside the app, because DDL run in a console refreshes the tree by itself (plan 006).
+      await asOwner([`CREATE TABLE public.${NEW_TABLE} (id integer PRIMARY KEY, note text)`]);
       await expect.poll(() => row(page, NEW_TABLE).count()).toBe(0);
       await pressChord(page, "Alt+Y");
 
@@ -429,11 +428,11 @@ describe.runIf(DATABASES_ENABLED)("database explorer live test", () => {
 
         await expect.poll(() => clipboardText(running as RunningApp)).toBe(qualified);
         if (datasource.pluginId === "sqlite") {
-          const editor = page.getByLabel("SQL console");
+          const editor = sqlEditor(page);
           await editor.click();
           await pressChord(page, "A");
           await pressChord(page, "V");
-          await expect.poll(() => editor.inputValue()).toBe(qualified);
+          await expect.poll(() => editor.textContent()).toBe(qualified);
           await captureWindow(page, "copy-name");
         }
         await running?.app.close();

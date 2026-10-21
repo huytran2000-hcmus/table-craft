@@ -14,6 +14,9 @@ import {
   type Namespace,
   type NamespaceCatalog,
   type PluginErrorCode,
+  type StatementClass,
+  type StatementSpan,
+  type TransactionMode,
   type WireValue,
 } from "@table-craft/plugin-api";
 import * as protocol from "@table-craft/desktop/engine/protocol.js";
@@ -46,7 +49,14 @@ describe("engine protocol", () => {
   });
 
   it("givenExecutedStatement_whenComparedWithCoreSummary_thenCarriesEveryField", () => {
-    expectTypeOf<Omit<protocol.ExecutedStatement, "firstWindow">>().toEqualTypeOf<ResultSummary>();
+    expectTypeOf<Omit<protocol.ExecutedStatement, "firstWindow" | "transactionOpen">>().toEqualTypeOf<ResultSummary>();
+  });
+
+  it("givenScriptTypes_whenComparedWithPluginApi_thenIdentical", () => {
+    expectTypeOf<protocol.ClassifiedStatement>().toExtend<StatementSpan & StatementClass>();
+    expectTypeOf<StatementSpan & StatementClass>().toExtend<protocol.ClassifiedStatement>();
+    expectTypeOf<keyof protocol.ClassifiedStatement>().toEqualTypeOf<keyof (StatementSpan & StatementClass)>();
+    expectTypeOf<protocol.TransactionMode>().toEqualTypeOf<TransactionMode>();
   });
 
   it("givenCoreErrorCodes_whenComparedWithEngineErrorCodes_thenEveryOneIsCovered", () => {

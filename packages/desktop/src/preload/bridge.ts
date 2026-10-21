@@ -14,6 +14,8 @@ export const CHANNELS = {
   datasourcesChanged: "table-craft:datasources.changed",
   /** Main to every window: an engine host ended; the payload is an `EngineExited`. */
   engineExited: "table-craft:engine.exited",
+  /** Main to a window: the user asked to close it or quit; answer with `answerClose`. */
+  closeRequested: "table-craft:window.close-requested",
 } as const;
 
 /** Renderer to main, through `ipcRenderer.invoke`; each answers with an `InvokeResult`. */
@@ -26,6 +28,11 @@ export const INVOKE_CHANNELS = {
   connectEngine: "table-craft:engine.connect",
   disconnectEngine: "table-craft:engine.disconnect",
   chooseFile: "table-craft:dialog.choose-file",
+  listConsoles: "table-craft:consoles.list",
+  readConsole: "table-craft:consoles.read",
+  writeConsole: "table-craft:consoles.write",
+  deleteConsole: "table-craft:consoles.delete",
+  answerClose: "table-craft:window.answer-close",
 } as const;
 
 /** The `window.postMessage` kind preload uses to hand a port on; contextBridge cannot carry one. */
@@ -69,6 +76,8 @@ export interface PluginInfo {
   readonly unavailableReason: string | null;
   readonly capabilities: readonly Capability[];
   readonly fields: readonly ConnectionField[];
+  /** The manifest's SQL dialect for the editor, e.g. `postgresql`; null when the manifest is unreadable. */
+  readonly highlight: string | null;
 }
 
 /** A datasource as `datasources.json` holds it: no secret value, ever (decision 010). */
@@ -154,8 +163,18 @@ export interface TableCraftBridge {
   disconnectEngine(datasourceId: string): Promise<InvokeResult<null>>;
   /** The native open dialog, for a `file` connection field; null when cancelled. */
   chooseFile(title: string): Promise<InvokeResult<string | null>>;
+  /** The console names saved for the datasource, sorted (plan 006). */
+  listConsoles(datasourceId: string): Promise<InvokeResult<readonly string[]>>;
+  /** A saved console's text; null when none of that name is saved. */
+  readConsole(datasourceId: string, name: string): Promise<InvokeResult<string | null>>;
+  writeConsole(datasourceId: string, name: string, text: string): Promise<InvokeResult<null>>;
+  deleteConsole(datasourceId: string, name: string): Promise<InvokeResult<null>>;
   onDatasourcesChanged(listener: (list: DatasourceList) => void): () => void;
   onEngineExited(listener: (exited: EngineExited) => void): () => void;
   /** Calls `listener` with the action id of each native menu item picked; returns the unsubscribe. */
   onInvokeAction(listener: (actionId: string) => void): () => void;
+  /** Main holds a close or quit until `answerClose`; returns the unsubscribe. */
+  onCloseRequested(listener: () => void): () => void;
+  /** Lets the held close go ahead, or keeps the window open. */
+  answerClose(proceed: boolean): Promise<InvokeResult<null>>;
 }

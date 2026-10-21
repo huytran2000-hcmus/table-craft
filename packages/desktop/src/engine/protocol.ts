@@ -38,7 +38,29 @@ export interface Column {
 }
 
 /** Mirrors `Capability` in plugin-api. The renderer branches on these, never on a plugin id (decision 007). */
-export type Capability = "sql" | "cancel" | "schemaTree";
+export type Capability = "sql" | "cancel" | "schemaTree" | "transactions";
+
+/** Mirrors `StatementKind` in plugin-api. */
+export type StatementKind = "read" | "write" | "ddl" | "transaction" | "other";
+
+/** Mirrors `TransactionMode` in plugin-api: `auto` commits each statement, `manual` holds one transaction open. */
+export type TransactionMode = "auto" | "manual";
+
+/** One statement of a script: its span in UTF-16 offsets, as the plugin split it, and its class. */
+export interface ClassifiedStatement {
+  readonly from: number;
+  readonly to: number;
+  readonly sql: string;
+  readonly kind: StatementKind;
+  /** Why the console asks before running it, such as `DELETE without WHERE`; null when it need not. */
+  readonly destructive: string | null;
+}
+
+/** A session's transaction after a transaction request. */
+export interface TransactionState {
+  readonly mode: TransactionMode;
+  readonly transactionOpen: boolean;
+}
 
 /** Mirrors `Namespace` in plugin-api. */
 export interface Namespace {
@@ -172,7 +194,7 @@ export interface ResultWindow {
   readonly rows: readonly Row[];
 }
 
-/** Mirrors `ResultSummary` in core, with the first window attached. */
+/** Mirrors `ResultSummary` in core, with the first window and the session's transaction attached. */
 export interface ExecutedStatement {
   readonly handle: string;
   readonly columns: readonly Column[];
@@ -180,6 +202,8 @@ export interface ExecutedStatement {
   readonly truncated: boolean;
   readonly rowsAffected: number | null;
   readonly firstWindow: ResultWindow;
+  /** Whether the session holds a transaction open after the statement; always false without `transactions`. */
+  readonly transactionOpen: boolean;
 }
 
 export interface OpenedSession {
@@ -199,6 +223,17 @@ export interface EngineCalls {
   "statement.execute": { params: { readonly sessionId: string; readonly sql: string }; result: ExecutedStatement };
   /** Cancels the statement running in the session, if any; its `statement.execute` fails with `cancelled`. */
   "statement.cancel": { params: { readonly sessionId: string }; result: null };
+  /** Splits and classifies `text` with the datasource plugin's language; needs no session. */
+  "script.split": { params: { readonly text: string }; result: readonly ClassifiedStatement[] };
+  /** Switching to `auto` while a transaction is open fails with `statementFailed`. Needs `transactions`. */
+  "transaction.setMode": {
+    params: { readonly sessionId: string; readonly mode: TransactionMode };
+    result: TransactionState;
+  };
+  /** Commits the open transaction; does nothing when none is open. Needs `transactions`. */
+  "transaction.commit": { params: { readonly sessionId: string }; result: TransactionState };
+  /** Rolls back the open transaction; does nothing when none is open. Needs `transactions`. */
+  "transaction.rollback": { params: { readonly sessionId: string }; result: TransactionState };
   "result.window": {
     params: { readonly handle: string; readonly offset: number; readonly limit: number };
     result: ResultWindow;

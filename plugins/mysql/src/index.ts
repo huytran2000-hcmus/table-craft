@@ -12,13 +12,39 @@ import {
   type ExecuteResult,
   type Introspector,
   type Row,
+  type PluginErrorCode,
   type Session,
+  type SqlLanguage,
+  type TransactionMode,
+  type Transactions,
   type WireValue,
 } from "@table-craft/plugin-api";
+import { classifyTokens, sqlSplitter, transactionEffect, type SqlDialectOptions } from "@table-craft/plugin-api/sql";
 import { mysqlIntrospector } from "./introspect.js";
 
 const PLUGIN_ID = "mysql";
-const CAPABILITIES: readonly Capability[] = ["sql", "cancel", "schemaTree"];
+const CAPABILITIES: readonly Capability[] = ["sql", "cancel", "schemaTree", "transactions"];
+
+/** What the mysql client accepts: `'\''`, `# comments`, `DELIMITER //` and `BEGIN … END` routine bodies. */
+const DIALECT: SqlDialectOptions = {
+  backslashEscapes: true,
+  delimiterCommand: true,
+  hashComments: true,
+  blockKeywords: ["BEGIN"],
+};
+
+const language: SqlLanguage = {
+  split: sqlSplitter(DIALECT),
+  classify: (sql) => classifyTokens(sql, DIALECT),
+};
+
+/** Manual mode is autocommit off: the server opens a transaction with the next statement. */
+const MANUAL_SQL = "SET autocommit = 0";
+const AUTO_SQL = "SET autocommit = 1";
+const COMMIT_SQL = "COMMIT";
+const ROLLBACK_SQL = "ROLLBACK";
+const OPEN_TRANSACTION_MESSAGE = "A transaction is open; commit or roll it back before switching to auto-commit.";
+const BUSY_MESSAGE = "Another statement is still running in this session.";
 
 const DEFAULT_PORT = 3306;
 const MAX_PORT = 65_535;
@@ -163,11 +189,15 @@ function openConnection(config: MysqlConfig): Promise<mysql.Connection> {
 const READ_ONLY_SQL = "SET SESSION TRANSACTION READ ONLY";
 const VERSION_SQL = "SELECT VERSION() AS version";
 
-function query(connection: mysql.Connection, sql: string): Promise<unknown> {
+function query(
+  connection: mysql.Connection,
+  sql: string,
+  code: PluginErrorCode = "connectionFailed",
+): Promise<unknown> {
   return new Promise((resolve, reject) => {
     connection.query(sql, (error, rows) => {
       if (error === null) resolve(rows);
-      else reject(new PluginError("connectionFailed", messageOf(error), { cause: error }));
+      else reject(new PluginError(code, messageOf(error), { cause: error }));
     });
   });
 }
@@ -192,6 +222,11 @@ const NO_ROWS: AsyncIterable<Row> = {
 
 interface Running {
   cancelRequested: boolean;
+}
+
+interface TransactionState {
+  mode: TransactionMode;
+  open: boolean;
 }
 
 /** One statement in flight; its rows arrive through a paused-when-full object stream. */
@@ -225,15 +260,29 @@ class MysqlSession implements Session {
   #broken: Error | null = null;
   #running: Running | null = null;
   #cancelling: Promise<void> = Promise.resolve();
+  readonly #transaction: TransactionState = { mode: "auto", open: false };
 
   readonly serverVersion: string | null;
   readonly introspector: Introspector;
+  readonly transactions: Transactions;
 
   constructor(config: MysqlConfig, connection: mysql.Connection, serverVersion: string | null) {
     this.#config = config;
     this.#connection = connection;
     this.serverVersion = serverVersion;
     this.introspector = mysqlIntrospector(connection);
+    const state = this.#transaction;
+    this.transactions = {
+      setMode: (mode) => this.#setMode(mode),
+      commit: () => this.#endTransaction(COMMIT_SQL),
+      rollback: () => this.#endTransaction(ROLLBACK_SQL),
+      get mode() {
+        return state.mode;
+      },
+      get open() {
+        return state.open;
+      },
+    };
     connection.on("error", (error: Error) => {
       this.#broken = error;
     });
@@ -243,15 +292,17 @@ class MysqlSession implements Session {
     if (this.#broken !== null) {
       throw new PluginError("statementFailed", `The connection was lost: ${this.#broken.message}`);
     }
-    if (this.#running !== null) {
-      throw new PluginError("statementFailed", "Another statement is still running in this session.");
-    }
+    if (this.#running !== null) throw new PluginError("statementFailed", BUSY_MESSAGE);
     await this.#cancelling.catch(() => undefined);
     const running: Running = { cancelRequested: false };
     this.#running = running;
     const inFlight = start(this.#connection, sql);
     try {
-      const fields = await inFlight.fields;
+      const fields = await inFlight.fields.catch((cause: unknown) => {
+        if (transactionEffect(sql, DIALECT) === "end") this.#transaction.open = false;
+        throw cause;
+      });
+      this.#track(sql);
       // Like Postgres, resolve once the first row is in: a statement that sends its columns and then
       // computes (`SELECT SLEEP(30)`) is still running, and cancelling it must reject execute.
       const first = await inFlight.rows.next();
@@ -295,6 +346,37 @@ class MysqlSession implements Session {
     } finally {
       await this.#finish(inFlight, !exhausted);
       this.#running = null;
+    }
+  }
+
+  /**
+   * MySQL commits implicitly before and after DDL, and with autocommit off any other statement
+   * leaves a transaction open until COMMIT or ROLLBACK.
+   */
+  #track(sql: string): void {
+    const state = this.#transaction;
+    const effect = transactionEffect(sql, DIALECT);
+    if (effect !== null) state.open = effect === "begin";
+    else if (language.classify(sql).kind === "ddl") state.open = false;
+    else if (state.mode === "manual") state.open = true;
+  }
+
+  async #setMode(mode: TransactionMode): Promise<void> {
+    const state = this.#transaction;
+    if (mode === state.mode) return;
+    if (mode === "auto" && state.open) throw new PluginError("statementFailed", OPEN_TRANSACTION_MESSAGE);
+    if (this.#running !== null) throw new PluginError("statementFailed", BUSY_MESSAGE);
+    await query(this.#connection, mode === "manual" ? MANUAL_SQL : AUTO_SQL, "statementFailed");
+    state.mode = mode;
+  }
+
+  async #endTransaction(sql: string): Promise<void> {
+    if (!this.#transaction.open) return;
+    if (this.#running !== null) throw new PluginError("statementFailed", BUSY_MESSAGE);
+    try {
+      await query(this.#connection, sql, "statementFailed");
+    } finally {
+      this.#transaction.open = false;
     }
   }
 
@@ -351,6 +433,7 @@ class MysqlSession implements Session {
 const plugin: DatasourcePlugin = {
   id: PLUGIN_ID,
   capabilities: CAPABILITIES,
+  language,
   connectionSchema,
   connect: async (config, options) => {
     const parsed = connectionSchema.parse(config);

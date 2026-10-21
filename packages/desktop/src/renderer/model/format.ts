@@ -1,4 +1,4 @@
-import type { EngineError } from "@table-craft/desktop/engine/protocol.js";
+import type { EngineError, StatementKind } from "@table-craft/desktop/engine/protocol.js";
 import type { DatasourceView } from "@table-craft/desktop/preload/bridge.js";
 import type { ConsoleSession } from "@table-craft/desktop/renderer/state/consoles.js";
 import { ENGINE_EXITED_HINT, type Connection } from "@table-craft/desktop/renderer/state/datasources.js";
@@ -9,6 +9,38 @@ const MS_PER_SECOND = 1000;
 export function formatDuration(ms: number): string {
   if (ms < MS_PER_SECOND) return `${Math.round(ms)} ms`;
   return `${(ms / MS_PER_SECOND).toFixed(1)} s`;
+}
+
+function rows(count: number): string {
+  return `${count} ${count === 1 ? "row" : "rows"}`;
+}
+
+/**
+ * An Output line for a statement that ran: `3 rows retrieved in 38 ms`, `1 row affected in 12 ms`,
+ * or `completed in 44 ms` for DDL and the rest, whose affected count is the driver's 0, not a fact.
+ */
+export function executedText(
+  summary: {
+    readonly columns: readonly unknown[];
+    readonly rowCount: number;
+    readonly truncated: boolean;
+    readonly rowsAffected: number | null;
+  },
+  ms: number,
+  kind: StatementKind,
+): string {
+  const took = `in ${formatDuration(ms)}`;
+  if (summary.columns.length === 0) {
+    if (kind !== "write" || summary.rowsAffected === null) return `completed ${took}`;
+    return `${rows(summary.rowsAffected)} affected ${took}`;
+  }
+  const truncated = summary.truncated ? " (truncated)" : "";
+  return `${rows(summary.rowCount)} retrieved${truncated} ${took}`;
+}
+
+/** The first line of a statement, as the Output log and result tooltips name it. */
+export function firstLine(sql: string): string {
+  return sql.trimStart().split("\n", 1)[0]?.trimEnd() ?? "";
 }
 
 export type ServiceState = "connecting" | "idle" | "running" | "failed" | "disconnected";

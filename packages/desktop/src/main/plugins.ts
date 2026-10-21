@@ -17,6 +17,7 @@ export async function listPlugins(roots: readonly string[]): Promise<PluginInfo[
       unavailableReason: entry.status === "unavailable" ? entry.reason : null,
       capabilities: manifest?.capabilities ?? [],
       fields: manifest?.connection.fields ?? [],
+      highlight: manifest?.highlight ?? null,
     };
   });
 }

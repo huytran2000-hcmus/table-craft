@@ -1,4 +1,4 @@
-import { z } from "@table-craft/plugin-api";
+import { TRANSACTION_MODES, z } from "@table-craft/plugin-api";
 import type { EngineRequest } from "@table-craft/desktop/engine/protocol.js";
 
 const requestId = z.number().int().nonnegative();
@@ -17,6 +17,15 @@ export const engineRequestSchema = z.discriminatedUnion("type", [
     sql: z.string(),
   }),
   z.strictObject({ id: requestId, type: z.literal("statement.cancel"), sessionId }),
+  z.strictObject({ id: requestId, type: z.literal("script.split"), text: z.string() }),
+  z.strictObject({
+    id: requestId,
+    type: z.literal("transaction.setMode"),
+    sessionId,
+    mode: z.enum(TRANSACTION_MODES),
+  }),
+  z.strictObject({ id: requestId, type: z.literal("transaction.commit"), sessionId }),
+  z.strictObject({ id: requestId, type: z.literal("transaction.rollback"), sessionId }),
   z.strictObject({
     id: requestId,
     type: z.literal("result.window"),

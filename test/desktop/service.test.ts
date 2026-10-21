@@ -1,5 +1,6 @@
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import { createConsoleFiles } from "@table-craft/desktop/main/consoleFiles.js";
 import { createDatasourceStore, DATASOURCES_FILE } from "@table-craft/desktop/main/datasources.js";
 import { createHostRegistry } from "@table-craft/desktop/main/hosts.js";
 import { listPlugins } from "@table-craft/desktop/main/plugins.js";
@@ -43,6 +44,7 @@ async function service(options: { ephemeral?: EphemeralDatasource; cipher?: Retu
     plugins: await listPlugins([BUILT_IN_PLUGINS]),
     ephemeral: options.ephemeral ?? null,
     newId: () => `id-${String(++ids)}`,
+    consoles: createConsoleFiles({ directory: DIRECTORY, files }),
     onChanged: (list) => changes.push(list),
   });
   return { files, cipher, dependencies, changes, service: created };
@@ -190,6 +192,19 @@ describe("datasource service", () => {
 
     expect(datasources.list().datasources).toEqual([]);
     expect(changes.at(-1)?.datasources).toEqual([]);
+  });
+
+  it("givenDatasourceWithConsoles_whenDeleted_thenItsConsoleDirectoryIsRemoved", async () => {
+    const { files, service: datasources } = await service();
+    const saved = await datasources.save(saving(PG_DRAFT));
+    const consoles = createConsoleFiles({ directory: DIRECTORY, files });
+    await consoles.write(saved.id, "console", "SELECT 1");
+    await consoles.write("other", "console", "SELECT 2");
+
+    await datasources.delete(saved.id);
+
+    expect(await consoles.list(saved.id)).toEqual([]);
+    expect(await consoles.list("other")).toEqual(["console"]);
   });
 
   it("givenEphemeralDatasource_whenListed_thenFirstNeverSavedAndWithoutSecret", async () => {

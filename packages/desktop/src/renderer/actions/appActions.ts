@@ -1,23 +1,33 @@
 import type { ActionContext } from "@table-craft/desktop/renderer/actions/context.js";
 import {
+  closeTabs,
+  disconnectDatasource,
+  openConsole,
+  settleTransactions,
+} from "@table-craft/desktop/renderer/actions/consoleCommands.js";
+import {
   askMoveToFolder,
   askNewFolder,
   deleteDatasource,
-  openConsole,
 } from "@table-craft/desktop/renderer/actions/datasourceCommands.js";
 import { defineAction, type AnyAction } from "@table-craft/desktop/renderer/actions/registry.js";
 import { focusRegion } from "@table-craft/desktop/renderer/shell/focus.js";
-import { canRun, useConsoles } from "@table-craft/desktop/renderer/state/consoles.js";
+import { canRun, OUTPUT_TAB, useConsoles } from "@table-craft/desktop/renderer/state/consoles.js";
 import { useDataSourcesDialog } from "@table-craft/desktop/renderer/state/dataSourcesDialog.js";
 import { useDatasources } from "@table-craft/desktop/renderer/state/datasources.js";
 import { useLayout, type ToolWindowId } from "@table-craft/desktop/renderer/state/layout.js";
 import { usePalette } from "@table-craft/desktop/renderer/state/palette.js";
-import { useTabs, type Tab } from "@table-craft/desktop/renderer/state/tabs.js";
+import { useTabs } from "@table-craft/desktop/renderer/state/tabs.js";
 
 /** Action ids other modules name: the menu declaration, toolbar buttons, the palette. */
 export const ACTION_IDS = {
   run: "console.run",
+  runAll: "console.runAll",
   cancel: "console.cancel",
+  commit: "transaction.commit",
+  rollback: "transaction.rollback",
+  toggleTransactionMode: "transaction.toggleMode",
+  pinResult: "result.pin",
   newConsole: "console.new",
   closeTab: "tab.close",
   closeOtherTabs: "tab.closeOthers",
@@ -50,8 +60,9 @@ export interface TabArgs {
   readonly tabId?: string;
 }
 
-function release(tabs: readonly Tab[]): void {
-  for (const tab of tabs) if (tab.kind === "console") useConsoles.getState().close(tab.id);
+/** Names a result tab when an action runs on one other than the active one, as its context menu does. */
+export interface ResultArgs {
+  readonly resultId?: string;
 }
 
 function targetTab(context: ActionContext, args: TabArgs | undefined): string | null {
@@ -76,6 +87,25 @@ function selectedFolder(context: ActionContext): string | null {
   return context.focus === "database" ? (context.datasource?.view.folder ?? null) : null;
 }
 const hasSeveralTabs = (context: ActionContext) => context.tabs.length > 1;
+const canRunConsole = (context: ActionContext) => context.console !== null && canRun(context.console.status);
+const hasTransactions = (context: ActionContext) =>
+  context.console !== null && context.capabilities.includes("transactions");
+/** Commit and Rollback are offered only while a transaction is open (decision 14). */
+const canEndTransaction = (context: ActionContext) =>
+  hasTransactions(context) && context.console?.transactionOpen === true && context.console.status === "ready";
+
+function runActive(context: ActionContext, scope: "caret" | "all"): void {
+  if (context.activeTab !== null) void useConsoles.getState().run(context.activeTab.id, scope);
+}
+
+/** Switches the console between Auto and Manual; leaving Manual with a transaction open asks first. */
+async function toggleTransactionMode(consoleId: string): Promise<void> {
+  const session = useConsoles.getState().consoles[consoleId];
+  if (session === undefined) return;
+  const mode = session.txMode === "auto" ? "manual" : "auto";
+  if (mode === "auto" && !(await settleTransactions([consoleId], "switch to Auto"))) return;
+  await useConsoles.getState().setTransactionMode(consoleId, mode);
+}
 
 export const APP_ACTIONS: readonly AnyAction[] = [
   defineAction({
@@ -84,9 +114,58 @@ export const APP_ACTIONS: readonly AnyAction[] = [
     category: "Console",
     icon: "run",
     shortcut: "Mod+Enter",
-    when: (context) => context.console !== null && canRun(context.console.status),
-    run: (context) => {
-      if (context.activeTab !== null) void useConsoles.getState().run(context.activeTab.id);
+    when: canRunConsole,
+    run: (context) => runActive(context, "caret"),
+  }),
+  defineAction({
+    id: ACTION_IDS.runAll,
+    title: "Run All",
+    category: "Console",
+    icon: "runAll",
+    shortcut: "Mod+Shift+Enter",
+    when: canRunConsole,
+    run: (context) => runActive(context, "all"),
+  }),
+  defineAction({
+    id: ACTION_IDS.commit,
+    title: "Commit",
+    category: "Console",
+    icon: "commit",
+    shortcut: "Mod+Alt+Shift+Enter",
+    when: canEndTransaction,
+    run: async (context) => {
+      if (context.activeTab !== null) await useConsoles.getState().commit(context.activeTab.id);
+    },
+  }),
+  defineAction({
+    id: ACTION_IDS.rollback,
+    title: "Rollback",
+    category: "Console",
+    icon: "rollback",
+    when: canEndTransaction,
+    run: async (context) => {
+      if (context.activeTab !== null) await useConsoles.getState().rollback(context.activeTab.id);
+    },
+  }),
+  defineAction({
+    id: ACTION_IDS.toggleTransactionMode,
+    title: "Toggle Transaction Mode (Auto/Manual)",
+    category: "Console",
+    when: (context) => hasTransactions(context) && context.console?.status !== "running",
+    run: async (context) => {
+      if (context.activeTab !== null) await toggleTransactionMode(context.activeTab.id);
+    },
+  }),
+  defineAction<ResultArgs | undefined>({
+    id: ACTION_IDS.pinResult,
+    title: "Pin Result Tab",
+    category: "Console",
+    icon: "pin",
+    when: (context) => context.console !== null && context.console.activeResult !== OUTPUT_TAB,
+    run: (context, args) => {
+      const id = context.activeTab?.id;
+      const resultId = args?.resultId ?? context.console?.activeResult;
+      if (id !== undefined && resultId !== undefined) useConsoles.getState().togglePin(id, resultId);
     },
   }),
   defineAction({
@@ -106,8 +185,8 @@ export const APP_ACTIONS: readonly AnyAction[] = [
     icon: "newConsole",
     shortcut: "Mod+Shift+L",
     when: hasDatasource,
-    run: (context) => {
-      if (context.datasource !== null) openConsole(context.datasource.view.id);
+    run: async (context) => {
+      if (context.datasource !== null) await openConsole(context.datasource.view.id);
     },
   }),
   defineAction<TabArgs | undefined>({
@@ -117,9 +196,9 @@ export const APP_ACTIONS: readonly AnyAction[] = [
     icon: "close",
     shortcut: "Mod+W",
     when: hasTabs,
-    run: (context, args) => {
+    run: async (context, args) => {
       const id = targetTab(context, args);
-      if (id !== null) release(useTabs.getState().close(id));
+      if (id !== null) await closeTabs([id], () => useTabs.getState().close(id));
     },
   }),
   defineAction<TabArgs | undefined>({
@@ -127,9 +206,11 @@ export const APP_ACTIONS: readonly AnyAction[] = [
     title: "Close Other Tabs",
     category: "Editor Tabs",
     when: hasSeveralTabs,
-    run: (context, args) => {
+    run: async (context, args) => {
       const id = targetTab(context, args);
-      if (id !== null) release(useTabs.getState().closeOthers(id));
+      if (id === null) return;
+      const others = context.tabs.filter((tab) => tab.id !== id).map((tab) => tab.id);
+      await closeTabs(others, () => useTabs.getState().closeOthers(id));
     },
   }),
   defineAction({
@@ -137,7 +218,12 @@ export const APP_ACTIONS: readonly AnyAction[] = [
     title: "Close All Tabs",
     category: "Editor Tabs",
     when: hasTabs,
-    run: () => release(useTabs.getState().closeAll()),
+    run: async (context) => {
+      await closeTabs(
+        context.tabs.map((tab) => tab.id),
+        () => useTabs.getState().closeAll(),
+      );
+    },
   }),
   defineAction({
     id: ACTION_IDS.nextTab,
@@ -187,6 +273,7 @@ export const APP_ACTIONS: readonly AnyAction[] = [
     title: "Back to Editor",
     category: "Navigation",
     shortcut: "Escape",
+    shortcutRegion: ["database", "services"],
     when: (context) => (context.focus === "database" || context.focus === "services") && !context.speedSearching,
     run: () => focusRegion("editor"),
   }),
@@ -274,7 +361,7 @@ export const APP_ACTIONS: readonly AnyAction[] = [
     shortcut: "Mod+F2",
     when: isLive,
     run: async (context) => {
-      if (context.datasource !== null) await useDatasources.getState().disconnect(context.datasource.view.id);
+      if (context.datasource !== null) await disconnectDatasource(context.datasource.view.id);
     },
   }),
   defineAction({

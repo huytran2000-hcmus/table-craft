@@ -1,6 +1,14 @@
-import { CatalogCache, CoreError, openSession, ResultStore, type PluginLoadResult } from "@table-craft/core";
-import { isPluginError, type Capability, type Session } from "@table-craft/plugin-api";
+import {
+  CatalogCache,
+  CoreError,
+  loadedPlugin,
+  openSession,
+  ResultStore,
+  type PluginLoadResult,
+} from "@table-craft/core";
+import { isPluginError, type Capability, type Session, type Transactions } from "@table-craft/plugin-api";
 import type {
+  ClassifiedStatement,
   DatasourceConfig,
   EngineError,
   EngineMethod,
@@ -8,6 +16,7 @@ import type {
   ProbeResult,
   RequestOf,
   ResultOf,
+  TransactionState,
 } from "@table-craft/desktop/engine/protocol.js";
 import { engineRequestSchema, readRequestId } from "@table-craft/desktop/engine/requests.js";
 
@@ -95,22 +104,6 @@ interface OpenSession {
   running: number;
 }
 
-function loadedPlugin(
-  plugins: readonly PluginLoadResult[],
-  pluginId: string,
-): {
-  readonly name: string;
-  readonly capabilities: readonly Capability[];
-} {
-  for (const entry of plugins) {
-    if (entry.status === "loaded" && entry.manifest.id === pluginId) {
-      return { name: entry.manifest.name, capabilities: entry.plugin.capabilities };
-    }
-  }
-  // openSession has just connected through this plugin, so it is loaded.
-  throw new Error(`Plugin "${pluginId}" opened a session but is not loaded.`);
-}
-
 function connectDatasource(options: EngineOptions): Promise<Session> {
   const { pluginId, config, readOnly } = options.datasource;
   return openSession(options.plugins, pluginId, config, { readOnly }).catch((cause: unknown) => {
@@ -128,14 +121,30 @@ export async function probeDatasource(options: EngineOptions, now: () => number 
     const session = await connectDatasource(options);
     const elapsedMs = now() - started;
     await session.close().catch(() => undefined);
-    const plugin = loadedPlugin(options.plugins, options.datasource.pluginId);
-    return { ok: true, pluginName: plugin.name, serverVersion: session.serverVersion, elapsedMs };
+    const { manifest } = loadedPlugin(options.plugins, options.datasource.pluginId);
+    return { ok: true, pluginName: manifest.name, serverVersion: session.serverVersion, elapsedMs };
   } catch (cause) {
     return { ok: false, error: toEngineError(cause) };
   }
 }
 
+const TRANSACTION_HINT = "Check the connection, then try again; the transaction may already have ended.";
+const OPEN_TRANSACTION_HINT = "Commit or roll back the open transaction first.";
+
 export function createEngine(options: EngineOptions): Engine {
+  function splitScript(text: string): ClassifiedStatement[] {
+    const { plugin } = loadedPlugin(options.plugins, options.datasource.pluginId);
+    const { language } = plugin;
+    if (language === undefined) {
+      throw new EngineFailure({
+        code: "invalidRequest",
+        message: "This datasource's plugin does not declare the sql capability.",
+        hint: BUG_HINT,
+      });
+    }
+    return language.split(text).map((span) => ({ ...span, ...language.classify(span.sql) }));
+  }
+
   const results = new ResultStore();
   let nextSession = 1;
   /** One session for every connection's catalog calls, opened on first use (decision 022). */
@@ -211,15 +220,37 @@ export function createEngine(options: EngineOptions): Engine {
       return handle;
     }
 
+    async function transact(
+      sessionId: string,
+      change: (transactions: Transactions) => Promise<void>,
+      hint: string,
+    ): Promise<TransactionState> {
+      const open = sessionFor(sessionId);
+      const { transactions } = open.session;
+      if (!open.capabilities.includes("transactions") || transactions === undefined) {
+        throw new EngineFailure({
+          code: "invalidRequest",
+          message: "This datasource's plugin does not declare the transactions capability.",
+          hint: BUG_HINT,
+        });
+      }
+      try {
+        await change(transactions);
+      } catch (cause) {
+        throw new EngineFailure({ code: "statementFailed", message: messageOf(cause), hint });
+      }
+      return { mode: transactions.mode, transactionOpen: transactions.open };
+    }
+
     const routes: { [M in EngineMethod]: (request: RequestOf<M>) => Promise<ResultOf<M>> } = {
       "session.open": async () => {
         const session = await connectDatasource(options);
-        const plugin = loadedPlugin(options.plugins, options.datasource.pluginId);
+        const { manifest, plugin } = loadedPlugin(options.plugins, options.datasource.pluginId);
         const sessionId = `${SESSION_PREFIX}${nextSession++}`;
         sessions.set(sessionId, { session, capabilities: plugin.capabilities, running: 0 });
         return {
           sessionId,
-          pluginName: plugin.name,
+          pluginName: manifest.name,
           capabilities: plugin.capabilities,
           serverVersion: session.serverVersion,
         };
@@ -247,7 +278,11 @@ export function createEngine(options: EngineOptions): Engine {
             sessionFor(sessionId);
           }
           handles.set(summary.handle, sessionId);
-          return { ...summary, firstWindow: results.window(summary.handle, 0) };
+          return {
+            ...summary,
+            firstWindow: results.window(summary.handle, 0),
+            transactionOpen: open.session.transactions?.open ?? false,
+          };
         } finally {
           open.running -= 1;
         }
@@ -264,6 +299,13 @@ export function createEngine(options: EngineOptions): Engine {
         if (open.running > 0) await open.session.cancel();
         return null;
       },
+      "script.split": ({ text }) => Promise.resolve(splitScript(text)),
+      "transaction.setMode": ({ sessionId, mode }) =>
+        transact(sessionId, (transactions) => transactions.setMode(mode), OPEN_TRANSACTION_HINT),
+      "transaction.commit": ({ sessionId }) =>
+        transact(sessionId, (transactions) => transactions.commit(), TRANSACTION_HINT),
+      "transaction.rollback": ({ sessionId }) =>
+        transact(sessionId, (transactions) => transactions.rollback(), TRANSACTION_HINT),
       "result.window": ({ handle, offset, limit }) =>
         Promise.resolve(results.window(ownedHandle(handle), offset, limit)),
       "result.release": ({ handle }) => {

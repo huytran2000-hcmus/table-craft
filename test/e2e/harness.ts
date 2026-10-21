@@ -150,10 +150,22 @@ export async function waitUntilReady(page: Page): Promise<void> {
   await expect.poll(() => run.isEnabled(), { timeout: LAUNCH_TIMEOUT_MS }).toBe(true);
 }
 
-/** Types `sql` into the console and presses Run, without waiting for the answer. */
+export function runAllButton(page: Page) {
+  return page.getByRole("button", { name: "Run All", exact: true });
+}
+
+/** The console's CodeMirror editor, by the accessible name its content carries. */
+export function sqlEditor(page: Page) {
+  return page.getByRole("textbox", { name: "SQL console", exact: true });
+}
+
+/**
+ * Replaces the console's text with `sql` and presses Run All, without waiting for the answer. Run
+ * All, because Run takes only the statement at the caret (plan 006).
+ */
 export async function startStatement(page: Page, sql: string): Promise<void> {
-  await page.getByLabel("SQL console").fill(sql);
-  await runButton(page).click();
+  await sqlEditor(page).fill(sql);
+  await runAllButton(page).click();
 }
 
 /** Runs a row-returning or failing `sql` and resolves once its grid or its error is shown. */

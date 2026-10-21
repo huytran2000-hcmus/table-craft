@@ -33,6 +33,12 @@ runPluginContract(sqlite, {
   config: { path: seededSqliteFile() },
   statements: { write: TYPE_PROBE_WRITE },
   typeProbe: { expected: TYPE_PROBE_EXPECTED },
+  scripts: [
+    {
+      text: "CREATE TRIGGER t AFTER INSERT ON orders BEGIN UPDATE customers SET name = name; END;\nSELECT 1;",
+      statements: ["CREATE TRIGGER t AFTER INSERT ON orders BEGIN UPDATE customers SET name = name; END", "SELECT 1"],
+    },
+  ],
   catalog: { path: ["main"], quoted: { name: 'odd "name"', qualified: '"main"."odd ""name"""' } },
 });
 

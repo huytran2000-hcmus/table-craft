@@ -1,4 +1,5 @@
 import {
+  type Chord,
   chordKey,
   createDoubleTapDetector,
   DOUBLE_TAP_WINDOW_MS,
@@ -25,10 +26,19 @@ export interface KeymapOptions {
   readonly paletteOpen: () => boolean;
   /** Where focus is, for shortcuts scoped to a region; absent, every scoped shortcut works. */
   readonly focusedRegion?: () => FocusRegion;
+  /** Chords the focused control keeps for itself, such as the SQL editor's undo; the registry lets them pass. */
+  readonly reservedChords?: () => readonly Chord[];
   readonly doubleTapWindowMs?: number;
 }
 
 const MODIFIER_KEYS = new Set(["Shift", "Control", "Alt", "Meta"]);
+
+/** Whether `action`'s shortcut may fire while focus is in `region`. */
+export function shortcutWorksIn(action: Pick<AnyAction, "shortcutRegion">, region: FocusRegion): boolean {
+  const scope = action.shortcutRegion;
+  if (scope === undefined) return true;
+  return typeof scope === "string" ? scope === region : scope.includes(region);
+}
 
 /** The keydown handler: runs the action whose chord this is, if it is enabled, exactly once. */
 export function createKeyDispatcher(options: KeymapOptions): (event: KeyEventLike) => void {
@@ -47,9 +57,11 @@ export function createKeyDispatcher(options: KeymapOptions): (event: KeyEventLik
   }
 
   function inRegion(action: AnyAction): boolean {
-    return action.shortcutRegion === undefined || options.focusedRegion === undefined
-      ? true
-      : options.focusedRegion() === action.shortcutRegion;
+    return options.focusedRegion === undefined || shortcutWorksIn(action, options.focusedRegion());
+  }
+
+  function reserved(event: KeyEventLike): boolean {
+    return (options.reservedChords?.() ?? []).some((chord) => matches(parseChord(chord, platform), event));
   }
 
   function dispatch(event: KeyEventLike, candidates: readonly AnyAction[]): void {
@@ -80,7 +92,7 @@ export function createKeyDispatcher(options: KeymapOptions): (event: KeyEventLik
       );
       return;
     }
-    if (MODIFIER_KEYS.has(event.key)) return;
+    if (MODIFIER_KEYS.has(event.key) || reserved(event)) return;
     dispatch(
       event,
       actions.filter((action) => {
@@ -119,6 +131,26 @@ export function findClashes(actions: readonly AnyAction[]): readonly Clash[] {
       byChord.set(key, [...(byChord.get(key) ?? []), action.id]);
     }
     for (const [chord, ids] of byChord) if (ids.length > 1) clashes.push({ platform, chord, ids });
+  }
+  return clashes;
+}
+
+/** Actions whose shortcut would fire in `region` on a chord that region's control keeps (`reserved`). */
+export function findReservedClashes(
+  actions: readonly AnyAction[],
+  reserved: readonly Chord[],
+  region: FocusRegion,
+): readonly Clash[] {
+  const clashes: Clash[] = [];
+  for (const platform of ["mac", "other"] as const) {
+    for (const chord of reserved) {
+      const key = chordKey(parseChord(chord, platform));
+      const ids = actions
+        .filter((action) => action.shortcut !== undefined && shortcutWorksIn(action, region))
+        .filter((action) => chordKey(parseChord(action.shortcut ?? "", platform)) === key)
+        .map((action) => action.id);
+      if (ids.length > 0) clashes.push({ platform, chord: key, ids });
+    }
   }
   return clashes;
 }

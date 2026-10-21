@@ -13,5 +13,12 @@ runPluginContract(mysql, {
     sleep: (seconds) => `SELECT SLEEP(${String(seconds)})`,
   },
   typeProbe: { expected: TYPE_PROBE_EXPECTED },
+  scripts: [
+    {
+      text: "DELIMITER //\nCREATE PROCEDURE p() BEGIN SELECT 1; END//\nDELIMITER ;\nCALL p();",
+      statements: ["CREATE PROCEDURE p() BEGIN SELECT 1; END", "CALL p()"],
+    },
+    { text: "SELECT 'it\\'s;' AS s; # a; note\nSELECT 2", statements: ["SELECT 'it\\'s;' AS s", "SELECT 2"] },
+  ],
   catalog: { path: ["table_craft"], quoted: { name: "odd `name`", qualified: "`table_craft`.`odd ``name```" } },
 });

@@ -12,6 +12,8 @@ import {
   type Relation,
   type Row,
   type Session,
+  type SqlLanguage,
+  type Transactions,
 } from "@table-craft/plugin-api";
 
 export interface ContractFixture {
@@ -34,6 +36,8 @@ export interface ContractFixture {
     /** The rows of `SELECT * FROM type_probe ORDER BY id`, as wire values. */
     readonly expected: readonly Row[];
   };
+  /** Scripts only this dialect splits, and the statements `language.split` must find in each. */
+  readonly scripts?: readonly SplitCase[];
   /** Required when the plugin declares `schemaTree`. */
   readonly catalog?: {
     /** The namespace the fixture tables live in, which is also the connection's current one. */
@@ -42,6 +46,41 @@ export interface ContractFixture {
     readonly quoted: { readonly name: string; readonly qualified: string };
   };
 }
+
+export interface SplitCase {
+  readonly text: string;
+  readonly statements: readonly string[];
+}
+
+/** What every SQL dialect splits the same way (decision 023). */
+const SHARED_SCRIPTS: readonly SplitCase[] = [
+  { text: "SELECT 'a;b' AS s; SELECT 2 AS n", statements: ["SELECT 'a;b' AS s", "SELECT 2 AS n"] },
+  { text: "SELECT 'it''s; here' AS s;\nSELECT 2 AS n;", statements: ["SELECT 'it''s; here' AS s", "SELECT 2 AS n"] },
+  { text: 'SELECT 1 AS "a;b"; SELECT 2 AS n', statements: ['SELECT 1 AS "a;b"', "SELECT 2 AS n"] },
+  {
+    text: "SELECT 1 AS n -- not; here\n;\n/* nor; here */ SELECT 2 AS n /* inside; */ ;",
+    statements: ["SELECT 1 AS n", "SELECT 2 AS n"],
+  },
+  { text: ";; ; -- only comments;\n/* ; */ ;", statements: [] },
+];
+
+/** Every SQL dialect calls these destructive, or not (decision 011). */
+const DESTRUCTIVE_CASES: readonly (readonly [string, boolean])[] = [
+  ["DELETE FROM orders", true],
+  ["DELETE FROM orders WHERE id = 1", false],
+  ["UPDATE orders SET total = 0", true],
+  ["UPDATE orders SET total = (SELECT max(total) FROM orders o WHERE o.id = 1)", true],
+  ["UPDATE orders SET total = total WHERE id = 1", false],
+  ["DROP TABLE orders", true],
+  ["TRUNCATE TABLE orders", true],
+  ["SELECT * FROM orders", false],
+];
+
+/** A row the transaction cases add to `orders` and always remove, so the fixture's counts hold. */
+const TRANSACTION_ROW_ID = 9001;
+const INSERT_TRANSACTION_ROW = `INSERT INTO orders (id, customer_id, total, placed_at) VALUES (${TRANSACTION_ROW_ID}, 1, 1.00, '2024-01-01 00:00:00')`;
+const SELECT_TRANSACTION_ROW = `SELECT id FROM orders WHERE id = ${TRANSACTION_ROW_ID}`;
+const DELETE_TRANSACTION_ROW = `DELETE FROM orders WHERE id = ${TRANSACTION_ROW_ID}`;
 
 /** The table every fixture database carries, one column per value rule the contract pins. */
 export const TYPE_PROBE_TABLE = "type_probe";
@@ -186,6 +225,19 @@ export function runPluginContract(plugin: DatasourcePlugin, fixture: ContractFix
       });
     });
 
+    it("givenPlugin_whenInspected_thenHasLanguageExactlyWhenSqlDeclared", () => {
+      expect(plugin.language !== undefined).toBe(plugin.capabilities.includes("sql"));
+    });
+
+    it("givenSession_whenInspected_thenHasTransactionsExactlyWhenDeclared", async () => {
+      await withSession(plugin, fixture, (session) => {
+        expect(session.transactions !== undefined).toBe(plugin.capabilities.includes("transactions"));
+        expect(session.transactions?.mode ?? "auto").toBe("auto");
+        expect(session.transactions?.open ?? false).toBe(false);
+        return Promise.resolve();
+      });
+    });
+
     it("givenSession_whenInspected_thenHasIntrospectorExactlyWhenSchemaTreeDeclared", async () => {
       await withSession(plugin, fixture, (session) => {
         expect(session.introspector !== undefined).toBe(plugin.capabilities.includes("schemaTree"));
@@ -297,6 +349,137 @@ export function runPluginContract(plugin: DatasourcePlugin, fixture: ContractFix
             expect((await iterator.next()).done).toBe(false);
           }
           await iterator.return?.();
+          expect(await collect((await session.execute("SELECT 1 AS one")).rows)).toEqual([[1]]);
+        });
+      });
+    });
+
+    describe.runIf(plugin.capabilities.includes("sql"))("language", () => {
+      function language(): SqlLanguage {
+        if (plugin.language === undefined) throw new Error("A plugin that declares sql needs language.");
+        return plugin.language;
+      }
+
+      function statementsOf(text: string): string[] {
+        const spans = language().split(text);
+        for (const span of spans) expect(text.slice(span.from, span.to)).toBe(span.sql);
+        return spans.map((span) => span.sql);
+      }
+
+      it.each([...SHARED_SCRIPTS, ...(fixture.scripts ?? [])])(
+        "givenScript_whenSplit_thenStatementsMatch: $text",
+        ({ text, statements }) => {
+          expect(statementsOf(text)).toEqual(statements);
+        },
+      );
+
+      it("givenSplitScript_whenEachStatementExecuted_thenEachSucceeds", async () => {
+        const statements = statementsOf("SELECT 'a;b' AS s;\n-- between\nSELECT 2 AS n;");
+        await withSession(plugin, fixture, async (session) => {
+          for (const sql of statements) await collect((await session.execute(sql)).rows);
+        });
+        expect(statements).toHaveLength(2);
+      });
+
+      it.each(DESTRUCTIVE_CASES)(
+        "givenStatement_whenClassified_thenDestructiveMatches: %s → %s",
+        (sql, destructive) => {
+          expect(language().classify(sql).destructive !== null).toBe(destructive);
+        },
+      );
+
+      it("givenDropTable_whenClassified_thenDdl", () => {
+        expect(language().classify("DROP TABLE orders").kind).toBe("ddl");
+        expect(language().classify("CREATE TABLE t (id INTEGER)").kind).toBe("ddl");
+        expect(language().classify("SELECT 1").kind).toBe("read");
+        expect(language().classify("INSERT INTO t VALUES (1)").kind).toBe("write");
+        expect(language().classify("COMMIT").kind).toBe("transaction");
+      });
+    });
+
+    describe.runIf(plugin.capabilities.includes("transactions"))("transactions", () => {
+      function transactionsOf(session: Session): Transactions {
+        if (session.transactions === undefined) throw new Error("A transactions session needs transactions.");
+        return session.transactions;
+      }
+
+      async function rowsWithId(session: Session): Promise<number> {
+        return (await collect((await session.execute(SELECT_TRANSACTION_ROW)).rows)).length;
+      }
+
+      async function removeRow(): Promise<void> {
+        await withSession(plugin, fixture, async (session) => {
+          await session.execute(DELETE_TRANSACTION_ROW);
+        });
+      }
+
+      afterEach(removeRow);
+
+      it("givenManualMode_whenInsertThenRollback_thenRowGoneAndNotOpen", async () => {
+        await withSession(plugin, fixture, async (session) => {
+          const transactions = transactionsOf(session);
+          await transactions.setMode("manual");
+          expect(transactions.open).toBe(false);
+          await session.execute(INSERT_TRANSACTION_ROW);
+          expect(transactions.open).toBe(true);
+          expect(await rowsWithId(session)).toBe(1);
+          await transactions.rollback();
+          expect(transactions.open).toBe(false);
+          expect(await rowsWithId(session)).toBe(0);
+          expect(transactions.mode).toBe("manual");
+        });
+      });
+
+      it("givenManualMode_whenInsertThenCommit_thenRowKept", async () => {
+        await withSession(plugin, fixture, async (session) => {
+          const transactions = transactionsOf(session);
+          await transactions.setMode("manual");
+          await session.execute(INSERT_TRANSACTION_ROW);
+          await withSession(plugin, fixture, async (other) => {
+            expect(await rowsWithId(other)).toBe(0);
+          });
+          await transactions.commit();
+          expect(transactions.open).toBe(false);
+        });
+        await withSession(plugin, fixture, async (other) => {
+          expect(await rowsWithId(other)).toBe(1);
+        });
+      });
+
+      it("givenAutoMode_whenExplicitBegin_thenTransactionOpen", async () => {
+        await withSession(plugin, fixture, async (session) => {
+          const transactions = transactionsOf(session);
+          await session.execute(INSERT_TRANSACTION_ROW);
+          expect(transactions.open).toBe(false);
+          await session.execute(DELETE_TRANSACTION_ROW);
+          await session.execute("BEGIN");
+          expect(transactions.open).toBe(true);
+          await session.execute(INSERT_TRANSACTION_ROW);
+          await session.execute("ROLLBACK");
+          expect(transactions.open).toBe(false);
+          expect(await rowsWithId(session)).toBe(0);
+        });
+      });
+
+      it("givenOpenTransaction_whenSwitchedToAuto_thenRejectsWithStatementFailedAndStaysOpen", async () => {
+        await withSession(plugin, fixture, async (session) => {
+          const transactions = transactionsOf(session);
+          await transactions.setMode("manual");
+          await session.execute(INSERT_TRANSACTION_ROW);
+          expect(await rejectionCode(transactions.setMode("auto"))).toBe("statementFailed");
+          expect(transactions.open).toBe(true);
+          await transactions.rollback();
+          await transactions.setMode("auto");
+          expect(transactions.mode).toBe("auto");
+        });
+      });
+
+      it("givenNoOpenTransaction_whenCommitAndRollback_thenNoOps", async () => {
+        await withSession(plugin, fixture, async (session) => {
+          const transactions = transactionsOf(session);
+          await transactions.commit();
+          await transactions.rollback();
+          expect(transactions.open).toBe(false);
           expect(await collect((await session.execute("SELECT 1 AS one")).rows)).toEqual([[1]]);
         });
       });

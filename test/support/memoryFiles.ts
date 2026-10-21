@@ -1,7 +1,9 @@
-import type { FileSystem } from "@table-craft/desktop/main/files.js";
+import type { DirectoryFileSystem } from "@table-craft/desktop/main/consoleFiles.js";
 
-/** An in-memory `FileSystem` whose next write can be made to die halfway. */
-export interface MemoryFiles extends FileSystem {
+const SEPARATOR = "/";
+
+/** An in-memory `DirectoryFileSystem` whose next write can be made to die halfway. Directories are implied by paths. */
+export interface MemoryFiles extends DirectoryFileSystem {
   readonly contents: Map<string, string>;
   /** The next `writeText` stores half its text, then rejects, as a killed process would leave it. */
   dieDuringNextWrite(): void;
@@ -30,6 +32,22 @@ export function memoryFiles(initial: Record<string, string> = {}): MemoryFiles {
       if (text === undefined) return Promise.reject(Object.assign(new Error(`ENOENT: ${from}`), { code: "ENOENT" }));
       contents.delete(from);
       contents.set(to, text);
+      return Promise.resolve();
+    },
+    listNames(path) {
+      const prefix = `${path}${SEPARATOR}`;
+      const names = [...contents.keys()]
+        .filter((key) => key.startsWith(prefix) && !key.slice(prefix.length).includes(SEPARATOR))
+        .map((key) => key.slice(prefix.length));
+      return Promise.resolve(names);
+    },
+    makeDirectory: () => Promise.resolve(),
+    remove(path) {
+      contents.delete(path);
+      return Promise.resolve();
+    },
+    removeDirectory(path) {
+      for (const key of [...contents.keys()]) if (key.startsWith(`${path}${SEPARATOR}`)) contents.delete(key);
       return Promise.resolve();
     },
   };

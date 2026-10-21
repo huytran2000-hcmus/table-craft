@@ -13,12 +13,30 @@ import {
   type Introspector,
   type Row,
   type Session,
+  type SqlLanguage,
+  type TransactionMode,
+  type Transactions,
   type WireValue,
 } from "@table-craft/plugin-api";
+import { classifyTokens, sqlSplitter, transactionEffect, type SqlDialectOptions } from "@table-craft/plugin-api/sql";
 import { postgresIntrospector } from "./introspect.js";
 
 const PLUGIN_ID = "postgres";
-const CAPABILITIES: readonly Capability[] = ["sql", "cancel", "schemaTree"];
+const CAPABILITIES: readonly Capability[] = ["sql", "cancel", "schemaTree", "transactions"];
+
+/** Function bodies live in dollar quotes; `BEGIN ATOMIC … END` holds a SQL-standard body. */
+const DIALECT: SqlDialectOptions = { dollarQuotes: true, nestedBlockComments: true, blockKeywords: ["BEGIN"] };
+
+const language: SqlLanguage = {
+  split: sqlSplitter(DIALECT),
+  classify: (sql) => classifyTokens(sql, DIALECT),
+};
+
+const BEGIN_SQL = "BEGIN";
+const COMMIT_SQL = "COMMIT";
+const ROLLBACK_SQL = "ROLLBACK";
+const OPEN_TRANSACTION_MESSAGE = "A transaction is open; commit or roll it back before switching to auto-commit.";
+const BUSY_MESSAGE = "Another statement is still running in this session.";
 
 const DEFAULT_PORT = 5432;
 const MAX_PORT = 65_535;
@@ -145,6 +163,11 @@ interface Running {
   cancelRequested: boolean;
 }
 
+interface TransactionState {
+  mode: TransactionMode;
+  open: boolean;
+}
+
 function readBatch(cursor: Cursor<unknown[]>): Promise<{ rows: unknown[][]; result: pg.QueryResult }> {
   return new Promise((resolve, reject) => {
     cursor.read(FETCH_ROWS, (error, rows, result) => {
@@ -172,9 +195,11 @@ class PostgresSession implements Session {
   #broken: Error | null = null;
   #running: Running | null = null;
   #cancelling: Promise<void> = Promise.resolve();
+  readonly #transaction: TransactionState = { mode: "auto", open: false };
 
   readonly serverVersion: string | null;
   readonly introspector: Introspector;
+  readonly transactions: Transactions;
 
   constructor(
     config: PostgresConfig,
@@ -187,6 +212,18 @@ class PostgresSession implements Session {
     this.#typeNames = typeNames;
     this.serverVersion = serverVersion;
     this.introspector = postgresIntrospector(client);
+    const state = this.#transaction;
+    this.transactions = {
+      setMode: (mode) => this.#setMode(mode),
+      commit: () => this.#endTransaction(COMMIT_SQL),
+      rollback: () => this.#endTransaction(ROLLBACK_SQL),
+      get mode() {
+        return state.mode;
+      },
+      get open() {
+        return state.open;
+      },
+    };
     client.on("error", (error) => {
       this.#broken = error;
     });
@@ -214,15 +251,29 @@ class PostgresSession implements Session {
     if (this.#broken !== null) {
       throw new PluginError("statementFailed", `The connection was lost: ${this.#broken.message}`);
     }
-    if (this.#running !== null) {
-      throw new PluginError("statementFailed", "Another statement is still running in this session.");
-    }
+    if (this.#running !== null) throw new PluginError("statementFailed", BUSY_MESSAGE);
     await this.#cancelling.catch(() => undefined);
     const running: Running = { cancelRequested: false };
     this.#running = running;
+    const effect = transactionEffect(sql, DIALECT);
+    const state = this.#transaction;
+    try {
+      if (state.mode === "manual" && !state.open && effect === null) {
+        await this.#client.query(BEGIN_SQL);
+        state.open = true;
+      }
+    } catch (cause) {
+      this.#running = null;
+      throw this.#failure(cause, running);
+    }
     const cursor = this.#client.query(new Cursor<unknown[]>(sql, undefined, { rowMode: "array", types: TEXT_TYPES }));
     try {
-      const first = await readBatch(cursor);
+      const first = await readBatch(cursor).catch((cause: unknown) => {
+        // A failed COMMIT still ends the transaction; a failed statement inside one leaves it open.
+        if (effect === "end") state.open = false;
+        throw cause;
+      });
+      if (effect !== null) state.open = effect === "begin";
       const fields = first.result.fields;
       if (fields.length === 0) {
         this.#running = null;
@@ -294,6 +345,26 @@ class PostgresSession implements Session {
     }
   }
 
+  #setMode(mode: TransactionMode): Promise<void> {
+    if (mode === "auto" && this.#transaction.open) {
+      return Promise.reject(new PluginError("statementFailed", OPEN_TRANSACTION_MESSAGE));
+    }
+    this.#transaction.mode = mode;
+    return Promise.resolve();
+  }
+
+  async #endTransaction(sql: string): Promise<void> {
+    if (!this.#transaction.open) return;
+    if (this.#running !== null) throw new PluginError("statementFailed", BUSY_MESSAGE);
+    try {
+      await this.#client.query(sql);
+    } catch (cause) {
+      throw new PluginError("statementFailed", messageOf(cause), { cause });
+    } finally {
+      this.#transaction.open = false;
+    }
+  }
+
   async close(): Promise<void> {
     await this.#cancelling.catch(() => undefined);
     await this.#client.end();
@@ -303,6 +374,7 @@ class PostgresSession implements Session {
 const plugin: DatasourcePlugin = {
   id: PLUGIN_ID,
   capabilities: CAPABILITIES,
+  language,
   connectionSchema,
   connect: (config, options) => PostgresSession.open(connectionSchema.parse(config), options),
 };

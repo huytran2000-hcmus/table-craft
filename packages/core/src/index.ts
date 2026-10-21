@@ -17,4 +17,4 @@ export {
   type ResultSummary,
   type ResultWindow,
 } from "./results/store.js";
-export { openSession } from "./sessions/open.js";
+export { loadedPlugin, openSession } from "./sessions/open.js";

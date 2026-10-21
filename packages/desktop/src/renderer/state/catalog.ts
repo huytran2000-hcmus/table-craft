@@ -32,6 +32,8 @@ export interface CatalogState {
   readonly expandNamespace: (datasourceId: string, namespace: Namespace) => Promise<void>;
   /** Reads `path` again, or the namespace list when `path` is null or names a database. */
   readonly synchronize: (datasourceId: string, path: readonly string[] | null) => Promise<void>;
+  /** Reads again the namespace list and every schema already described, after DDL (plan 006). */
+  readonly refreshCached: (datasourceId: string) => Promise<void>;
   readonly expandAll: (keys: readonly string[]) => void;
   readonly collapseAll: (folderPaths: readonly string[]) => void;
   /** Forgets the datasource's catalog and expansion; its engine is gone. */
@@ -182,6 +184,18 @@ export function createCatalogStore(dependencies: CatalogDependencies) {
             : catalogOf(id).namespaces?.find((candidate) => pathKey(candidate.path) === pathKey(path));
         if (path === null || namespace?.kind !== "schema") await listNamespaces(id, true);
         else await describe(id, path, true);
+      },
+
+      async refreshCached(id) {
+        const { namespaces, namespaceStates } = catalogOf(id);
+        if (namespaces === null) return;
+        const described = namespaces.filter(
+          (namespace) => (namespaceStates[pathKey(namespace.path)]?.described ?? null) !== null,
+        );
+        await Promise.all([
+          listNamespaces(id, true),
+          ...described.map((namespace) => describe(id, namespace.path, true)),
+        ]);
       },
 
       expandAll: expand,

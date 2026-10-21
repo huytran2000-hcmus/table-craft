@@ -68,11 +68,43 @@ The speed search field floats at the tree's top right, `border-line` on `bg-rais
 `border-danger text-danger` when nothing matches. Synchronize, Collapse All and Copy use the
 Phosphor `ArrowsClockwise`, `ArrowsInLineVertical` and `CopySimple` glyphs.
 
+## SQL console
+
+Plan 006. The CodeMirror editor takes its theme from the same variables (`console/editorTheme.ts`):
+text in `font-editor` at `text-editor`, background `bg-canvas`, gutter `bg-panel` with
+`text-ink-muted` numbers, selection `colors.selection`, search matches `colors.searchMatch`. Syntax
+colours are their own tokens, read by the `HighlightStyle` through the CSS variable only.
+
+| Token (`appearance/tokens.ts`) | CSS variable                | Tailwind                     | Dark      | Used by                                                  |
+| ------------------------------ | --------------------------- | ---------------------------- | --------- | -------------------------------------------------------- |
+| `colors.syntax.keyword`        | `--tc-syntax-keyword`       |                              | `#cf8e6d` | Keywords, operator keywords, `TRUE`/`NULL`, type names   |
+| `colors.syntax.string`         | `--tc-syntax-string`        |                              | `#6aab73` | String literals                                          |
+| `colors.syntax.number`         | `--tc-syntax-number`        |                              | `#2aacb8` | Numeric literals                                         |
+| `colors.syntax.comment`        | `--tc-syntax-comment`       |                              | `#7a7e85` | Line and block comments, italic                          |
+| `colors.syntax.identifier`     | `--tc-syntax-identifier`    |                              | `#c77dbb` | Quoted identifiers                                       |
+| `colors.syntax.operator`       | `--tc-syntax-operator`      |                              | `#bcbec4` | Operators and punctuation                                |
+| `colors.syntax.variable`       | `--tc-syntax-variable`      |                              | `#56a8f5` | Bind parameters (`$1`, `:name`, `?`)                     |
+| `colors.syntax.bracketMatch`   | `--tc-syntax-bracket-match` |                              | `#43454a` | The matching bracket's background                        |
+| `colors.statementFlash`        | `--tc-statement-flash`      |                              | `#3d4a2e` | The statement just run, for 900 ms                       |
+| `colors.warning`               | `--tc-warning`              | `text-warning`, `bg-warning` | `#e0a84a` | Output warnings (skipped, cancelled), `transaction open` |
+
+The toolbar reads left to right: Run (primary), Run All, Cancel when the plugin can cancel, then
+the transaction controls when it declares `transactions`: a `Tx: Auto` / `Tx: Manual` select,
+Commit (`Check`), Rollback (`ArrowCounterClockwise`) and the `transaction open` badge in
+`bg-warning text-canvas`. Run All is `FastForward`. Toolbar buttons never wrap (`shrink-0
+whitespace-nowrap`); a long error gives way instead.
+
+Below the editor, the result strip holds `Output` and then `Result 1`, `Result 2`…, each with a
+`PushPin` that fills when pinned. The Output log is `font-editor`: the time and the statement's
+first line in `text-ink-muted`, then the message: `text-ink` for results and notes, `text-warning`
+for warnings, `text-danger` for errors, with the hint muted after it. The
+completion popup draws no type icons.
+
 ## Datasource colours
 
 Plan 004. A datasource stores its colour by name (decision 011); the theme gives the value. The
 name picks the classes in `renderer/ui/tint.ts`: the swatch is `bg-ds-<name>`, the tab background
-`bg-ds-<name>/25`, the console border `border-2 border-ds-<name>`.
+`bg-ds-<name>/25`, the console editor's border `border-2 border-ds-<name>` (plan 006).
 
 | Token (`colors.datasource.*`) | CSS variable     | Tailwind    | Dark      |
 | ----------------------------- | ---------------- | ----------- | --------- |

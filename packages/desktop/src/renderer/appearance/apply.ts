@@ -1,5 +1,9 @@
 import type { Appearance } from "@table-craft/desktop/renderer/appearance/tokens.js";
 
+function kebab(name: string): string {
+  return name.replace(/[A-Z]/g, (letter) => `-${letter.toLowerCase()}`);
+}
+
 /** The CSS variables `app.css` maps onto Tailwind's theme. */
 export function appearanceVariables(appearance: Appearance): Readonly<Record<string, string>> {
   const { colors, fonts, density } = appearance;
@@ -18,7 +22,10 @@ export function appearanceVariables(appearance: Appearance): Readonly<Record<str
     "--tc-selection": colors.selection,
     "--tc-search-match": colors.searchMatch,
     "--tc-key-icon": colors.keyIcon,
+    "--tc-warning": colors.warning,
+    "--tc-statement-flash": colors.statementFlash,
     ...Object.fromEntries(Object.entries(colors.datasource).map(([name, value]) => [`--tc-ds-${name}`, value])),
+    ...Object.fromEntries(Object.entries(colors.syntax).map(([name, value]) => [`--tc-syntax-${kebab(name)}`, value])),
     "--tc-font-ui": fonts.ui.family,
     "--tc-font-ui-size": `${fonts.ui.sizePx}px`,
     "--tc-font-editor": fonts.editor.family,

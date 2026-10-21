@@ -6,7 +6,7 @@ import type { WireValue } from "./values.js";
  * What a plugin can do. The UI branches on these, never on a plugin id (decision 007), and a
  * capability without contract-suite coverage cannot be declared (decision 013).
  */
-export const CAPABILITIES = ["sql", "cancel", "schemaTree"] as const;
+export const CAPABILITIES = ["sql", "cancel", "schemaTree", "transactions"] as const;
 
 export type Capability = (typeof CAPABILITIES)[number];
 
@@ -40,6 +40,8 @@ export interface Session {
   cancel?(): Promise<void>;
   /** Present exactly when the plugin declares `schemaTree`. */
   readonly introspector?: Introspector;
+  /** Present exactly when the plugin declares `transactions`. A new session starts in `auto`. */
+  readonly transactions?: Transactions;
   close(): Promise<void>;
   /** What the server reports about itself, such as `17.4`; null when it reports nothing. */
   readonly serverVersion: string | null;
@@ -53,10 +55,57 @@ export interface ConnectOptions {
   readonly readOnly: boolean;
 }
 
+/** One statement of a script, in UTF-16 offsets into the text `split` received (decision 023). */
+export interface StatementSpan {
+  readonly from: number;
+  readonly to: number;
+  /** `text.slice(from, to)`: the statement without its delimiter. */
+  readonly sql: string;
+}
+
+export const STATEMENT_KINDS = ["read", "write", "ddl", "transaction", "other"] as const;
+
+export type StatementKind = (typeof STATEMENT_KINDS)[number];
+
+export interface StatementClass {
+  readonly kind: StatementKind;
+  /** Why the statement needs confirmation before it runs (decision 011), such as `DELETE without WHERE`; null when it does not. */
+  readonly destructive: string | null;
+}
+
+/** What the console asks the plugin about its dialect (decision 008); the host never parses SQL. */
+export interface SqlLanguage {
+  /** Every non-empty statement in `text`, in order. Comments and blanks between statements belong to none. */
+  split(text: string): readonly StatementSpan[];
+  classify(sql: string): StatementClass;
+}
+
+export const TRANSACTION_MODES = ["auto", "manual"] as const;
+
+export type TransactionMode = (typeof TRANSACTION_MODES)[number];
+
+/**
+ * Transaction control for one session (decision 011). In `manual` the plugin opens a transaction
+ * before the first statement; in `auto` it tracks the ones a statement opens or ends explicitly.
+ */
+export interface Transactions {
+  /** Rejects with `statementFailed` when leaving `manual` while a transaction is open: commit or roll back first. */
+  setMode(mode: TransactionMode): Promise<void>;
+  /** A no-op when no transaction is open. */
+  commit(): Promise<void>;
+  /** A no-op when no transaction is open. */
+  rollback(): Promise<void>;
+  readonly mode: TransactionMode;
+  /** Whether a transaction is open after the last statement, commit or rollback. */
+  readonly open: boolean;
+}
+
 /** The default export of a plugin's entry module (decision 005). */
 export interface DatasourcePlugin {
   readonly id: string;
   readonly capabilities: readonly Capability[];
+  /** Present exactly when the plugin declares `sql`. */
+  readonly language?: SqlLanguage;
   /** Validates the configuration `connect` receives; the host parses before it calls. */
   readonly connectionSchema: z.ZodType;
   /** Rejects with a `PluginError` coded `connectionFailed` when the database cannot be reached. */

@@ -5,11 +5,13 @@ import sqlite from "@table-craft/plugin-sqlite";
 import { createEngine, probeDatasource } from "@table-craft/desktop/engine/engine.js";
 import { createLifetime } from "@table-craft/desktop/engine/lifetime.js";
 import type {
+  ClassifiedStatement,
   DescribedCatalog,
   EngineResponse,
   ExecutedStatement,
   Namespace,
   ResultWindow,
+  TransactionState,
 } from "@table-craft/desktop/engine/protocol.js";
 import { RESULT_WINDOW_ROWS } from "@table-craft/desktop/engine/protocol.js";
 import { fakeManifest, SQLITE_MANIFEST } from "../support/manifests.js";
@@ -193,7 +195,10 @@ describe("engine", () => {
   it("givenSessionOpened_whenAnswered_thenCarriesPluginNameAndCapabilities", async () => {
     const response = await connected().handle({ id: 1, type: "session.open" });
 
-    expect(resultOf(response)).toMatchObject({ pluginName: "SQLite", capabilities: ["sql", "schemaTree"] });
+    expect(resultOf(response)).toMatchObject({
+      pluginName: "SQLite",
+      capabilities: ["sql", "schemaTree", "transactions"],
+    });
   });
 
   it("givenSessionOpened_whenAnswered_thenCarriesServerVersion", async () => {
@@ -434,5 +439,71 @@ describe("createLifetime", () => {
     }).detached();
 
     expect(exits).toBe(0);
+  });
+});
+
+describe("engine scripts and transactions", () => {
+  async function execute(connection: ReturnType<typeof connected>, sessionId: string, sql: string) {
+    return resultOf<ExecutedStatement>(await connection.handle({ id: 3, type: "statement.execute", sessionId, sql }));
+  }
+
+  it("givenScript_whenSplitWithoutSession_thenClassifiedStatements", async () => {
+    const text = "SELECT 1;\nDELETE FROM t;";
+
+    const response = await connected().handle({ id: 1, type: "script.split", text });
+
+    expect(resultOf<ClassifiedStatement[]>(response)).toEqual([
+      { from: 0, to: 8, sql: "SELECT 1", kind: "read", destructive: null },
+      { from: 10, to: 23, sql: "DELETE FROM t", kind: "write", destructive: "DELETE without WHERE" },
+    ]);
+  });
+
+  it("givenTransactionRequest_whenPluginLacksTransactions_thenInvalidRequestError", async () => {
+    const connection = connectedToCancellable(cancellablePlugin().plugin);
+    const sessionId = await openSession(connection);
+
+    const response = await connection.handle({ id: 2, type: "transaction.commit", sessionId });
+
+    expect(response).toMatchObject({ id: 2, type: "engine.error", error: { code: "invalidRequest" } });
+  });
+
+  it("givenManualMode_whenInsertThenRollback_thenRowGoneAndNotOpen", async () => {
+    const connection = connected();
+    const sessionId = await openSession(connection);
+    await execute(connection, sessionId, "CREATE TABLE t (n INTEGER)");
+
+    const mode = await connection.handle({ id: 2, type: "transaction.setMode", sessionId, mode: "manual" });
+    const inserted = await execute(connection, sessionId, "INSERT INTO t VALUES (1)");
+    const rolledBack = await connection.handle({ id: 4, type: "transaction.rollback", sessionId });
+    const counted = await execute(connection, sessionId, "SELECT count(*) AS n FROM t");
+
+    expect(resultOf<TransactionState>(mode)).toEqual({ mode: "manual", transactionOpen: false });
+    expect(inserted.transactionOpen).toBe(true);
+    expect(resultOf<TransactionState>(rolledBack)).toEqual({ mode: "manual", transactionOpen: false });
+    expect(counted.firstWindow.rows).toEqual([[0]]);
+  });
+
+  it("givenAutoMode_whenExplicitBegin_thenExecutedStatementCarriesTransactionOpen", async () => {
+    const connection = connected();
+    const sessionId = await openSession(connection);
+
+    const begun = await execute(connection, sessionId, "BEGIN");
+    const selected = await execute(connection, sessionId, "SELECT 1");
+    const committed = await execute(connection, sessionId, "COMMIT");
+
+    expect([begun, selected, committed].map((executed) => executed.transactionOpen)).toEqual([true, true, false]);
+  });
+
+  it("givenOpenTransaction_whenSwitchedToAuto_thenStatementFailedAndStillOpen", async () => {
+    const connection = connected();
+    const sessionId = await openSession(connection);
+    await connection.handle({ id: 2, type: "transaction.setMode", sessionId, mode: "manual" });
+    await execute(connection, sessionId, "SELECT 1");
+
+    const response = await connection.handle({ id: 4, type: "transaction.setMode", sessionId, mode: "auto" });
+    const committed = await connection.handle({ id: 5, type: "transaction.commit", sessionId });
+
+    expect(response).toMatchObject({ type: "engine.error", error: { code: "statementFailed" } });
+    expect(resultOf<TransactionState>(committed)).toEqual({ mode: "manual", transactionOpen: false });
   });
 });

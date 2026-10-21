@@ -51,20 +51,24 @@ Run all four before considering a change done: `bun run lint`, `bun run format:c
 ```
 packages/plugin-api/       @table-craft/plugin-api: the plugin contract and nothing else.
                            Types, Zod schemas, API_VERSION, capability names, and the
-                           contract test suite under `testing/`. Depends only on zod
+                           contract test suite under `testing/`. `sql/` (subpath
+                           `@table-craft/plugin-api/sql`) is the shared splitter and
+                           classifier plugins build `language` from. Depends only on zod
 packages/core/             @table-craft/core: plugin loader, session manager, result-set
                            store, edit batches, history, and the catalog cache
                            (`catalog/`). Knows nothing about Electron
 packages/desktop/          @table-craft/desktop, the Electron app
   src/main/                lifecycle, the window, menus, one engine host per datasource,
-                           the datasource list and secrets, the invoke channels (`ipc.ts`)
+                           the datasource list and secrets, console files, the invoke
+                           channels (`ipc.ts`)
   src/preload/             contextBridge; hands the engine port to the renderer and relays
                            menu clicks. `menu.ts` declares the native menu as data
   src/engine/              the utilityProcess; `protocol.ts` is the only module the
                            engine and renderer share
   src/renderer/            React 19, Zustand, Tailwind v4, CodeMirror 6; a pure view.
                            `actions/` is the one command registry and keymap; `shell/`,
-                           `panes/`, `palette/` the DataGrip-shaped window
+                           `panes/`, `palette/` the DataGrip-shaped window; `console/`
+                           the SQL console: editor, result tabs, Output, transactions
 plugins/<id>/              built-in plugins (@table-craft/plugin-<id>): postgres, mysql,
                            sqlite. Each depends on plugin-api and its driver alone, and
                            ships a `table-craft-plugin.json` beside `src/`; its

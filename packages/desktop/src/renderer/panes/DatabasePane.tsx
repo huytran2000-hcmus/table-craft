@@ -6,6 +6,7 @@ import { currentPlatform, formatChord } from "@table-craft/desktop/renderer/acti
 import { invoke, registry, useActionEnabled } from "@table-craft/desktop/renderer/actions/index.js";
 import { DEFAULT_APPEARANCE } from "@table-craft/desktop/renderer/appearance/tokens.js";
 import { buildTree } from "@table-craft/desktop/renderer/model/datasourceTree.js";
+import { DRAG_OBJECT_TYPE, draggedObjectOf } from "@table-craft/desktop/renderer/model/dragObject.js";
 import {
   datasourceKey,
   explorerRows,
@@ -50,6 +51,8 @@ import {
 } from "@table-craft/desktop/renderer/ui/icons.js";
 import { TINT_SWATCH } from "@table-craft/desktop/renderer/ui/tint.js";
 import { Tooltip } from "@table-craft/desktop/renderer/ui/Tooltip.js";
+
+const PLAIN_TEXT_TYPE = "text/plain";
 
 const TOOLBAR_ACTIONS = [
   ACTION_IDS.newDatasource,
@@ -241,6 +244,7 @@ function TreeRow({ row, selected, positions, top, onSelect, onToggle, onActivate
         ? undefined
         : `${connection.error.message} ${connection.error.hint}`
       : nodeTitle(node);
+  const dragged = draggedObjectOf(node);
   return (
     <ContextMenu.Root>
       <ContextMenu.Trigger asChild>
@@ -267,6 +271,13 @@ function TreeRow({ row, selected, positions, top, onSelect, onToggle, onActivate
           onMouseDown={() => onSelect(row)}
           onContextMenu={() => onSelect(row)}
           onDoubleClick={() => onActivate(row)}
+          draggable={dragged !== null}
+          onDragStart={(event) => {
+            if (dragged === null) return;
+            event.dataTransfer.setData(DRAG_OBJECT_TYPE, JSON.stringify(dragged));
+            event.dataTransfer.setData(PLAIN_TEXT_TYPE, dragged.name);
+            event.dataTransfer.effectAllowed = "copy";
+          }}
         >
           {row.expandable ? (
             <button

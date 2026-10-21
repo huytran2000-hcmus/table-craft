@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { readFile, rename, writeFile } from "node:fs/promises";
+import { mkdir, readdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import {
   app,
@@ -13,9 +13,10 @@ import {
   type UtilityProcess,
   type WebContents,
 } from "electron";
+import { createCloseGuard } from "@table-craft/desktop/main/closeGuard.js";
+import { createConsoleFiles, type DirectoryFileSystem } from "@table-craft/desktop/main/consoleFiles.js";
 import { datasourceFromEnvironment } from "@table-craft/desktop/main/datasource.js";
 import { createDatasourceStore } from "@table-craft/desktop/main/datasources.js";
-import type { FileSystem } from "@table-craft/desktop/main/files.js";
 import { createHostRegistry, type EngineProcess } from "@table-craft/desktop/main/hosts.js";
 import { registerIpc } from "@table-craft/desktop/main/ipc.js";
 import { installApplicationMenu } from "@table-craft/desktop/main/menu.js";
@@ -50,7 +51,7 @@ function distPath(relative: string): string {
   return join(import.meta.dirname, relative);
 }
 
-const files: FileSystem = {
+const files: DirectoryFileSystem = {
   async readText(path) {
     try {
       return await readFile(path, UTF8);
@@ -61,6 +62,19 @@ const files: FileSystem = {
   },
   writeText: (path, text) => writeFile(path, text, UTF8),
   rename,
+  async listNames(path) {
+    try {
+      return await readdir(path);
+    } catch (error) {
+      if ((error as { code?: unknown }).code === MISSING_FILE) return [];
+      throw error;
+    }
+  },
+  makeDirectory: async (path) => {
+    await mkdir(path, { recursive: true });
+  },
+  remove: (path) => rm(path, { force: true }),
+  removeDirectory: (path) => rm(path, { recursive: true, force: true }),
 };
 
 const cipher: Cipher = {
@@ -94,6 +108,8 @@ const hosts = createHostRegistry<WebContents>({
   onExit: (datasourceId, code, clean) => broadcast(CHANNELS.engineExited, { datasourceId, code, clean }),
 });
 
+const closeGuard = createCloseGuard<BrowserWindow>({ quit: () => app.quit() });
+
 function createWindow(): void {
   const window = new BrowserWindow({
     title: APP_NAME,
@@ -108,6 +124,7 @@ function createWindow(): void {
     },
   });
   window.once("ready-to-show", () => window.show());
+  closeGuard.guard(window);
   void window.loadFile(distPath("../renderer/index.html"));
 }
 
@@ -120,6 +137,7 @@ async function chooseFile(contents: WebContents, title: string): Promise<string 
 
 void app.whenReady().then(async () => {
   const directory = app.getPath(USER_DATA);
+  const consoles = createConsoleFiles({ directory, files });
   // safeStorage answers only once the app is ready.
   const service = await createDatasourceService<WebContents>({
     store: createDatasourceStore({ directory, files }),
@@ -128,11 +146,17 @@ void app.whenReady().then(async () => {
     plugins: await listPlugins(pluginRoots),
     ephemeral,
     newId: randomUUID,
+    consoles,
     onChanged: (list) => broadcast(CHANNELS.datasourcesChanged, list),
   });
   registerIpc<WebContents>(ipcMain, {
     service,
+    consoles,
     chooseFile,
+    answerClose(sender, proceed) {
+      const window = BrowserWindow.fromWebContents(sender);
+      if (window !== null) closeGuard.answer(window, proceed);
+    },
     log: (message, cause) => console.error(`table-craft: ${message}`, cause),
   });
   installApplicationMenu(() => BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0] ?? null);
@@ -145,5 +169,7 @@ void app.whenReady().then(async () => {
 app.on("window-all-closed", () => {
   if (process.platform !== "darwin") app.quit();
 });
+
+app.on("before-quit", () => closeGuard.beforeQuit());
 
 app.on("will-quit", () => hosts.closeAll());

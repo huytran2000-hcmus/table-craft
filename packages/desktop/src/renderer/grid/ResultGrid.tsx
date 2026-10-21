@@ -4,23 +4,19 @@ import { RESULT_WINDOW_ROWS } from "@table-craft/desktop/engine/protocol.js";
 import { DEFAULT_APPEARANCE } from "@table-craft/desktop/renderer/appearance/tokens.js";
 import { formatCell } from "@table-craft/desktop/renderer/grid/format.js";
 import { columnChars, columnTemplate } from "@table-craft/desktop/renderer/grid/widths.js";
-import {
-  rowAt,
-  useConsoles,
-  windowOffsetOf,
-  type ConsoleSession,
-  type ShownResult,
-} from "@table-craft/desktop/renderer/state/consoles.js";
+import { rowAt, useConsoles, windowOffsetOf, type ResultTab } from "@table-craft/desktop/renderer/state/consoles.js";
 
 const OVERSCAN_ROWS = 20;
 const ROW_HEIGHT_PX = DEFAULT_APPEARANCE.density.rowHeightPx;
 const PLACEHOLDER_TEXT = "…";
 const STRIPE_EVERY = 2;
 
-const NO_WINDOWS: ConsoleSession["windows"] = {};
+interface GridProps {
+  readonly consoleId: string;
+  readonly result: ResultTab;
+}
 
-function Rows({ consoleId, result }: { consoleId: string; result: ShownResult }) {
-  const windows = useConsoles((state) => state.consoles[consoleId]?.windows ?? NO_WINDOWS);
+function Rows({ consoleId, result }: GridProps) {
   const ensureWindow = useConsoles((state) => state.ensureWindow);
   const scrollRef = useRef<HTMLDivElement>(null);
   const virtualizer = useVirtualizer({
@@ -32,12 +28,13 @@ function Rows({ consoleId, result }: { consoleId: string; result: ShownResult })
   const items = virtualizer.getVirtualItems();
   const first = items[0]?.index;
   const last = items[items.length - 1]?.index;
+  const { id: resultId, windows } = result;
 
   useEffect(() => {
     if (first === undefined || last === undefined) return;
     for (let offset = windowOffsetOf(first); offset <= last; offset += RESULT_WINDOW_ROWS)
-      ensureWindow(consoleId, offset);
-  }, [first, last, consoleId, ensureWindow]);
+      ensureWindow(consoleId, resultId, offset);
+  }, [first, last, consoleId, resultId, ensureWindow]);
 
   const sample = windows[0];
   const template = useMemo(() => columnTemplate(columnChars(result.columns, sample ?? [])), [result.columns, sample]);
@@ -85,24 +82,16 @@ function Rows({ consoleId, result }: { consoleId: string; result: ShownResult })
   );
 }
 
-function summaryText(result: ShownResult): string {
-  if (result.columns.length === 0) return `${result.rowsAffected ?? 0} rows affected`;
+function summaryText(result: ResultTab): string {
   const rows = `${result.rowCount} ${result.rowCount === 1 ? "row" : "rows"}`;
   return result.truncated ? `${rows} (truncated)` : rows;
 }
 
-export function ResultGrid({ consoleId }: { consoleId: string }) {
-  const result = useConsoles((state) => state.consoles[consoleId]?.result ?? null);
-  if (result === null) {
-    return <div className="flex-1 p-gap text-ink-muted">Run a statement to see its result.</div>;
-  }
+/** One result tab's rows, fetched from the engine a window at a time as they scroll into view. */
+export function ResultGrid({ consoleId, result }: GridProps) {
   return (
     <div role="grid" aria-rowcount={result.rowCount} className="flex min-h-0 flex-1 flex-col">
-      {result.columns.length > 0 ? (
-        <Rows key={result.handle} consoleId={consoleId} result={result} />
-      ) : (
-        <div className="flex-1" />
-      )}
+      <Rows key={result.handle} consoleId={consoleId} result={result} />
       <div className="h-row border-t border-line bg-panel px-gap leading-(--spacing-row) text-ink-muted">
         {summaryText(result)}
       </div>

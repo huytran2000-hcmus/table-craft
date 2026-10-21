@@ -1,20 +1,54 @@
 import { create } from "zustand";
-import { RESULT_WINDOW_ROWS, type Column, type EngineError, type Row } from "@table-craft/desktop/engine/protocol.js";
+import {
+  RESULT_WINDOW_ROWS,
+  type ClassifiedStatement,
+  type Column,
+  type EngineError,
+  type Row,
+  type TransactionMode,
+  type TransactionState,
+} from "@table-craft/desktop/engine/protocol.js";
 import { EngineRequestError, type EngineClient } from "@table-craft/desktop/renderer/engine/client.js";
+import { executedText, firstLine } from "@table-craft/desktop/renderer/model/format.js";
+import { statementsToRun, type RunScope, type TextSpan } from "@table-craft/desktop/renderer/model/statementAt.js";
+import { useCatalog } from "@table-craft/desktop/renderer/state/catalog.js";
 import { useDatasources } from "@table-craft/desktop/renderer/state/datasources.js";
+import { useModal } from "@table-craft/desktop/renderer/state/modal.js";
 
 /**
  * One console's session. `failed` when it could not open and `disconnected` when its engine went
- * away; Run opens a new session from either.
+ * away or it was restored at launch; Run opens a new session from either.
  */
 export type ConsoleStatus = "connecting" | "ready" | "running" | "failed" | "disconnected";
 
-export interface ShownResult {
+/** A result tab: one row-returning statement's rows, held in the engine behind `handle`. */
+export interface ResultTab {
+  readonly id: string;
+  /** `Result 1`, `Result 2`…, the first number no pinned tab holds. */
+  readonly title: string;
+  readonly sql: string;
   readonly handle: string;
   readonly columns: readonly Column[];
   readonly rowCount: number;
   readonly truncated: boolean;
   readonly rowsAffected: number | null;
+  /** Loaded windows keyed by their offset, a multiple of `RESULT_WINDOW_ROWS`. */
+  readonly windows: Readonly<Record<number, readonly Row[]>>;
+  /** A pinned tab survives the next run; the others are replaced and their handles released. */
+  readonly pinned: boolean;
+}
+
+export type OutputTone = "info" | "success" | "warning" | "error";
+
+export interface OutputEntry {
+  readonly id: number;
+  /** Wall-clock time, for the log's `12:04:31` column. */
+  readonly at: number;
+  /** The statement's first line, or empty when the entry is about no statement. */
+  readonly sql: string;
+  readonly message: string;
+  readonly hint: string | null;
+  readonly tone: OutputTone;
 }
 
 export type RunOutcome = "succeeded" | "failed" | "cancelled";
@@ -24,35 +58,66 @@ export interface LastRun {
   readonly outcome: RunOutcome;
 }
 
+/** The statement being run, for the editor to flash; `seq` changes on every statement. */
+export interface Flash extends TextSpan {
+  readonly seq: number;
+}
+
 export interface ConsoleSession {
   readonly datasourceId: string;
+  /** The console's file name without `.sql` (decision 16). */
+  readonly name: string;
   readonly sessionId: string | null;
   readonly status: ConsoleStatus;
   readonly error: EngineError | null;
   readonly sql: string;
-  readonly result: ShownResult | null;
-  /** Loaded windows keyed by their offset, a multiple of `RESULT_WINDOW_ROWS`. */
-  readonly windows: Readonly<Record<number, readonly Row[]>>;
+  /** The editor's main selection; empty is a caret. */
+  readonly selection: TextSpan;
+  readonly results: readonly ResultTab[];
+  /** `OUTPUT_TAB` or a result tab's id. */
+  readonly activeResult: string;
+  /** Newest last, at most `OUTPUT_LIMIT` entries; never written to disk. */
+  readonly output: readonly OutputEntry[];
+  readonly txMode: TransactionMode;
+  readonly transactionOpen: boolean;
   readonly lastRun: LastRun | null;
+  readonly flash: Flash | null;
+}
+
+export interface OpenOptions {
+  readonly name?: string;
+  readonly sql?: string;
+  /** False for a console restored at launch: it stays disconnected until its first Run. */
+  readonly connect?: boolean;
 }
 
 export interface ConsolesState {
   readonly consoles: Readonly<Record<string, ConsoleSession>>;
-  /** Opens a session on `datasourceId` for a new console tab. */
-  readonly open: (id: string, datasourceId: string, sql?: string) => Promise<void>;
-  /** Forgets the console and closes its session, which releases its result. */
+  /** Adds a console on `datasourceId`, opening its session unless `connect` is false. */
+  readonly open: (id: string, datasourceId: string, options?: OpenOptions) => Promise<void>;
+  /** Forgets the console and closes its session, which releases its results. */
   readonly close: (id: string) => void;
   /** Marks the datasource's consoles disconnected; `error` says why when it was not asked for. */
   readonly detach: (datasourceId: string, error: EngineError | null) => void;
   readonly setSql: (id: string, sql: string) => void;
-  /** Runs the console's SQL, opening a new session first when it has none. */
-  readonly run: (id: string) => Promise<void>;
+  readonly setSelection: (id: string, selection: TextSpan) => void;
+  /** Runs what `scope` picks, one statement after another, opening a session first when it has none. */
+  readonly run: (id: string, scope: RunScope) => Promise<void>;
   /** Asks the engine to cancel the running statement; `run` then reports it as cancelled. */
   readonly cancel: (id: string) => Promise<void>;
-  readonly ensureWindow: (id: string, offset: number) => void;
+  readonly ensureWindow: (id: string, resultId: string, offset: number) => void;
+  readonly showResult: (id: string, resultId: string) => void;
+  readonly togglePin: (id: string, resultId: string) => void;
+  /** False when the engine refused, which the Output log then explains. */
+  readonly setTransactionMode: (id: string, mode: TransactionMode) => Promise<boolean>;
+  readonly commit: (id: string) => Promise<boolean>;
+  readonly rollback: (id: string) => Promise<boolean>;
 }
 
-export const INITIAL_SQL = "SELECT 1 AS one, 'two' AS two";
+export const OUTPUT_TAB = "output";
+export const OUTPUT_LIMIT = 500;
+export const DEFAULT_CONSOLE_NAME = "console";
+const RESULT_TITLE = "Result";
 const UNEXPECTED_HINT = "Restart the app; if it happens again, report it.";
 
 export function toError(cause: unknown): EngineError {
@@ -65,7 +130,7 @@ export function windowOffsetOf(index: number): number {
   return Math.floor(index / RESULT_WINDOW_ROWS) * RESULT_WINDOW_ROWS;
 }
 
-export function rowAt(windows: ConsoleSession["windows"], index: number): Row | undefined {
+export function rowAt(windows: ResultTab["windows"], index: number): Row | undefined {
   const offset = windowOffsetOf(index);
   return windows[offset]?.[index - offset];
 }
@@ -75,36 +140,80 @@ export function canRun(status: ConsoleStatus): boolean {
   return status === "ready" || status === "disconnected" || status === "failed";
 }
 
+/** `Result N` for the smallest N no kept tab holds. */
+export function nextResultTitle(kept: readonly Pick<ResultTab, "title">[]): string {
+  const taken = new Set(kept.map((tab) => tab.title));
+  for (let n = 1; ; n++) if (!taken.has(`${RESULT_TITLE} ${n}`)) return `${RESULT_TITLE} ${n}`;
+}
+
+export function activeResultOf(session: ConsoleSession): ResultTab | null {
+  return session.results.find((result) => result.id === session.activeResult) ?? null;
+}
+
 export interface ConsolesDependencies {
   /** The datasource's engine, connected on first use; one port per datasource per window. */
   readonly connect: (datasourceId: string) => Promise<EngineClient>;
   readonly now: () => number;
+  /** Wall-clock time for Output entries; defaults to `Date.now`. */
+  readonly clock?: () => number;
+  /** Asks before destructive statements run (decision 9); false runs none of the batch. */
+  readonly confirmDestructive?: (statements: readonly ClassifiedStatement[]) => Promise<boolean>;
+  /** DDL took effect outside a transaction: the datasource's cached catalog is stale (decision 19). */
+  readonly onDdl?: (datasourceId: string) => void;
 }
 
-function newConsole(datasourceId: string, sql: string): ConsoleSession {
+function newConsole(datasourceId: string, name: string, sql: string, connect: boolean): ConsoleSession {
   return {
     datasourceId,
+    name,
     sessionId: null,
-    status: "connecting",
+    status: connect ? "connecting" : "disconnected",
     error: null,
     sql,
-    result: null,
-    windows: {},
+    selection: { from: 0, to: 0 },
+    results: [],
+    activeResult: OUTPUT_TAB,
+    output: [],
+    txMode: "auto",
+    transactionOpen: false,
     lastRun: null,
+    flash: null,
   };
+}
+
+function statementCount(count: number): string {
+  return `${count} ${count === 1 ? "statement" : "statements"}`;
 }
 
 export function createConsolesStore(dependencies: ConsolesDependencies) {
   /** The client each console's session lives on; not state, because nothing renders from it. */
   const clients = new Map<string, EngineClient>();
-  /** Window requests in flight per console. */
+  /** Window requests in flight per result tab. */
   const requested = new Map<string, Set<number>>();
+  /** Consoles whose DDL ran inside a transaction not yet ended: Commit makes it visible. */
+  const pendingDdl = new Set<string>();
+  const clock = dependencies.clock ?? (() => Date.now());
+  const confirmDestructive = dependencies.confirmDestructive ?? (() => Promise.resolve(true));
+  let entries = 0;
+  let flashes = 0;
+  let resultIds = 0;
 
   return create<ConsolesState>()((set, get) => {
     function patch(id: string, change: Partial<ConsoleSession>): void {
       const current = get().consoles[id];
       if (current === undefined) return;
       set({ consoles: { ...get().consoles, [id]: { ...current, ...change } } });
+    }
+
+    function log(id: string, entry: Omit<OutputEntry, "id" | "at" | "hint"> & { readonly hint?: string | null }): void {
+      const current = get().consoles[id];
+      if (current === undefined) return;
+      const next: OutputEntry = { hint: null, ...entry, id: ++entries, at: clock() };
+      patch(id, { output: [...current.output, next].slice(-OUTPUT_LIMIT) });
+    }
+
+    function logError(id: string, sql: string, error: EngineError): void {
+      log(id, { sql, message: error.message, hint: error.hint, tone: "error" });
     }
 
     /** Opens a session for the console; false when it could not, with the console marked failed. */
@@ -121,7 +230,9 @@ export function createConsolesStore(dependencies: ConsolesDependencies) {
           return false;
         }
         clients.set(id, client);
-        patch(id, { sessionId: opened.sessionId, status: "ready", error: null });
+        patch(id, { sessionId: opened.sessionId, status: "ready", error: null, transactionOpen: false });
+        const mode = get().consoles[id]?.txMode;
+        if (mode === "manual") await applyMode(id, client, opened.sessionId, mode);
         return true;
       } catch (cause) {
         patch(id, { status: "failed", error: toError(cause) });
@@ -129,12 +240,143 @@ export function createConsolesStore(dependencies: ConsolesDependencies) {
       }
     }
 
+    async function applyMode(id: string, client: EngineClient, sessionId: string, mode: TransactionMode) {
+      try {
+        const state = await client.call("transaction.setMode", { sessionId, mode });
+        patch(id, { txMode: state.mode, transactionOpen: state.transactionOpen });
+        return true;
+      } catch (cause) {
+        logError(id, "", toError(cause));
+        return false;
+      }
+    }
+
+    function release(id: string, results: readonly ResultTab[]): void {
+      const client = clients.get(id);
+      for (const result of results) {
+        requested.delete(result.id);
+        if (client !== undefined) void client.call("result.release", { handle: result.handle }).catch(() => undefined);
+      }
+    }
+
+    /** Drops the unpinned result tabs before a run fills new ones (decision 10). */
+    function replaceUnpinned(id: string): void {
+      const current = get().consoles[id];
+      if (current === undefined) return;
+      const kept = current.results.filter((result) => result.pinned);
+      release(
+        id,
+        current.results.filter((result) => !result.pinned),
+      );
+      const activeKept = kept.some((result) => result.id === current.activeResult);
+      patch(id, { results: kept, activeResult: activeKept ? current.activeResult : OUTPUT_TAB });
+    }
+
+    async function resolveTarget(
+      client: EngineClient,
+      session: ConsoleSession,
+      scope: RunScope,
+    ): Promise<readonly ClassifiedStatement[]> {
+      const statements = await client.call("script.split", { text: session.sql });
+      const target = statementsToRun(statements, session.selection, scope);
+      if (target.kind === "nothing") return [];
+      if (target.kind === "statements") return target.statements;
+      const pieces = await client.call("script.split", { text: session.sql.slice(target.from, target.to) });
+      return pieces.map((piece) => ({ ...piece, from: piece.from + target.from, to: piece.to + target.from }));
+    }
+
+    function afterTransactionChange(id: string, datasourceId: string, open: boolean, committed: boolean): void {
+      if (open || !pendingDdl.has(id)) return;
+      pendingDdl.delete(id);
+      if (committed) dependencies.onDdl?.(datasourceId);
+    }
+
+    /** Runs `statements` in order; the first failure skips the rest. */
+    async function execute(
+      id: string,
+      client: EngineClient,
+      sessionId: string,
+      statements: readonly ClassifiedStatement[],
+    ): Promise<RunOutcome> {
+      for (const [index, statement] of statements.entries()) {
+        const sql = firstLine(statement.sql);
+        patch(id, { flash: { from: statement.from, to: statement.to, seq: ++flashes } });
+        const startedAt = dependencies.now();
+        try {
+          const executed = await client.call("statement.execute", { sessionId, sql: statement.sql });
+          const elapsed = dependencies.now() - startedAt;
+          const { firstWindow, transactionOpen, ...summary } = executed;
+          log(id, { sql, message: executedText(summary, elapsed, statement.kind), tone: "success" });
+          const current = get().consoles[id];
+          if (current === undefined) return "cancelled";
+          const datasourceId = current.datasourceId;
+          if (summary.columns.length > 0) {
+            const tab: ResultTab = {
+              ...summary,
+              id: `${id}/result-${++resultIds}`,
+              title: nextResultTitle(current.results),
+              sql: statement.sql,
+              windows: { [firstWindow.offset]: firstWindow.rows },
+              pinned: false,
+            };
+            patch(id, { results: [...current.results, tab], activeResult: tab.id, transactionOpen });
+          } else {
+            patch(id, { transactionOpen });
+          }
+          if (statement.kind === "ddl") {
+            if (transactionOpen) pendingDdl.add(id);
+            else dependencies.onDdl?.(datasourceId);
+          }
+          if (statement.kind === "transaction") {
+            // Whether a typed end committed is the plugin's to know (decision 008); re-reading after a
+            // rollback costs a describe and shows the same tree.
+            afterTransactionChange(id, datasourceId, transactionOpen, true);
+          }
+        } catch (cause) {
+          const error = toError(cause);
+          const cancelled = error.code === "cancelled";
+          if (cancelled) log(id, { sql, message: "Cancelled", tone: "warning" });
+          else logError(id, sql, error);
+          const skipped = statements.length - index - 1;
+          if (skipped > 0) {
+            log(id, {
+              sql: "",
+              message: `${statementCount(skipped)} skipped after the ${cancelled ? "cancel" : "error"}.`,
+              tone: "warning",
+            });
+          }
+          patch(id, { error, activeResult: OUTPUT_TAB });
+          return cancelled ? "cancelled" : "failed";
+        }
+      }
+      return "succeeded";
+    }
+
+    async function endTransaction(id: string, method: "transaction.commit" | "transaction.rollback") {
+      const current = get().consoles[id];
+      const client = clients.get(id);
+      if (current?.sessionId == null || client === undefined) return true;
+      try {
+        const state: TransactionState = await client.call(method, { sessionId: current.sessionId });
+        patch(id, { transactionOpen: state.transactionOpen });
+        const committed = method === "transaction.commit";
+        log(id, { sql: "", message: committed ? "Committed" : "Rolled back", tone: "info" });
+        afterTransactionChange(id, current.datasourceId, state.transactionOpen, committed);
+        return true;
+      } catch (cause) {
+        logError(id, "", toError(cause));
+        return false;
+      }
+    }
+
     return {
       consoles: {},
 
-      async open(id, datasourceId, sql = INITIAL_SQL) {
-        set({ consoles: { ...get().consoles, [id]: newConsole(datasourceId, sql) } });
-        await openSession(id);
+      async open(id, datasourceId, options = {}) {
+        const connect = options.connect ?? true;
+        const session = newConsole(datasourceId, options.name ?? DEFAULT_CONSOLE_NAME, options.sql ?? "", connect);
+        set({ consoles: { ...get().consoles, [id]: session } });
+        if (connect) await openSession(id);
       },
 
       close(id) {
@@ -142,7 +384,8 @@ export function createConsolesStore(dependencies: ConsolesDependencies) {
         if (closing === undefined) return;
         const { [id]: _closed, ...rest } = get().consoles;
         set({ consoles: rest });
-        requested.delete(id);
+        for (const result of closing.results) requested.delete(result.id);
+        pendingDdl.delete(id);
         const client = clients.get(id);
         clients.delete(id);
         if (closing.sessionId === null || client === undefined) return;
@@ -150,59 +393,73 @@ export function createConsolesStore(dependencies: ConsolesDependencies) {
       },
 
       detach(datasourceId, error) {
-        const consoles = { ...get().consoles };
-        let changed = false;
-        for (const [id, session] of Object.entries(consoles)) {
+        for (const [id, session] of Object.entries(get().consoles)) {
           if (session.datasourceId !== datasourceId) continue;
           clients.delete(id);
-          requested.delete(id);
-          consoles[id] = {
-            ...session,
+          pendingDdl.delete(id);
+          for (const result of session.results) requested.delete(result.id);
+          if (session.transactionOpen) {
+            log(id, { sql: "", message: "The session closed; its open transaction was rolled back.", tone: "warning" });
+          }
+          patch(id, {
             sessionId: null,
             status: error === null ? "disconnected" : "failed",
             error: error ?? session.error,
-          };
-          changed = true;
+            transactionOpen: false,
+          });
         }
-        if (changed) set({ consoles });
       },
 
       setSql(id, sql) {
         patch(id, { sql });
       },
 
-      async run(id) {
+      setSelection(id, selection) {
+        const current = get().consoles[id];
+        if (current === undefined) return;
+        if (current.selection.from === selection.from && current.selection.to === selection.to) return;
+        patch(id, { selection });
+      },
+
+      async run(id, scope) {
         const before = get().consoles[id];
         if (before === undefined || !canRun(before.status)) return;
         if (before.status !== "ready" && !(await openSession(id))) return;
         const current = get().consoles[id];
         const client = clients.get(id);
         if (current?.sessionId == null || current.status !== "ready" || client === undefined) return;
-        const { sessionId, sql, result: previous } = current;
+        const { sessionId } = current;
         const startedAt = dependencies.now();
         patch(id, { status: "running", error: null });
-        const finished = (outcome: RunOutcome): LastRun => ({ durationMs: dependencies.now() - startedAt, outcome });
+        let outcome: RunOutcome = "failed";
         try {
-          const executed = await client.call("statement.execute", { sessionId, sql });
-          requested.get(id)?.clear();
-          if (previous !== null) void client.call("result.release", { handle: previous.handle }).catch(() => undefined);
-          const { firstWindow, ...result } = executed;
-          patch(id, {
-            status: "ready",
-            result,
-            windows: { [firstWindow.offset]: firstWindow.rows },
-            lastRun: finished("succeeded"),
-          });
+          const statements = await resolveTarget(client, current, scope);
+          if (statements.length === 0) {
+            log(id, { sql: "", message: "Nothing to run", tone: "info" });
+            patch(id, { activeResult: OUTPUT_TAB });
+            outcome = "succeeded";
+          } else {
+            const destructive = statements.filter((statement) => statement.destructive !== null);
+            if (destructive.length > 0 && !(await confirmDestructive(destructive))) {
+              log(id, { sql: "", message: "Cancelled; nothing ran.", tone: "warning" });
+              patch(id, { activeResult: OUTPUT_TAB });
+              outcome = "cancelled";
+            } else {
+              replaceUnpinned(id);
+              outcome = await execute(id, client, sessionId, statements);
+            }
+          }
         } catch (cause) {
           const error = toError(cause);
-          const latest = get().consoles[id];
-          patch(id, {
-            // A detach while running already said the session is gone, and why.
-            status: latest?.status === "disconnected" || latest?.status === "failed" ? latest.status : "ready",
-            error,
-            lastRun: finished(error.code === "cancelled" ? "cancelled" : "failed"),
-          });
+          logError(id, "", error);
+          patch(id, { error, activeResult: OUTPUT_TAB });
         }
+        const latest = get().consoles[id];
+        patch(id, {
+          // A detach while running already said the session is gone, and why.
+          status: latest?.status === "disconnected" || latest?.status === "failed" ? latest.status : "ready",
+          lastRun: { durationMs: dependencies.now() - startedAt, outcome },
+        });
       },
 
       async cancel(id) {
@@ -216,39 +473,98 @@ export function createConsolesStore(dependencies: ConsolesDependencies) {
         }
       },
 
-      ensureWindow(id, offset) {
-        const current = get().consoles[id];
+      ensureWindow(id, resultId, offset) {
+        const result = get().consoles[id]?.results.find((candidate) => candidate.id === resultId);
         const client = clients.get(id);
-        if (current?.result == null || client === undefined || offset in current.windows) return;
-        const inFlight = requested.get(id) ?? new Set<number>();
-        requested.set(id, inFlight);
+        if (result === undefined || client === undefined || offset in result.windows) return;
+        const inFlight = requested.get(resultId) ?? new Set<number>();
+        requested.set(resultId, inFlight);
         if (inFlight.has(offset)) return;
         inFlight.add(offset);
-        const { handle } = current.result;
         client
-          .call("result.window", { handle, offset, limit: RESULT_WINDOW_ROWS })
+          .call("result.window", { handle: result.handle, offset, limit: RESULT_WINDOW_ROWS })
           .then((window) => {
             const latest = get().consoles[id];
-            if (latest?.result?.handle !== handle) return;
-            patch(id, { windows: { ...latest.windows, [window.offset]: window.rows } });
+            if (latest === undefined) return;
+            patch(id, {
+              results: latest.results.map((candidate) =>
+                candidate.id === resultId
+                  ? { ...candidate, windows: { ...candidate.windows, [window.offset]: window.rows } }
+                  : candidate,
+              ),
+            });
           })
           .catch((cause: unknown) => patch(id, { error: toError(cause) }))
           .finally(() => inFlight.delete(offset));
       },
+
+      showResult(id, resultId) {
+        const current = get().consoles[id];
+        if (current === undefined) return;
+        if (resultId !== OUTPUT_TAB && !current.results.some((result) => result.id === resultId)) return;
+        patch(id, { activeResult: resultId });
+      },
+
+      togglePin(id, resultId) {
+        const current = get().consoles[id];
+        if (current === undefined) return;
+        patch(id, {
+          results: current.results.map((result) =>
+            result.id === resultId ? { ...result, pinned: !result.pinned } : result,
+          ),
+        });
+      },
+
+      async setTransactionMode(id, mode) {
+        const current = get().consoles[id];
+        if (current === undefined) return false;
+        const client = clients.get(id);
+        if (current.sessionId === null || client === undefined || current.status !== "ready") {
+          patch(id, { txMode: mode });
+          return true;
+        }
+        return applyMode(id, client, current.sessionId, mode);
+      },
+
+      commit: (id) => endTransaction(id, "transaction.commit"),
+      rollback: (id) => endTransaction(id, "transaction.rollback"),
     };
   });
 }
 
 export type ConsolesStore = ReturnType<typeof createConsolesStore>;
 
+/** The destructive-statement confirmation (decision 9): one dialog for the whole batch. */
+async function askDestructive(statements: readonly ClassifiedStatement[]): Promise<boolean> {
+  const answer = await useModal.getState().ask({
+    kind: "confirm",
+    title:
+      statements.length === 1 ? "Run a destructive statement?" : `Run ${statements.length} destructive statements?`,
+    message: "These statements can change or remove data that cannot be recovered:",
+    items: statements.map((statement) => ({ label: firstLine(statement.sql), detail: statement.destructive ?? "" })),
+    confirm: "Execute",
+    destructive: true,
+  });
+  return answer !== null;
+}
+
 export const useConsoles = createConsolesStore({
   connect: (datasourceId) => useDatasources.getState().connect(datasourceId),
   now: () => performance.now(),
+  confirmDestructive: askDestructive,
+  onDdl: (datasourceId) => void useCatalog.getState().refreshCached(datasourceId),
 });
 
 /** The consoles open on a datasource, by console id. */
 export function consolesOf(consoles: ConsolesState["consoles"], datasourceId: string): readonly string[] {
   return Object.entries(consoles)
     .filter(([, session]) => session.datasourceId === datasourceId)
+    .map(([id]) => id);
+}
+
+/** The consoles holding an open transaction, by console id. */
+export function openTransactions(consoles: ConsolesState["consoles"]): readonly string[] {
+  return Object.entries(consoles)
+    .filter(([, session]) => session.transactionOpen)
     .map(([id]) => id);
 }

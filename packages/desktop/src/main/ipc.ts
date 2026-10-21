@@ -1,4 +1,5 @@
 import { z } from "@table-craft/plugin-api";
+import { ConsoleFileError, type ConsoleFiles } from "@table-craft/desktop/main/consoleFiles.js";
 import { draftSchema } from "@table-craft/desktop/main/datasources.js";
 import { SecretStoreError } from "@table-craft/desktop/main/secrets.js";
 import { DatasourceError, type DatasourceService } from "@table-craft/desktop/main/service.js";
@@ -29,6 +30,14 @@ const connectRequest = z.strictObject({
 });
 const disconnectRequest = z.strictObject({ datasourceId: z.string().min(1) });
 const chooseFileRequest = z.strictObject({ title: z.string() });
+const consoleListRequest = z.strictObject({ datasourceId: z.string().min(1) });
+const consoleRequest = z.strictObject({ datasourceId: z.string().min(1), name: z.string().min(1) });
+const consoleWriteRequest = z.strictObject({
+  datasourceId: z.string().min(1),
+  name: z.string().min(1),
+  text: z.string(),
+});
+const answerCloseRequest = z.strictObject({ proceed: z.boolean() });
 const noRequest = z.undefined();
 
 /** The slice of `ipcMain` the handlers need; `sender` is the window that asked. */
@@ -38,12 +47,15 @@ export interface InvokeRegistrar<Sender> {
 
 export interface IpcOptions<Sender> {
   readonly service: DatasourceService<Sender>;
+  readonly consoles: ConsoleFiles;
   readonly chooseFile: (sender: Sender, title: string) => Promise<string | null>;
+  /** The renderer's answer to a held close (`CHANNELS.closeRequested`). */
+  readonly answerClose: (sender: Sender, proceed: boolean) => void;
   readonly log: (message: string, cause: unknown) => void;
 }
 
 function failureOf(cause: unknown): BridgeFailure | null {
-  if (cause instanceof DatasourceError || cause instanceof SecretStoreError) {
+  if (cause instanceof DatasourceError || cause instanceof SecretStoreError || cause instanceof ConsoleFileError) {
     return { message: cause.message, hint: cause.hint };
   }
   return null;
@@ -98,4 +110,20 @@ export function registerIpc<Sender>(ipc: InvokeRegistrar<Sender>, options: IpcOp
     return null;
   });
   handle(INVOKE_CHANNELS.chooseFile, chooseFileRequest, ({ title }, sender) => options.chooseFile(sender, title));
+  handle(INVOKE_CHANNELS.answerClose, answerCloseRequest, ({ proceed }, sender) => {
+    options.answerClose(sender, proceed);
+    return null;
+  });
+
+  const { consoles } = options;
+  handle(INVOKE_CHANNELS.listConsoles, consoleListRequest, ({ datasourceId }) => consoles.list(datasourceId));
+  handle(INVOKE_CHANNELS.readConsole, consoleRequest, ({ datasourceId, name }) => consoles.read(datasourceId, name));
+  handle(INVOKE_CHANNELS.writeConsole, consoleWriteRequest, async ({ datasourceId, name, text }) => {
+    await consoles.write(datasourceId, name, text);
+    return null;
+  });
+  handle(INVOKE_CHANNELS.deleteConsole, consoleRequest, async ({ datasourceId, name }) => {
+    await consoles.delete(datasourceId, name);
+    return null;
+  });
 }

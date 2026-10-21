@@ -1,3 +1,4 @@
+import type { ConsoleFiles } from "@table-craft/desktop/main/consoleFiles.js";
 import type { DatasourceConfig, ProbeResult } from "@table-craft/desktop/engine/protocol.js";
 import { toDatasource, type DatasourceStore } from "@table-craft/desktop/main/datasources.js";
 import type { HostRegistry } from "@table-craft/desktop/main/hosts.js";
@@ -39,6 +40,8 @@ export interface DatasourceServiceOptions<Target> {
   readonly plugins: readonly PluginInfo[];
   readonly ephemeral: EphemeralDatasource | null;
   readonly newId: () => string;
+  /** Deleting a datasource deletes its saved consoles (plan 006, decision 18). */
+  readonly consoles: Pick<ConsoleFiles, "deleteAll">;
   /** Called after every change, with the list every window should now show. */
   readonly onChanged: (list: DatasourceList) => void;
 }
@@ -210,6 +213,7 @@ export async function createDatasourceService<Target>(
     await secrets.clearAll(id);
     datasources = datasources.filter((datasource) => datasource.id !== id);
     await store.save(datasources);
+    await options.consoles.deleteAll(id);
     changed();
   }
 

@@ -104,6 +104,12 @@ function isDatasourcePlugin(value: unknown): value is DatasourcePlugin {
   );
 }
 
+/** `language` is how the console splits and classifies (decision 008); a SQL plugin cannot run without it. */
+function hasLanguage(plugin: DatasourcePlugin): boolean {
+  const language = plugin.language as Partial<Record<"split" | "classify", unknown>> | undefined;
+  return typeof language?.split === "function" && typeof language.classify === "function";
+}
+
 function sameCapabilities(manifest: PluginManifest, plugin: DatasourcePlugin): boolean {
   const declared = new Set<string>(manifest.capabilities);
   return declared.size === plugin.capabilities.length && plugin.capabilities.every((name) => declared.has(name));
@@ -131,6 +137,9 @@ async function importPlugin(directory: string, manifest: PluginManifest): Promis
   }
   if (!sameCapabilities(manifest, plugin)) {
     return unavailable("capabilities in the manifest and the entry's export differ; make them match.");
+  }
+  if (plugin.capabilities.includes("sql") && !hasLanguage(plugin)) {
+    return unavailable("declares sql but exports no language with split and classify; add one (plugin-api/sql helps).");
   }
   return { status: "loaded", directory, manifest, plugin };
 }

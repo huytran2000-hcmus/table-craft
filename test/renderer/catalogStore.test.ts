@@ -162,7 +162,7 @@ describe("catalog store", () => {
   it("givenConsoleConnectsDatasource_whenAttached_thenTreeOpensOnTheCurrentNamespace", async () => {
     const { consoles, catalog, unwire } = wired();
 
-    await consoles.getState().open("c1", "pg", "SELECT 1");
+    await consoles.getState().open("c1", "pg", { sql: "SELECT 1" });
 
     await vi.waitFor(() => {
       expect(catalog.getState().catalogs.pg?.namespaceStates[pathKey(PUBLIC_PATH)]?.described).toEqual(PUBLIC_CATALOG);

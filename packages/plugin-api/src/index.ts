@@ -33,6 +33,14 @@ export {
   type ExecuteResult,
   type Row,
   type Session,
+  type SqlLanguage,
+  STATEMENT_KINDS,
+  type StatementClass,
+  type StatementKind,
+  type StatementSpan,
+  TRANSACTION_MODES,
+  type TransactionMode,
+  type Transactions,
 } from "./plugin.js";
 export {
   BYTES_PREVIEW_LENGTH,

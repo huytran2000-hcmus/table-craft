@@ -13,6 +13,13 @@ runPluginContract(postgres, {
     sleep: (seconds) => `SELECT pg_sleep(${String(seconds)})`,
   },
   typeProbe: { expected: TYPE_PROBE_EXPECTED },
+  scripts: [
+    {
+      text: "CREATE FUNCTION f() RETURNS int AS $$ BEGIN RETURN 1; END; $$ LANGUAGE plpgsql;\nSELECT f();",
+      statements: ["CREATE FUNCTION f() RETURNS int AS $$ BEGIN RETURN 1; END; $$ LANGUAGE plpgsql", "SELECT f()"],
+    },
+    { text: "/* a /* nested; */ comment; */ SELECT 1; SELECT $1", statements: ["SELECT 1", "SELECT $1"] },
+  ],
   catalog: {
     path: ["table_craft", "public"],
     quoted: { name: 'odd "name"', qualified: '"public"."odd ""name"""' },

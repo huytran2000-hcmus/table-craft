@@ -40,6 +40,7 @@ export const POSTGRES_PLUGIN: PluginInfo = {
   unavailableReason: null,
   capabilities: ["sql", "cancel", "schemaTree"],
   fields: POSTGRES_FIELDS,
+  highlight: "postgresql",
 };
 
 export const SQLITE_PLUGIN: PluginInfo = {
@@ -48,4 +49,5 @@ export const SQLITE_PLUGIN: PluginInfo = {
   unavailableReason: null,
   capabilities: ["sql"],
   fields: [{ key: "path", label: "File", kind: "file", required: true }],
+  highlight: "sqlite",
 };

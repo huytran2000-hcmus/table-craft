@@ -3,24 +3,9 @@ import { bridge } from "@table-craft/desktop/renderer/bridge.js";
 import { useConsoles } from "@table-craft/desktop/renderer/state/consoles.js";
 import { useDatasources } from "@table-craft/desktop/renderer/state/datasources.js";
 import { useModal } from "@table-craft/desktop/renderer/state/modal.js";
-import { useTabs, type Tab } from "@table-craft/desktop/renderer/state/tabs.js";
 
-const CONSOLE_TITLE = "console";
-const CONSOLE_ID_PREFIX = "console-";
-let consolesOpened = 0;
-/** Per datasource, as DataGrip numbers them: `console`, then `console_1`, `console_2`. */
-const titlesUsed = new Map<string, number>();
-
-export function openConsole(datasourceId: string, sql?: string): void {
-  const index = titlesUsed.get(datasourceId) ?? 0;
-  titlesUsed.set(datasourceId, index + 1);
-  const tab: Tab = {
-    id: `${CONSOLE_ID_PREFIX}${String(consolesOpened++)}`,
-    kind: "console",
-    title: index === 0 ? CONSOLE_TITLE : `${CONSOLE_TITLE}_${String(index)}`,
-  };
-  useTabs.getState().open(tab);
-  void useConsoles.getState().open(tab.id, datasourceId, sql);
+function plural(count: number, noun: string): string {
+  return `${String(count)} ${noun}${count === 1 ? "" : "s"}`;
 }
 
 /** Main's answer, or a notice saying what went wrong and null. */
@@ -35,11 +20,14 @@ export async function deleteDatasource(view: DatasourceView): Promise<void> {
   const consoles = Object.values(useConsoles.getState().consoles).filter(
     (session) => session.datasourceId === view.id,
   ).length;
-  const closing = consoles === 0 ? "" : ` Its ${String(consoles)} open console${consoles === 1 ? "" : "s"} will close.`;
+  const closing = consoles === 0 ? "" : ` Its ${plural(consoles, "open console")} will close.`;
+  const listed = await bridge().listConsoles(view.id);
+  const saved = listed.ok ? listed.value.length : 0;
+  const files = saved === 0 ? "" : ` Its ${plural(saved, "saved console file")} will be deleted.`;
   const confirmed = await useModal.getState().ask({
     kind: "confirm",
     title: "Delete Data Source",
-    message: `Delete "${view.name}"?${view.storedSecrets.length === 0 ? "" : " Its saved password is removed too."}${closing}`,
+    message: `Delete "${view.name}"?${view.storedSecrets.length === 0 ? "" : " Its saved password is removed too."}${closing}${files}`,
     confirm: "Delete",
     destructive: true,
   });

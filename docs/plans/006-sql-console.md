@@ -1,6 +1,17 @@
 # Plan: Make the console a real SQL editor
 
-Status: not started
+Status: done. The console is a CodeMirror 6 editor coloured from tokens, with the dialect the
+plugin's manifest names, line numbers, bracket matching, search, multiple cursors and keyword
+completion. plugin-api is `0.5.0`: every SQL plugin exports `language { split, classify }` built
+on the shared tokenizer in `@table-craft/plugin-api/sql`, and declares `transactions`, which the
+contract suite checks against all three databases. ⌘↵ runs the statement at the caret or the
+selection and flashes it, ⇧⌘↵ runs the script; statements run in order, stop at the first error,
+and ask once before anything destructive. Results are `Output` plus one tab per row-returning
+statement, pinnable. The toolbar switches between auto and manual commit, with Commit, Rollback and
+a `transaction open` badge, and closing a console, disconnecting or quitting with an open
+transaction asks first (decision 024). Consoles autosave per datasource and reopen on launch without
+connecting. DDL refreshes the tree, and tree items drag into the editor as qualified names. All
+fourteen live-test rows pass; the screenshots exposed six bugs, fixed below.
 
 ## The issue
 
@@ -191,28 +202,87 @@ Every phase ends with `bun run typecheck` and `bun run test` both green; phases 
 New `test/e2e/console.smoke.test.ts`, capturing with `evidenceFor("006")` into `docs/evidence/006/`
 at 1200×800. Update the shared harness's `run` helper for decision 6.
 
-| #   | Scenario                                                                                      | Database | Result | Evidence                     |
-| --- | --------------------------------------------------------------------------------------------- | -------- | ------ | ---------------------------- |
-| 1   | Highlighting and line numbers on a three-statement script                                     | postgres |        | `editor-highlighting.png`    |
-| 2   | Caret in statement 2, ⌘↵: only statement 2 runs and flashes                                   | postgres |        | `run-at-caret.png`           |
-| 3   | Select all three, ⌘↵: Output plus `Result 1` and `Result 2`                                   | postgres |        | `run-selection.png`          |
-| 4   | Statement 2 fails: Output shows the error, statement 3 skipped                                | mysql    |        | `batch-stops-on-error.png`   |
-| 5   | `DELETE FROM orders` without `WHERE`: confirm lists it; Cancel; row count unchanged           | mysql    |        | `destructive-confirm.png`    |
-| 6   | Tx Manual, `INSERT`, badge on, Rollback, row gone                                             | postgres |        | `manual-rollback.png`        |
-| 7   | Tx Manual, `INSERT`, Commit, row visible from a second console                                | mysql    |        | `manual-commit.png`          |
-| 8   | Close a console with an open transaction: Commit / Rollback / Cancel                          | sqlite   |        | `close-open-transaction.png` |
-| 9   | Type, relaunch: tab and text restored, datasource not connected until Run                     | sqlite   |        | `autosave-restored.png`      |
-| 10  | `CREATE FUNCTION … $$ … $$` runs as one statement                                             | postgres |        | `dollar-quoted.png`          |
-| 11  | `CREATE TABLE` in auto mode: the table appears in the tree without Synchronize                | postgres |        | `ddl-refreshes-tree.png`     |
-| 12  | Drag `orders` from the tree into the editor                                                   | postgres |        | `drag-qualified-name.png`    |
-| 13  | Pin `Result 1`, run again: pinned tab stays, others replaced                                  | sqlite   |        | `pinned-result.png`          |
-| 14  | Esc closes speed search in the tree and completion in the editor; ⌘- still collapses the tree | postgres |        | `keys-coexist.png`           |
+| #   | Scenario                                                                                      | Database | Result                                                                                                                                                                                              | Evidence                     |
+| --- | --------------------------------------------------------------------------------------------- | -------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------- |
+| 1   | Highlighting and line numbers on a three-statement script                                     | postgres | Pass. Three lines numbered 1–3; keywords, numbers and operators take their syntax tokens                                                                                                            | `editor-highlighting.png`    |
+| 2   | Caret in statement 2, ⌘↵: only statement 2 runs and flashes                                   | postgres | Pass. The flash covers exactly the `UPDATE`; Output has one entry, `1 row affected in … ms`, and no result tab opens; the flash clears after 900 ms                                                 | `run-at-caret.png`           |
+| 3   | Select all three, ⌘↵: Output plus `Result 1` and `Result 2`                                   | postgres | Pass. Output logs `2 rows retrieved`, `1 row affected`, `1 row retrieved`; tabs are `Output`, `Result 1`, `Result 2` with `Result 2` active, and `Result 1`'s tooltip is `SELECT * FROM customers`  | `run-selection.png`          |
+| 4   | Statement 2 fails: Output shows the error, statement 3 skipped                                | mysql    | Pass. Output shows the first statement's rows, MySQL's `no_such_table` error, then `1 statement skipped after the error.`; `Output` is the active tab and only `Result 1` exists                    | `batch-stops-on-error.png`   |
+| 5   | `DELETE FROM orders` without `WHERE`: confirm lists it; Cancel; row count unchanged           | mysql    | Pass. `Run a destructive statement?` lists `DELETE FROM orders` with `DELETE without WHERE`; Cancel logs `Cancelled; nothing ran.` and the count is unchanged                                       | `destructive-confirm.png`    |
+| 6   | Tx Manual, `INSERT`, badge on, Rollback, row gone                                             | postgres | Pass. The badge shows after the `INSERT` and clears on Rollback; a `SELECT count(*)` for order 9001 returns 0                                                                                       | `manual-rollback.png`        |
+| 7   | Tx Manual, `INSERT`, Commit, row visible from a second console                                | mysql    | Pass. A second console on the same datasource sees 0 rows before Commit and 1 after                                                                                                                 | `manual-commit.png`          |
+| 8   | Close a console with an open transaction: Commit / Rollback / Cancel                          | sqlite   | Pass. ⌘W asks `Open transaction` with Cancel, Commit and Rollback; Cancel keeps the tab and the badge; ⌘W then Rollback closes it                                                                   | `close-open-transaction.png` |
+| 9   | Type, relaunch: tab and text restored, datasource not connected until Run                     | sqlite   | Pass. `consoles/local/console.sql` holds the text; after relaunch the tab `console [local]` shows it, the tree node is disconnected and no engine runs; Run All connects and returns both customers | `autosave-restored.png`      |
+| 10  | `CREATE FUNCTION … $$ … $$` runs as one statement                                             | postgres | Pass. Two Output entries, the `CREATE FUNCTION` and the `SELECT` calling it, and the grid shows 5                                                                                                   | `dollar-quoted.png`          |
+| 11  | `CREATE TABLE` in auto mode: the table appears in the tree without Synchronize                | postgres | Pass. `console_smoke_new` appears under `public` and the group reads `tables 4`; Output says `completed in … ms`                                                                                    | `ddl-refreshes-tree.png`     |
+| 12  | Drag `orders` from the tree into the editor                                                   | postgres | Pass. Dropping after `SELECT * FROM ` inserts `"public"."orders"` at the drop point                                                                                                                 | `drag-qualified-name.png`    |
+| 13  | Pin `Result 1`, run again: pinned tab stays, others replaced                                  | sqlite   | Pass. After the second run the tabs are still `Output`, `Result 1` (pinned, old rows) and `Result 2` (new rows)                                                                                     | `pinned-result.png`          |
+| 14  | Esc closes speed search in the tree and completion in the editor; ⌘- still collapses the tree | postgres | Pass. Esc closes the tree's speed search; in the editor `SEL` opens completion and Esc closes it with focus and text kept; ⌘- in the tree collapses it                                              | `keys-coexist.png`           |
 
 Bugs found here are fixed with a regression test and listed under Deviations.
 
 ---
 
 ## Deviations taken while implementing
+
+1. **Closing the window waits for the renderer (decision 024).** Decision 15 needs the quit prompt,
+   and only the renderer knows which consoles hold open transactions and unsaved text. Main holds
+   every window close behind `main/closeGuard.ts` and two channels the plan did not list,
+   `window.close-requested` and `window.answer-close`; `beforeunload` cannot wait for a dialog.
+2. **plugin-api/sql has two additions beyond decision 023.** `SqlDialectOptions.hashComments` covers
+   MySQL's `#` comments; without it a `;` inside one split the statement in the middle of the
+   comment. `transactionEffect(sql, options)` answers `begin`, `end` or `null`: `classify`'s
+   `transaction` kind cannot tell `BEGIN` from `COMMIT`, and every plugin needs that to track `open`
+   in auto mode. Both are public API under `0.5.0`.
+3. **`BEGIN … END` bodies open only inside `CREATE TRIGGER`, `FUNCTION`, `PROCEDURE` or `EVENT`.**
+   `BEGIN;` starts a transaction on PostgreSQL and SQLite, and a column may be named `begin`;
+   treating every `BEGIN` as a block swallowed the rest of the script. Inside a body, `END IF`,
+   `END LOOP`, `END WHILE`, `END REPEAT` and `END CASE` do not close it.
+4. **A plugin declaring `sql` without `language` is unavailable.** The loader reports it the way it
+   reports a missing capability, rather than letting the first Run fail. core now exports
+   `loadedPlugin`, which the engine uses for `script.split` as well as `session.open`.
+5. **`setMode("auto")` refuses while a transaction is open.** The plugin rejects with
+   `statementFailed` and stays in manual; the renderer asks Commit, Rollback or Cancel first
+   (decision 13), so the plugin never commits on the user's behalf. On MySQL a DDL statement ends
+   the transaction (implicit commit) and `open` follows it.
+6. **In manual mode every statement opens the transaction, a `SELECT` included.** The plugin sends
+   `BEGIN` before the first statement whatever its kind, as DataGrip does, so the badge appears after
+   a plain read on PostgreSQL and SQLite. Live test 6 rolls back twice for this reason.
+7. **`PluginInfo` carries `highlight`.** The renderer cannot read manifests (decision 002), and the
+   editor needs the dialect name; `plugins.list` now returns it, or `null` for an unavailable plugin.
+8. **The modal gains a `choice` kind and item lists.** The destructive confirm lists each statement
+   with its reason, and the open-transaction prompt has three answers; both reuse plan 004's modal.
+9. **The editor-chord fence works by focus, and a shortcut can name several regions.** The registry
+   skips `EDITOR_CHORDS` only while focus is inside `.cm-editor` (`KeymapOptions.reservedChords`), so
+   `Mod+D` (Duplicate datasource) and `Escape` still work in the Database pane. `shortcutRegion`
+   accepts a list, and `focus.editor` (Escape) is limited to the Database and Services panes; the
+   keymap test checks reserved chords against every action that can fire in the editor.
+10. **The transaction mode control is a native `<select>`.** It reads `Tx: Auto` / `Tx: Manual` and is
+    keyboard- and screen-reader-accessible for free; a custom menu button can come with plan 013's
+    toolbar work.
+11. **New consoles start empty.** `INITIAL_SQL` is gone; a placeholder says `⌘↩ runs the statement
+at the caret`. Consoles on the environment's ephemeral datasource (decision 018) are not
+    autosaved, because nothing ties their files to a datasource that survives the launch.
+12. **Statement errors also show in the toolbar.** Output logs every error, but the toolbar's alert
+    stays, including `The statement was cancelled.`, so a user looking at a result tab sees that the
+    batch stopped. The first version dropped it for cancels and broke plan 003's cancel smoke test.
+13. **DDL logs `completed in N ms`.** The screenshot of live test 11 showed `0 rows affected` for a
+    `CREATE TABLE`, which drivers report as zero. Only `write` statements print rows affected
+    (`givenDdlWithDriversZeroAffected_whenFormatted_thenCompletedNotZeroRows`).
+14. **Toolbar and tab strip layout fixes.** The screenshot of live test 4 showed `Run All` wrapping to
+    two lines beside a long error; toolbar buttons no longer shrink or wrap. The result tab strip
+    showed a stray vertical scrollbar, 1 px of tab height over the strip; tabs now fill it exactly.
+15. **The open-transaction prompt reads as a sentence.** It said `Close: these consoles have
+uncommitted changes.` for one console; it now says `This console has uncommitted changes. Commit
+or roll back to close.`, with `disconnect`, `quit` and `switch to Auto` as the other verbs.
+16. **Completion shows no icons.** CodeMirror's default type icons rendered as emoji-like glyphs in
+    the screenshot of live test 14; keyword-only completion gains nothing from them.
+17. **Smoke suites run one file at a time.** `test:smoke` and `test:smoke:db` pass
+    `--no-file-parallelism`: the console suite's `CREATE TABLE` and the explorer suite's ran against
+    the same Postgres at once and broke each other's `tables 3`. Plan 005's Synchronize test now
+    creates its table outside the app, since a console `CREATE TABLE` refreshes the tree by itself.
+18. **The smoke harness runs whole scripts with Run All.** `startStatement` fills the editor and
+    clicks `Run All`, as the plan's consequence allowed; tests that meant the caret use ⌘↵ directly.
 
 ---
 

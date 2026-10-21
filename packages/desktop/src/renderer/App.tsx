@@ -1,10 +1,17 @@
 import { useEffect } from "react";
 import { currentPlatform } from "@table-craft/desktop/renderer/actions/chords.js";
+import {
+  answerCloseRequests,
+  autosaveConsoles,
+  openConsole,
+  rememberOpenConsoles,
+  restoreConsoles,
+} from "@table-craft/desktop/renderer/actions/consoleCommands.js";
 import { focusedRegion, modalOpen, trackFocus } from "@table-craft/desktop/renderer/actions/context.js";
-import { openConsole } from "@table-craft/desktop/renderer/actions/datasourceCommands.js";
 import { invoke, registry } from "@table-craft/desktop/renderer/actions/index.js";
 import { installKeymap } from "@table-craft/desktop/renderer/actions/keymap.js";
 import { bridge } from "@table-craft/desktop/renderer/bridge.js";
+import { editorReservedChords } from "@table-craft/desktop/renderer/console/editorKeys.js";
 import { DataSourcesDialog } from "@table-craft/desktop/renderer/dialogs/DataSources.js";
 import { Modal } from "@table-craft/desktop/renderer/dialogs/Modal.js";
 import { SecretPrompt } from "@table-craft/desktop/renderer/dialogs/SecretPrompt.js";
@@ -18,7 +25,26 @@ import { TooltipProvider } from "@table-craft/desktop/renderer/ui/Tooltip.js";
 /** The `TABLE_CRAFT_DATASOURCE` seam opens straight into a console on it, as before (decision 018). */
 function openEphemeralConsole(): void {
   const ephemeral = useDatasources.getState().datasources.find((datasource) => datasource.ephemeral);
-  if (ephemeral !== undefined && useTabs.getState().tabs.length === 0) openConsole(ephemeral.id);
+  if (ephemeral !== undefined && useTabs.getState().tabs.length === 0) void openConsole(ephemeral.id);
+}
+
+/**
+ * The first datasource list is in: reopen the remembered consoles (or the ephemeral one), then
+ * start remembering and saving them. Remembering starts after, so an empty strip at launch never
+ * overwrites the layout it is about to restore.
+ */
+let stopConsoleSync: (() => void) | null = null;
+function onFirstList(): void {
+  void restoreConsoles().then(() => {
+    openEphemeralConsole();
+    if (stopConsoleSync !== null) return;
+    const forget = rememberOpenConsoles();
+    const stopSaving = autosaveConsoles();
+    stopConsoleSync = () => {
+      forget();
+      stopSaving();
+    };
+  });
 }
 
 export function App() {
@@ -29,6 +55,7 @@ export function App() {
         platform: currentPlatform(),
         paletteOpen: modalOpen,
         focusedRegion,
+        reservedChords: editorReservedChords,
       }),
     [],
   );
@@ -37,7 +64,9 @@ export function App() {
 
   useEffect(() => bridge().onInvokeAction((actionId) => invoke(actionId)), []);
 
-  useEffect(() => installDatasourceSync(openEphemeralConsole), []);
+  useEffect(() => installDatasourceSync(onFirstList), []);
+
+  useEffect(() => answerCloseRequests(), []);
 
   return (
     <TooltipProvider>

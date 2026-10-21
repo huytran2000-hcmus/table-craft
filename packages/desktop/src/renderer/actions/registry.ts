@@ -7,6 +7,10 @@ export type ActionCategory = "Console" | "Database" | "Editor Tabs" | "Tool Wind
 /** Names, not components, so the registry stays free of React; `ui/icons.ts` maps them. */
 export type ActionIcon =
   | "run"
+  | "runAll"
+  | "commit"
+  | "rollback"
+  | "pin"
   | "cancel"
   | "newConsole"
   | "close"
@@ -30,8 +34,8 @@ export interface Action<A = void> {
   readonly category: ActionCategory;
   readonly icon?: ActionIcon;
   readonly shortcut?: Chord;
-  /** The shortcut works only while focus is in this region; menus, buttons and the palette still run it. */
-  readonly shortcutRegion?: FocusRegion;
+  /** The shortcut works only while focus is in these regions; menus, buttons and the palette still run it. */
+  readonly shortcutRegion?: FocusRegion | readonly FocusRegion[];
   /** Whether the action can run now; absent means always. */
   readonly when?: (context: ActionContext) => boolean;
   readonly run: (context: ActionContext, args: A) => void | Promise<void>;

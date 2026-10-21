@@ -1,5 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
-import type { EngineError, ExecutedStatement, OpenedSession } from "@table-craft/desktop/engine/protocol.js";
+import type {
+  ClassifiedStatement,
+  EngineError,
+  ExecutedStatement,
+  OpenedSession,
+} from "@table-craft/desktop/engine/protocol.js";
 import type { DatasourceList, DatasourceView } from "@table-craft/desktop/preload/bridge.js";
 import {
   EngineRequestError,
@@ -44,6 +49,11 @@ function fakeClient(datasourceId: string, options: { openFails?: EngineError } =
         };
         return Promise.resolve(opened);
       }
+      if (type === "script.split") {
+        const text = String(params.text);
+        const statement: ClassifiedStatement = { from: 0, to: text.length, sql: text, kind: "read", destructive: null };
+        return Promise.resolve(text.trim() === "" ? [] : [statement]);
+      }
       if (type === "statement.execute") {
         const executed: ExecutedStatement = {
           handle: `${String(params.sessionId)}-result`,
@@ -52,6 +62,7 @@ function fakeClient(datasourceId: string, options: { openFails?: EngineError } =
           truncated: false,
           rowsAffected: null,
           firstWindow: { offset: 0, rows: [[String(params.sql)]] },
+          transactionOpen: false,
         };
         return Promise.resolve(executed);
       }
@@ -106,17 +117,17 @@ function harness(options: { prompt?: (request: SecretRequest) => Record<string, 
 describe("datasource and console stores", () => {
   it("givenTwoDatasources_whenConsolesRun_thenResultsStaySeparate", async () => {
     const { consoles, connectEngine } = harness();
-    await consoles.getState().open("c1", "pg", "SELECT 'pg'");
-    await consoles.getState().open("c2", "lite", "SELECT 'lite'");
-    await consoles.getState().open("c3", "lite", "SELECT 'lite again'");
+    await consoles.getState().open("c1", "pg", { sql: "SELECT 'pg'" });
+    await consoles.getState().open("c2", "lite", { sql: "SELECT 'lite'" });
+    await consoles.getState().open("c3", "lite", { sql: "SELECT 'lite again'" });
 
-    await Promise.all([consoles.getState().run("c1"), consoles.getState().run("c2"), consoles.getState().run("c3")]);
+    await Promise.all(["c1", "c2", "c3"].map((id) => consoles.getState().run(id, "all")));
 
     const { c1, c2, c3 } = consoles.getState().consoles;
-    expect(c1?.result?.columns[0]?.name).toBe("pg");
-    expect(c1?.windows[0]).toEqual([["SELECT 'pg'"]]);
-    expect(c2?.result?.columns[0]?.name).toBe("lite");
-    expect(c3?.windows[0]).toEqual([["SELECT 'lite again'"]]);
+    expect(c1?.results[0]?.columns[0]?.name).toBe("pg");
+    expect(c1?.results[0]?.windows[0]).toEqual([["SELECT 'pg'"]]);
+    expect(c2?.results[0]?.columns[0]?.name).toBe("lite");
+    expect(c3?.results[0]?.windows[0]).toEqual([["SELECT 'lite again'"]]);
     expect(connectEngine.mock.calls.filter(([id]) => id === "lite")).toHaveLength(1);
   });
 
@@ -177,7 +188,7 @@ describe("datasource and console stores", () => {
 
   it("givenEngineCrashed_whenExitArrives_thenFailedEngineExitedConsolesFailedAndRunReconnects", async () => {
     const { datasources, consoles, clients, connectEngine } = harness();
-    await consoles.getState().open("c1", "lite");
+    await consoles.getState().open("c1", "lite", { sql: "SELECT 1" });
     const crashed = clients.get("lite");
 
     datasources.getState().engineExited({ datasourceId: "lite", code: 134, clean: false });
@@ -193,7 +204,7 @@ describe("datasource and console stores", () => {
     });
     await vi.waitFor(() => expect(crashed?.failedWith()).not.toBeNull());
 
-    await consoles.getState().run("c1");
+    await consoles.getState().run("c1", "all");
 
     expect(consoles.getState().consoles.c1?.status).toBe("ready");
     expect(consoles.getState().consoles.c1?.lastRun?.outcome).toBe("succeeded");

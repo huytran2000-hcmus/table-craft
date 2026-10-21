@@ -17,6 +17,15 @@ export interface Layout {
   readonly hidden: Readonly<Record<ToolWindowId, boolean>> | null;
   /** Whether the Database pane lists system namespaces such as `pg_catalog` (plan 005). */
   readonly showSystemSchemas: boolean;
+  /** The console tabs open at the last change, in tab order, reopened at launch (plan 006). */
+  readonly openConsoles: readonly OpenConsole[];
+}
+
+/** A console tab as the layout remembers it; its text lives in its file (decision 16). */
+export interface OpenConsole {
+  readonly datasourceId: string;
+  readonly name: string;
+  readonly active: boolean;
 }
 
 export const DEFAULT_LAYOUT: Layout = {
@@ -24,6 +33,7 @@ export const DEFAULT_LAYOUT: Layout = {
   sizes: { database: 22, services: 28 },
   hidden: null,
   showSystemSchemas: false,
+  openConsoles: [],
 };
 
 const MIN_SIZE_PERCENT = 5;
@@ -41,6 +51,16 @@ const isBoolean = (value: unknown): value is boolean => typeof value === "boolea
 const isSize = (value: unknown): value is number =>
   typeof value === "number" && value >= MIN_SIZE_PERCENT && value <= MAX_SIZE_PERCENT;
 
+function isOpenConsole(value: unknown): value is OpenConsole {
+  if (typeof value !== "object" || value === null) return false;
+  const { datasourceId, name, active } = value as Record<string, unknown>;
+  return typeof datasourceId === "string" && typeof name === "string" && typeof active === "boolean";
+}
+
+function openConsolesOf(value: unknown): readonly OpenConsole[] {
+  return Array.isArray(value) ? value.filter(isOpenConsole) : [];
+}
+
 /** The saved layout, or the default when there is none or it no longer reads as one. */
 export function loadLayout(storage: Pick<Storage, "getItem">): Layout {
   const text = storage.getItem(LAYOUT_STORAGE_KEY);
@@ -52,13 +72,14 @@ export function loadLayout(storage: Pick<Storage, "getItem">): Layout {
     return DEFAULT_LAYOUT;
   }
   if (typeof saved !== "object" || saved === null) return DEFAULT_LAYOUT;
-  const { visible, sizes, hidden, showSystemSchemas } = saved as Record<string, unknown>;
+  const { visible, sizes, hidden, showSystemSchemas, openConsoles } = saved as Record<string, unknown>;
   if (!isRecordOf(visible, isBoolean) || !isRecordOf(sizes, isSize)) return DEFAULT_LAYOUT;
   return {
     visible,
     sizes,
     hidden: isRecordOf(hidden, isBoolean) ? hidden : null,
     showSystemSchemas: showSystemSchemas === true,
+    openConsoles: openConsolesOf(openConsoles),
   };
 }
 
@@ -90,6 +111,7 @@ export interface LayoutState {
   readonly hideAll: () => void;
   readonly resize: (id: ToolWindowId, percent: number) => void;
   readonly toggleSystemSchemas: () => void;
+  readonly setOpenConsoles: (openConsoles: readonly OpenConsole[]) => void;
 }
 
 /** A layout store over `storage`; the app passes `localStorage`, tests a map. */
@@ -106,6 +128,10 @@ export function createLayoutStore(storage: LayoutStorage) {
       hideAll: () => update(hiddenAll(get().layout)),
       resize: (id, percent) => update(resized(get().layout, id, percent)),
       toggleSystemSchemas: () => update({ ...get().layout, showSystemSchemas: !get().layout.showSystemSchemas }),
+      setOpenConsoles(openConsoles) {
+        if (JSON.stringify(openConsoles) === JSON.stringify(get().layout.openConsoles)) return;
+        update({ ...get().layout, openConsoles });
+      },
     };
   });
 }
