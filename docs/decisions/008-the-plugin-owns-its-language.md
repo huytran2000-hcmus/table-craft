@@ -1,6 +1,6 @@
 # 008: The plugin owns its language
 
-Status: Accepted
+Status: Accepted. Amended by 023.
 
 ## Decision
 
