@@ -35,3 +35,4 @@ started, not when it is merged.
 | 022 | [The schema is the unit of introspection](022-the-schema-is-the-unit-of-introspection.md)                                                 |
 | 023 | [Plugins share a splitter from plugin-api](023-plugins-share-a-splitter-from-plugin-api.md)                                               |
 | 024 | [The renderer answers before the window closes](024-the-renderer-answers-before-the-window-closes.md)                                     |
+| 025 | [Result cursors stay open until the session moves on](025-result-cursors-stay-open-until-the-session-moves-on.md)                         |
