@@ -41,14 +41,15 @@ export interface SortKey {
   readonly direction: SortDirection;
 }
 
-export interface FetchOptions {
-  /** Read to the end, or to `RESULT_FETCH_ALL_CAP`, instead of one page. */
-  readonly all: boolean;
-}
-
 export interface ResultLimits {
   readonly pageRows: number;
   readonly fetchAllCap: number;
+}
+
+/** Limits given with a call win over the store's own (decision 032: paging travels with each request). */
+export interface FetchOptions extends Partial<ResultLimits> {
+  /** Read to the end, or to the Fetch All cap, instead of one page. */
+  readonly all: boolean;
 }
 
 const DEFAULT_LIMITS: ResultLimits = { pageRows: RESULT_PAGE_ROWS, fetchAllCap: RESULT_FETCH_ALL_CAP };
@@ -72,6 +73,13 @@ interface StoredResult {
 }
 
 const HANDLE_PREFIX = "result-";
+
+function definedLimits(options: Partial<ResultLimits>): Partial<ResultLimits> {
+  return {
+    ...(options.pageRows === undefined ? {} : { pageRows: options.pageRows }),
+    ...(options.fetchAllCap === undefined ? {} : { fetchAllCap: options.fetchAllCap }),
+  };
+}
 
 function unknownHandle(handle: ResultHandle): CoreError {
   return new CoreError(
@@ -99,7 +107,8 @@ export class ResultStore {
   }
 
   /** Reads the first page from `result.rows` and keeps the iterator for the next. */
-  async put(result: ExecuteResult): Promise<ResultSummary> {
+  async put(result: ExecuteResult, limits: Partial<ResultLimits> = {}): Promise<ResultSummary> {
+    const { pageRows, fetchAllCap } = { ...this.#limits, ...definedLimits(limits) };
     const stored: StoredResult = {
       columns: result.columns,
       classes: [],
@@ -113,7 +122,7 @@ export class ResultStore {
       stopRequested: false,
     };
     try {
-      await this.#read(stored, this.#limits.pageRows);
+      await this.#read(stored, Math.min(pageRows, fetchAllCap), fetchAllCap);
     } catch (cause) {
       await this.#close(stored);
       throw cause;
@@ -137,9 +146,10 @@ export class ResultStore {
     const stored = this.#stored(handle);
     const fetch = stored.fetching.then(async () => {
       if (stored.iterator === null) return stateOf(stored);
-      const target = options.all ? this.#limits.fetchAllCap : stored.rows.length + this.#limits.pageRows;
+      const { pageRows, fetchAllCap } = { ...this.#limits, ...definedLimits(options) };
+      const target = options.all ? fetchAllCap : stored.rows.length + pageRows;
       try {
-        await this.#read(stored, Math.min(target, this.#limits.fetchAllCap));
+        await this.#read(stored, Math.min(target, fetchAllCap), fetchAllCap);
       } catch (cause) {
         await this.#close(stored);
         throw cause;
@@ -270,7 +280,7 @@ export class ResultStore {
   }
 
   /** Reads until `target` rows are held, the rows run out, or a stop is requested. */
-  async #read(stored: StoredResult, target: number): Promise<void> {
+  async #read(stored: StoredResult, target: number, fetchAllCap: number): Promise<void> {
     const { rows } = stored;
     while (rows.length < target && stored.iterator !== null && !stored.stopRequested) {
       if (stored.lookahead !== null) {
@@ -295,7 +305,7 @@ export class ResultStore {
       return;
     }
     stored.lookahead = { row: next.value };
-    if (rows.length >= this.#limits.fetchAllCap) await this.#close(stored);
+    if (rows.length >= fetchAllCap) await this.#close(stored);
   }
 
   async #close(stored: StoredResult): Promise<void> {

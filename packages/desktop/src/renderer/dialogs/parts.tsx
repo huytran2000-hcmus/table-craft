@@ -5,7 +5,7 @@ export const OVERLAY_CLASS = "fixed inset-0 z-40 bg-canvas/60";
 export const CONTENT_CLASS =
   "fixed top-1/2 left-1/2 z-50 -translate-x-1/2 -translate-y-1/2 rounded-lg border border-line bg-panel text-ui text-ink shadow-2xl outline-none";
 export const INPUT_CLASS =
-  "h-row min-w-0 rounded border border-line bg-canvas px-cell text-ink outline-none focus:border-accent disabled:opacity-60";
+  "h-row min-w-0 rounded border border-line bg-canvas px-cell text-ink outline-none focus:border-accent disabled:opacity-60 aria-invalid:border-danger";
 
 type ButtonVariant = "primary" | "secondary" | "danger";
 

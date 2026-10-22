@@ -1,6 +1,6 @@
 import { Menu, type BrowserWindow, type MenuItemConstructorOptions } from "electron";
 import { CHANNELS } from "@table-craft/desktop/preload/bridge.js";
-import { APPLICATION_MENU, type MenuEntry } from "@table-craft/desktop/preload/menu.js";
+import { menuFor, type MenuEntry } from "@table-craft/desktop/preload/menu.js";
 
 const MAC_PLATFORM = "darwin";
 
@@ -28,9 +28,6 @@ function toTemplate(entry: MenuEntry, target: () => BrowserWindow | null): MenuI
 /** Builds and installs the application menu; `target` is the window a click acts on. */
 export function installApplicationMenu(target: () => BrowserWindow | null): void {
   const mac = process.platform === MAC_PLATFORM;
-  const template = APPLICATION_MENU.filter((entry) => mac || entry.kind !== "role" || entry.macOnly !== true).map(
-    (entry) => toTemplate(entry, target),
-  );
-  if (mac) template.unshift({ role: "appMenu" });
+  const template = menuFor(mac).map((entry) => toTemplate(entry, target));
   Menu.setApplicationMenu(Menu.buildFromTemplate(template));
 }

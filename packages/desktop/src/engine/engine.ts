@@ -56,6 +56,7 @@ import type {
   ReferencingKey,
   RequestOf,
   ResultOf,
+  ResultPaging,
   RowRange,
   TableQuery,
   TransactionState,
@@ -554,7 +555,7 @@ export function createEngine(options: EngineOptions, now: () => number = Date.no
       return handle;
     }
 
-    async function runStatement(sessionId: string, sql: string): Promise<ExecutedStatement> {
+    async function runStatement(sessionId: string, sql: string, paging: ResultPaging): Promise<ExecutedStatement> {
       const open = sessionFor(sessionId);
       open.running += 1;
       try {
@@ -562,7 +563,7 @@ export function createEngine(options: EngineOptions, now: () => number = Date.no
         if (cursors.has(sessionId)) await closeCursorOf(sessionId);
         const summary = await open.session
           .execute(sql)
-          .then((result) => results.put(result))
+          .then((result) => results.put(result, paging))
           .catch((cause: unknown) => {
             throw statementFailed(cause, options.datasource.readOnly);
           });
@@ -610,7 +611,7 @@ export function createEngine(options: EngineOptions, now: () => number = Date.no
       const open = sessionFor(request.sessionId);
       const { relation, qualified } = await relationOf(request.path, request.relation);
       const sql = tableSelect(qualified, request);
-      const statement = await runStatement(request.sessionId, sql);
+      const statement = await runStatement(request.sessionId, sql, request);
       const catalogued = statement.columns.map((column) => relation.columns.find((meta) => meta.name === column.name));
       const columns = catalogued.map(
         (meta, index) => meta ?? reportedColumn(statement.columns[index] ?? { name: "", type: null }, index),
@@ -735,7 +736,8 @@ export function createEngine(options: EngineOptions, now: () => number = Date.no
         await open.session.close();
         return null;
       },
-      "statement.execute": ({ sessionId, sql }) => runStatement(sessionId, sql),
+      "statement.execute": ({ sessionId, sql, pageRows, fetchAllCap }) =>
+        runStatement(sessionId, sql, { pageRows, fetchAllCap }),
       "statement.cancel": async ({ sessionId }) => {
         const open = sessionFor(sessionId);
         if (!open.capabilities.includes("cancel") || open.session.cancel === undefined) {
@@ -767,10 +769,12 @@ export function createEngine(options: EngineOptions, now: () => number = Date.no
         await results.release(handle);
         return null;
       },
-      "result.fetchMore": async ({ handle, all }) => {
-        const state = await results.fetchMore(ownedHandle(handle), { all }).catch((cause: unknown) => {
-          throw statementFailed(cause, options.datasource.readOnly);
-        });
+      "result.fetchMore": async ({ handle, all, pageRows, fetchAllCap }) => {
+        const state = await results
+          .fetchMore(ownedHandle(handle), { all, pageRows, fetchAllCap })
+          .catch((cause: unknown) => {
+            throw statementFailed(cause, options.datasource.readOnly);
+          });
         return track(handle, state);
       },
       "result.stopFetch": async ({ handle }) => track(handle, await results.stopFetch(ownedHandle(handle))),

@@ -6,9 +6,9 @@
 
 /** Mirrors `RESULT_WINDOW_ROWS` in core: the most rows one `result.window` returns. */
 export const RESULT_WINDOW_ROWS = 500;
-/** Mirrors `RESULT_PAGE_ROWS` in core: rows read when a statement runs and per Fetch Next Page. */
+/** Mirrors `RESULT_PAGE_ROWS` in core: the default page, before the user's setting (decision 032). */
 export const RESULT_PAGE_ROWS = 500;
-/** Mirrors `RESULT_FETCH_ALL_CAP` in core: the most rows a result holds; Fetch All stops there. */
+/** Mirrors `RESULT_FETCH_ALL_CAP` in core: the default Fetch All cap, before the user's setting. */
 export const RESULT_FETCH_ALL_CAP = 100_000;
 
 /** What main posts on the engine's parent port, once, before any renderer port arrives. */
@@ -397,12 +397,26 @@ export interface OpenedSession {
   readonly serverVersion: string | null;
 }
 
+/**
+ * The user's paging preferences, sent with every call that reads rows, because the engine keeps no
+ * preferences of its own (decision 032).
+ */
+export interface ResultPaging {
+  /** Rows read when the statement runs, and per Fetch Next Page. */
+  readonly pageRows: number;
+  /** The most rows the result holds; Fetch All stops there and closes the cursor. */
+  readonly fetchAllCap: number;
+}
+
 /** The engine's calls: what each request carries and what its response answers with. */
 export interface EngineCalls {
   "session.open": { params: Record<never, never>; result: OpenedSession };
   /** Closes the session and releases every result it produced. */
   "session.close": { params: { readonly sessionId: string }; result: null };
-  "statement.execute": { params: { readonly sessionId: string; readonly sql: string }; result: ExecutedStatement };
+  "statement.execute": {
+    params: { readonly sessionId: string; readonly sql: string } & ResultPaging;
+    result: ExecutedStatement;
+  };
   /** Cancels the statement running in the session, if any; its `statement.execute` fails with `cancelled`. */
   "statement.cancel": { params: { readonly sessionId: string }; result: null };
   /** Splits and classifies `text` with the datasource plugin's language; needs no session. */
@@ -435,8 +449,11 @@ export interface EngineCalls {
   };
   /** Closes the result's cursor and drops its rows. */
   "result.release": { params: { readonly handle: string }; result: null };
-  /** Reads one more page, or with `all` up to `RESULT_FETCH_ALL_CAP`; a no-op once the cursor is closed. */
-  "result.fetchMore": { params: { readonly handle: string; readonly all: boolean }; result: ResultState };
+  /** Reads one more page, or with `all` up to `fetchAllCap`; a no-op once the cursor is closed. */
+  "result.fetchMore": {
+    params: { readonly handle: string; readonly all: boolean } & ResultPaging;
+    result: ResultState;
+  };
   /** Ends a running fetch after its current row; the cursor stays open. */
   "result.stopFetch": { params: { readonly handle: string }; result: ResultState };
   /** Sorts the held rows in the engine; windows read through the new order. No keys restores it. */
@@ -497,7 +514,7 @@ export interface EngineCalls {
       readonly relation: string;
       readonly where: string;
       readonly orderBy: string;
-    };
+    } & ResultPaging;
     result: TableQuery;
   };
   /** `SELECT COUNT(*)` with the WHERE bar, on the engine's own session so the editor's cursor stays open. */

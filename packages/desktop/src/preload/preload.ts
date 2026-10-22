@@ -8,6 +8,7 @@ import {
   type EnginePortWindowMessage,
   type EngineExited,
   type InvokeResult,
+  type SettingsChanged,
   type TableCraftBridge,
 } from "@table-craft/desktop/preload/bridge.js";
 
@@ -65,6 +66,11 @@ const bridge: TableCraftBridge = {
   },
   onCloseRequested: (listener) => subscribe<unknown>(CHANNELS.closeRequested, () => listener()),
   answerClose: (proceed) => invoke(INVOKE_CHANNELS.answerClose, { proceed }),
+  readSettings: () => invoke(INVOKE_CHANNELS.readSettings),
+  writeSettings: (settings) => invoke(INVOKE_CHANNELS.writeSettings, settings),
+  reloadThemes: () => invoke(INVOKE_CHANNELS.reloadThemes),
+  openThemesFolder: () => invoke(INVOKE_CHANNELS.openThemesFolder),
+  onSettingsChanged: (listener) => subscribe<SettingsChanged>(CHANNELS.settingsChanged, listener),
 };
 
 contextBridge.exposeInMainWorld(BRIDGE_KEY, bridge);

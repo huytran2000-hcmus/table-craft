@@ -1,0 +1,148 @@
+import { describe, expect, it } from "vitest";
+import {
+  createSettingsService,
+  createSettingsStore,
+  SETTINGS_FILE,
+  settingsSchema,
+} from "@table-craft/desktop/main/settings.js";
+import type { ThemeFolder } from "@table-craft/desktop/main/themes.js";
+import type { SettingsChanged } from "@table-craft/desktop/preload/bridge.js";
+import { DEFAULT_SETTINGS, readSettings, type Settings } from "@table-craft/desktop/settings/settings.js";
+import { memoryFiles } from "../support/memoryFiles.js";
+
+const DIRECTORY = "/profile";
+const PATH = `${DIRECTORY}/${SETTINGS_FILE}`;
+const NOW = 1_700_000_000_000;
+
+const CHOSEN: Settings = {
+  version: 1,
+  appearance: {
+    theme: "light",
+    density: "compact",
+    fonts: {
+      ui: { family: null, sizePx: 14 },
+      editor: { family: "Fira Code", sizePx: 15 },
+      grid: { family: "Menlo", sizePx: 11 },
+    },
+  },
+  data: { nullText: "∅", groupDigits: true, pageRows: 100, fetchAllCap: 2_000 },
+};
+
+function store(files = memoryFiles()) {
+  return { files, store: createSettingsStore({ directory: DIRECTORY, files, now: () => NOW }) };
+}
+
+const NO_THEMES: ThemeFolder = { path: `${DIRECTORY}/themes`, list: () => Promise.resolve([]) };
+
+describe("settings store", () => {
+  it("givenNoFile_whenLoaded_thenDefaultsWithoutWarning", async () => {
+    expect(await store().store.load()).toEqual({ settings: DEFAULT_SETTINGS, warning: null });
+  });
+
+  it("givenSettingsFileV1_whenSavedAndLoaded_thenRoundTrips", async () => {
+    const { files, store: first } = store();
+    await first.save(CHOSEN);
+
+    const reloaded = await createSettingsStore({ directory: DIRECTORY, files }).load();
+
+    expect(JSON.parse(files.contents.get(PATH) ?? "")).toMatchObject({ version: 1 });
+    expect(reloaded).toEqual({ settings: CHOSEN, warning: null });
+  });
+
+  it("givenCorruptFile_whenLoaded_thenSetAsideWithWarningAndDefaults", async () => {
+    const { files, store: corrupt } = store(memoryFiles({ [PATH]: "{ not json" }));
+
+    const loaded = await corrupt.load();
+
+    const backup = `${PATH}.corrupt-${String(NOW)}`;
+    expect(loaded.settings).toEqual(DEFAULT_SETTINGS);
+    expect(loaded.warning).toContain(backup);
+    expect(files.contents.get(backup)).toBe("{ not json");
+    expect(files.contents.has(PATH)).toBe(false);
+  });
+
+  it("givenFileFromNewerVersion_whenLoaded_thenSetAsideRatherThanMisread", async () => {
+    const newer = JSON.stringify({ ...CHOSEN, version: 2 });
+    const { files, store: newerStore } = store(memoryFiles({ [PATH]: newer }));
+
+    const loaded = await newerStore.load();
+
+    expect(loaded.settings).toEqual(DEFAULT_SETTINGS);
+    expect(loaded.warning).toContain("version");
+    expect(files.contents.get(`${PATH}.corrupt-${String(NOW)}`)).toBe(newer);
+  });
+
+  it("givenOneOutOfRangeField_whenLoaded_thenOnlyThatFieldFallsBack", async () => {
+    const file = { ...CHOSEN, data: { ...CHOSEN.data, pageRows: 5 } };
+    const { files, store: loading } = store(memoryFiles({ [PATH]: JSON.stringify(file) }));
+
+    const loaded = await loading.load();
+
+    expect(loaded.warning).toBeNull();
+    expect(loaded.settings).toEqual({ ...CHOSEN, data: { ...CHOSEN.data, pageRows: DEFAULT_SETTINGS.data.pageRows } });
+    expect(files.contents.has(PATH)).toBe(true);
+  });
+
+  it("givenSaveWrite_whenProcessDiesMidWrite_thenPreviousFileIntact", async () => {
+    const { files, store: saving } = store();
+    await saving.save(CHOSEN);
+    const before = files.contents.get(PATH);
+    files.dieDuringNextWrite();
+
+    await expect(saving.save(DEFAULT_SETTINGS)).rejects.toThrow("killed mid-write");
+
+    expect(files.contents.get(PATH)).toBe(before);
+    expect((await saving.load()).settings).toEqual(CHOSEN);
+  });
+});
+
+describe("settings document", () => {
+  it("givenFieldsOfWrongTypeOrRange_whenRead_thenEachFallsBackAlone", () => {
+    const read = readSettings({
+      version: 1,
+      appearance: { theme: "neon", density: "compact", fonts: { editor: { family: "a;b", sizePx: 99 } } },
+      data: { nullText: "", groupDigits: "yes", pageRows: 200, fetchAllCap: 100 },
+    });
+
+    expect(read.appearance.theme).toBe("system");
+    expect(read.appearance.density).toBe("compact");
+    expect(read.appearance.fonts.editor).toEqual({ family: null, sizePx: 13 });
+    expect(read.data).toEqual({ nullText: "<null>", groupDigits: false, pageRows: 200, fetchAllCap: 100_000 });
+  });
+
+  it("givenWriteRequest_whenAnyValueOutOfRange_thenRefused", () => {
+    expect(settingsSchema.safeParse(CHOSEN).success).toBe(true);
+    expect(settingsSchema.safeParse({ ...CHOSEN, data: { ...CHOSEN.data, fetchAllCap: 50 } }).success).toBe(false);
+    expect(settingsSchema.safeParse({ ...CHOSEN, extra: true }).success).toBe(false);
+  });
+});
+
+describe("settings service", () => {
+  it("givenTwoWritesAtOnce_whenSaved_thenOneAfterTheOtherAndTheLastWins", async () => {
+    const { files, store: saving } = store();
+    const changes: SettingsChanged[] = [];
+    const service = await createSettingsService({
+      store: saving,
+      themes: NO_THEMES,
+      onChanged: (c) => changes.push(c),
+    });
+    const second = { ...CHOSEN, appearance: { ...CHOSEN.appearance, theme: "dark" as const } };
+
+    await Promise.all([service.write(CHOSEN), service.write(second)]);
+
+    expect(changes.map((change) => change.settings)).toEqual([CHOSEN, second]);
+    expect(JSON.parse(files.contents.get(PATH) ?? "")).toEqual(second);
+    expect(service.snapshot().settings).toEqual(second);
+  });
+
+  it("givenFailedWrite_whenNextWriteQueued_thenItStillRuns", async () => {
+    const { files, store: saving } = store();
+    const service = await createSettingsService({ store: saving, themes: NO_THEMES, onChanged: () => undefined });
+    files.dieDuringNextWrite();
+
+    const results = await Promise.allSettled([service.write(DEFAULT_SETTINGS), service.write(CHOSEN)]);
+
+    expect(results.map((result) => result.status)).toEqual(["rejected", "fulfilled"]);
+    expect(service.snapshot().settings).toEqual(CHOSEN);
+  });
+});

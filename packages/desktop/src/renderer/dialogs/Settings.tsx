@@ -1,0 +1,590 @@
+import * as Dialog from "@radix-ui/react-dialog";
+import { useEffect, useId, useState, type ReactNode } from "react";
+import {
+  BUILT_IN_THEMES,
+  isBrokenUserTheme,
+  type ColorTokens,
+  type DensityId,
+} from "@table-craft/desktop/appearance/themes.js";
+import { currentPlatform, formatChord } from "@table-craft/desktop/renderer/actions/chords.js";
+import { registry } from "@table-craft/desktop/renderer/actions/index.js";
+import { SETTINGS_ACTION_IDS } from "@table-craft/desktop/renderer/actions/settingsActions.js";
+import {
+  Button,
+  CONTENT_CLASS,
+  FieldRow,
+  INPUT_CLASS,
+  OVERLAY_CLASS,
+  TextInput,
+} from "@table-craft/desktop/renderer/dialogs/parts.js";
+import { installedFontFamilies, type FontFamilies } from "@table-craft/desktop/renderer/settings/fonts.js";
+import { useSettings } from "@table-craft/desktop/renderer/state/settings.js";
+import {
+  SETTINGS_PAGES,
+  useSettingsDialog,
+  type SettingsPage,
+} from "@table-craft/desktop/renderer/state/settingsDialog.js";
+import { cn } from "@table-craft/desktop/renderer/ui/cn.js";
+import {
+  DEFAULT_SETTINGS,
+  FONT_SIZE_RANGE,
+  FETCH_ALL_CAP_RANGE,
+  fetchAllCapError,
+  fontFamilyError,
+  fontSizeError,
+  nullTextError,
+  PAGE_ROWS_RANGE,
+  pageRowsError,
+  withFont,
+  type FontRole,
+  type FontSetting,
+  type NumberRange,
+  type Settings,
+  type ThemeChoice,
+} from "@table-craft/desktop/settings/settings.js";
+
+const PAGE_TITLES: Readonly<Record<SettingsPage, string>> = {
+  appearance: "Appearance",
+  editor: "Editor",
+  dataEditor: "Data Editor",
+};
+
+const DENSITY_LABELS: Readonly<Record<DensityId, string>> = {
+  comfortable: "Comfortable",
+  compact: "Compact",
+};
+
+const FONT_LABELS: Readonly<Record<FontRole, string>> = {
+  ui: "UI font",
+  editor: "Editor font",
+  grid: "Grid font",
+};
+
+/** The `<select>` value standing for the built-in stack, which no installed family can be named. */
+const BUILT_IN_FAMILY = "";
+const WHOLE_NUMBER = /^\d+$/;
+const SWATCH_TOKENS: readonly (keyof Pick<ColorTokens, "canvas" | "panel" | "ink" | "accent">)[] = [
+  "canvas",
+  "panel",
+  "ink",
+  "accent",
+];
+
+function update(patch: (current: Settings) => Settings): void {
+  void useSettings.getState().update(patch);
+}
+
+/** Each page's Restore Defaults puts back only what that page shows. */
+const RESTORE: Readonly<Record<SettingsPage, (current: Settings) => Settings>> = {
+  appearance: (current) => ({
+    ...current,
+    appearance: {
+      ...current.appearance,
+      theme: DEFAULT_SETTINGS.appearance.theme,
+      density: DEFAULT_SETTINGS.appearance.density,
+      fonts: { ...current.appearance.fonts, ui: DEFAULT_SETTINGS.appearance.fonts.ui },
+    },
+  }),
+  editor: (current) => withFont(current, "editor", DEFAULT_SETTINGS.appearance.fonts.editor),
+  dataEditor: (current) => ({
+    ...withFont(current, "grid", DEFAULT_SETTINGS.appearance.fonts.grid),
+    data: DEFAULT_SETTINGS.data,
+  }),
+};
+
+function SectionTitle({ children }: { readonly children: string }) {
+  return <h3 className="col-span-2 mt-gap border-b border-line pb-1 font-semibold text-ink-muted">{children}</h3>;
+}
+
+function FieldError({ id, error }: { readonly id: string; readonly error: string | null }) {
+  if (error === null) return null;
+  return (
+    <p id={id} role="alert" className="col-start-2 text-danger">
+      {error}
+    </p>
+  );
+}
+
+/**
+ * What a text field shows: the user's text while it differs from the saved value only because it
+ * is not valid yet, otherwise the saved value, so Restore Defaults and other windows show through.
+ */
+function useDraft<T>(value: T, show: (value: T) => string) {
+  const [draft, setDraft] = useState<{ readonly text: string; readonly basis: T } | null>(null);
+  const text = draft !== null && draft.basis === value ? draft.text : show(value);
+  return { text, edit: (next: string, basis: T) => setDraft({ text: next, basis }) };
+}
+
+interface NumberFieldProps {
+  readonly label: string;
+  readonly value: number;
+  readonly range: NumberRange;
+  readonly check: (value: number) => string | null;
+  readonly onValid: (value: number) => void;
+}
+
+function NumberField({ label, value, range, check, onValid }: NumberFieldProps) {
+  const id = useId();
+  const errorId = useId();
+  const { text, edit } = useDraft(value, String);
+  const parsed = WHOLE_NUMBER.test(text) ? Number(text) : Number.NaN;
+  const error = Number.isNaN(parsed) ? `${label} must be a whole number.` : check(parsed);
+  return (
+    <>
+      <FieldRow label={label} htmlFor={id}>
+        <TextInput
+          id={id}
+          inputMode="numeric"
+          className="w-28"
+          aria-invalid={error !== null}
+          aria-describedby={error === null ? undefined : errorId}
+          value={text}
+          onChange={(event) => {
+            const next = event.target.value.trim();
+            const number = WHOLE_NUMBER.test(next) ? Number(next) : Number.NaN;
+            if (!Number.isNaN(number) && check(number) === null) {
+              edit(next, number);
+              onValid(number);
+            } else {
+              edit(next, value);
+            }
+          }}
+        />
+        <span className="text-ink-muted">
+          {range.min.toLocaleString("en-US")}–{range.max.toLocaleString("en-US")}
+        </span>
+      </FieldRow>
+      <FieldError id={errorId} error={error} />
+    </>
+  );
+}
+
+function useFontFamilies(): FontFamilies | null {
+  const [families, setFamilies] = useState<FontFamilies | null>(null);
+  useEffect(() => {
+    let live = true;
+    void installedFontFamilies().then((listed) => {
+      if (live) setFamilies(listed);
+    });
+    return () => {
+      live = false;
+    };
+  }, []);
+  return families;
+}
+
+function FamilyGroup({ label, families }: { readonly label: string; readonly families: readonly string[] }) {
+  if (families.length === 0) return null;
+  return (
+    <optgroup label={label}>
+      {families.map((family) => (
+        <option key={family} value={family}>
+          {family}
+        </option>
+      ))}
+    </optgroup>
+  );
+}
+
+function FamilyControl({
+  id,
+  role,
+  family,
+  onChange,
+}: {
+  readonly id: string;
+  readonly role: FontRole;
+  readonly family: string | null;
+  readonly onChange: (family: string | null) => void;
+}) {
+  const families = useFontFamilies();
+  const errorId = useId();
+  const { text, edit } = useDraft(family, (value) => value ?? "");
+  if (families === null) {
+    return <span className="text-ink-muted">Listing fonts…</span>;
+  }
+  if (families.kind === "unavailable") {
+    const error = text === "" ? null : fontFamilyError(text);
+    return (
+      <span className="flex min-w-0 flex-1 flex-col gap-1">
+        <TextInput
+          id={id}
+          className="flex-1"
+          placeholder="Built-in"
+          aria-invalid={error !== null}
+          aria-describedby={error === null ? undefined : errorId}
+          value={text}
+          onChange={(event) => {
+            const next = event.target.value;
+            const valid = next.trim() === "" || fontFamilyError(next) === null;
+            const chosen = next.trim() === "" ? null : next;
+            edit(next, valid ? chosen : family);
+            if (valid) onChange(chosen);
+          }}
+        />
+        <span className="text-ink-muted">{families.reason} Type a family name; a missing font falls back.</span>
+        {error === null ? null : (
+          <span id={errorId} role="alert" className="text-danger">
+            {error}
+          </span>
+        )}
+      </span>
+    );
+  }
+  const monospaceFirst = role !== "ui";
+  const listed = [...families.monospace, ...families.proportional];
+  return (
+    <select
+      id={id}
+      className={cn(INPUT_CLASS, "min-w-0 flex-1")}
+      value={family ?? BUILT_IN_FAMILY}
+      onChange={(event) => onChange(event.target.value === BUILT_IN_FAMILY ? null : event.target.value)}
+    >
+      <option value={BUILT_IN_FAMILY}>Built-in</option>
+      {family !== null && !listed.includes(family) ? <option value={family}>{family} (not installed)</option> : null}
+      {monospaceFirst ? (
+        <>
+          <FamilyGroup label="Monospace" families={families.monospace} />
+          <FamilyGroup label="Proportional" families={families.proportional} />
+        </>
+      ) : (
+        <>
+          <FamilyGroup label="Proportional" families={families.proportional} />
+          <FamilyGroup label="Monospace" families={families.monospace} />
+        </>
+      )}
+    </select>
+  );
+}
+
+function FontFields({ role }: { readonly role: FontRole }) {
+  const font = useSettings((state) => state.settings.appearance.fonts[role]);
+  const familyId = useId();
+  const set = (next: FontSetting) => update((current) => withFont(current, role, next));
+  return (
+    <>
+      <FieldRow label={FONT_LABELS[role]} htmlFor={familyId}>
+        <FamilyControl
+          id={familyId}
+          role={role}
+          family={font.family}
+          onChange={(family) => set({ ...useSettings.getState().settings.appearance.fonts[role], family })}
+        />
+      </FieldRow>
+      <NumberField
+        label="Size"
+        value={font.sizePx}
+        range={FONT_SIZE_RANGE}
+        check={fontSizeError}
+        onValid={(sizePx) => set({ ...useSettings.getState().settings.appearance.fonts[role], sizePx })}
+      />
+    </>
+  );
+}
+
+function Swatch({ colors }: { readonly colors: ColorTokens }) {
+  return (
+    <span aria-hidden className="flex shrink-0 overflow-hidden rounded-sm border border-line">
+      {SWATCH_TOKENS.map((token) => (
+        <span key={token} className="size-2.5" style={{ backgroundColor: colors[token] }} />
+      ))}
+    </span>
+  );
+}
+
+function ThemeOption({
+  choice,
+  name,
+  colors,
+  errors,
+  chosen,
+}: {
+  readonly choice: ThemeChoice;
+  readonly name: string;
+  readonly colors: ColorTokens | null;
+  readonly errors?: readonly string[];
+  readonly chosen: boolean;
+}) {
+  const broken = errors !== undefined;
+  return (
+    <li className="flex flex-col">
+      <button
+        type="button"
+        role="radio"
+        aria-checked={chosen}
+        aria-disabled={broken}
+        data-theme={choice}
+        title={broken ? "This theme file has errors and cannot be chosen." : undefined}
+        className={cn(
+          "flex h-row items-center gap-cell rounded px-cell text-left",
+          chosen && "bg-selection",
+          broken ? "cursor-not-allowed text-ink-muted" : !chosen && "hover:bg-raised",
+        )}
+        onClick={() => {
+          if (!broken) update((current) => ({ ...current, appearance: { ...current.appearance, theme: choice } }));
+        }}
+      >
+        {colors === null ? <span aria-hidden className="w-10 shrink-0" /> : <Swatch colors={colors} />}
+        <span className="truncate">{name}</span>
+      </button>
+      {errors === undefined ? null : (
+        <ul aria-label={`Errors in ${name}`} className="ml-10 flex flex-col pb-1 text-danger">
+          {errors.map((error) => (
+            <li key={error} className="break-words">
+              {error}
+            </li>
+          ))}
+        </ul>
+      )}
+    </li>
+  );
+}
+
+function AppearancePage() {
+  const theme = useSettings((state) => state.settings.appearance.theme);
+  const density = useSettings((state) => state.settings.appearance.density);
+  const themes = useSettings((state) => state.themes);
+  return (
+    <>
+      <SectionTitle>Theme</SectionTitle>
+      <div className="col-span-2 flex flex-col gap-1">
+        <ul role="radiogroup" aria-label="Theme" className="flex flex-col">
+          <ThemeOption choice="system" name="Follow system" colors={null} chosen={theme === "system"} />
+          {Object.values(BUILT_IN_THEMES).map((builtIn) => (
+            <ThemeOption
+              key={builtIn.id}
+              choice={builtIn.id}
+              name={builtIn.name}
+              colors={builtIn.colors}
+              chosen={theme === builtIn.id}
+            />
+          ))}
+          {themes.map((entry) =>
+            isBrokenUserTheme(entry) ? (
+              <ThemeOption
+                key={entry.id}
+                choice={entry.id}
+                name={entry.file}
+                colors={null}
+                errors={entry.errors}
+                chosen={false}
+              />
+            ) : (
+              <ThemeOption
+                key={entry.id}
+                choice={entry.id}
+                name={entry.name}
+                colors={entry.colors}
+                chosen={theme === entry.id}
+              />
+            ),
+          )}
+        </ul>
+        <div className="flex gap-gap">
+          <Button onClick={() => void useSettings.getState().reloadThemes()}>Reload Themes</Button>
+          <Button onClick={() => void useSettings.getState().openThemesFolder()}>Open Themes Folder</Button>
+        </div>
+      </div>
+      <SectionTitle>Density</SectionTitle>
+      <FieldRow label="Rows">
+        <div role="radiogroup" aria-label="Density" className="flex gap-gap">
+          {(Object.keys(DENSITY_LABELS) as DensityId[]).map((id) => (
+            <label key={id} className="flex items-center gap-1">
+              <input
+                type="radio"
+                name="density"
+                checked={density === id}
+                onChange={() =>
+                  update((current) => ({ ...current, appearance: { ...current.appearance, density: id } }))
+                }
+              />
+              {DENSITY_LABELS[id]}
+            </label>
+          ))}
+        </div>
+      </FieldRow>
+      <SectionTitle>Font</SectionTitle>
+      <FontFields role="ui" />
+    </>
+  );
+}
+
+function chordText(actionId: string): string {
+  const shortcut = registry.get(actionId)?.shortcut;
+  return shortcut === undefined ? "" : formatChord(shortcut, currentPlatform());
+}
+
+function EditorPage() {
+  return (
+    <>
+      <SectionTitle>Font</SectionTitle>
+      <FontFields role="editor" />
+      <p className="col-start-2 text-ink-muted">
+        In the console, {chordText(SETTINGS_ACTION_IDS.zoomIn)} enlarges the font,{" "}
+        {chordText(SETTINGS_ACTION_IDS.zoomOut)} shrinks it and {chordText(SETTINGS_ACTION_IDS.zoomReset)} restores{" "}
+        {DEFAULT_SETTINGS.appearance.fonts.editor.sizePx} px.
+      </p>
+    </>
+  );
+}
+
+function NullTextField() {
+  const nullText = useSettings((state) => state.settings.data.nullText);
+  const id = useId();
+  const errorId = useId();
+  const { text, edit } = useDraft(nullText, (value) => value);
+  const error = nullTextError(text);
+  return (
+    <>
+      <FieldRow label="NULL text" htmlFor={id}>
+        <TextInput
+          id={id}
+          className="w-28"
+          aria-invalid={error !== null}
+          aria-describedby={error === null ? undefined : errorId}
+          value={text}
+          onChange={(event) => {
+            const next = event.target.value;
+            const valid = nullTextError(next) === null;
+            edit(next, valid ? next : nullText);
+            if (valid) update((current) => ({ ...current, data: { ...current.data, nullText: next } }));
+          }}
+        />
+      </FieldRow>
+      <FieldError id={errorId} error={error} />
+    </>
+  );
+}
+
+function DataEditorPage() {
+  const data = useSettings((state) => state.settings.data);
+  const groupId = useId();
+  const setData = (patch: Partial<Settings["data"]>) =>
+    update((current) => ({ ...current, data: { ...current.data, ...patch } }));
+  return (
+    <>
+      <SectionTitle>Font</SectionTitle>
+      <FontFields role="grid" />
+      <SectionTitle>Display</SectionTitle>
+      <NullTextField />
+      <FieldRow label="Numbers" htmlFor={groupId}>
+        <label className="flex items-center gap-cell">
+          <input
+            id={groupId}
+            type="checkbox"
+            checked={data.groupDigits}
+            onChange={(event) => setData({ groupDigits: event.target.checked })}
+          />
+          Group digits (1,234,567)
+        </label>
+      </FieldRow>
+      <p className="col-start-2 text-ink-muted">
+        Display only: copy, export, filters and the editor keep the database&apos;s text.
+      </p>
+      <SectionTitle>Paging</SectionTitle>
+      <NumberField
+        label="Page size"
+        value={data.pageRows}
+        range={PAGE_ROWS_RANGE}
+        check={(pageRows) =>
+          pageRowsError(pageRows) ??
+          (pageRows > data.fetchAllCap ? "The page size cannot be larger than the Fetch All limit." : null)
+        }
+        onValid={(pageRows) => setData({ pageRows })}
+      />
+      <NumberField
+        label="Fetch All limit"
+        value={data.fetchAllCap}
+        range={FETCH_ALL_CAP_RANGE}
+        check={(fetchAllCap) => fetchAllCapError(fetchAllCap, data.pageRows)}
+        onValid={(fetchAllCap) => setData({ fetchAllCap })}
+      />
+      <p className="col-start-2 text-ink-muted">Applies to the next statement; open results keep theirs.</p>
+    </>
+  );
+}
+
+const PAGES: Readonly<Record<SettingsPage, () => ReactNode>> = {
+  appearance: AppearancePage,
+  editor: EditorPage,
+  dataEditor: DataEditorPage,
+};
+
+function SettingsEditor({ page }: { readonly page: SettingsPage }) {
+  const notice = useSettings((state) => state.notice);
+  const Page = PAGES[page];
+  return (
+    <div className="flex h-full min-h-0 flex-col">
+      <Dialog.Title className="shrink-0 border-b border-line px-gap py-cell font-semibold">Settings</Dialog.Title>
+      <div className="flex min-h-0 flex-1">
+        <div
+          role="tablist"
+          aria-label="Settings pages"
+          aria-orientation="vertical"
+          className="flex w-dialog-list shrink-0 flex-col gap-1 border-r border-line p-1"
+        >
+          {SETTINGS_PAGES.map((id) => (
+            <button
+              key={id}
+              type="button"
+              role="tab"
+              aria-selected={id === page}
+              className={cn(
+                "flex h-row items-center rounded px-cell text-left",
+                id === page ? "bg-selection" : "hover:bg-raised",
+              )}
+              onClick={() => useSettingsDialog.getState().show(id)}
+            >
+              {PAGE_TITLES[id]}
+            </button>
+          ))}
+        </div>
+        <div
+          role="tabpanel"
+          aria-label={PAGE_TITLES[page]}
+          className="grid min-h-0 min-w-0 flex-1 grid-cols-[8rem_1fr] content-start items-center gap-x-gap gap-y-1 overflow-y-auto p-gap"
+        >
+          <Page />
+        </div>
+      </div>
+      {notice === null ? null : (
+        <p role="alert" className="shrink-0 border-t border-line px-gap py-1 text-danger">
+          {notice}
+        </p>
+      )}
+      <div className="flex shrink-0 items-center gap-gap border-t border-line p-gap">
+        <Button onClick={() => update(RESTORE[page])}>Restore Defaults</Button>
+        <span className="flex-1 text-ink-muted">Changes are saved as you make them.</span>
+        <Dialog.Close asChild>
+          <Button variant="primary">Close</Button>
+        </Dialog.Close>
+      </div>
+    </div>
+  );
+}
+
+/** DataGrip's Settings (⌘,): pages on the left, the chosen page on the right, saved as changed. */
+export function SettingsDialog() {
+  const page = useSettingsDialog((state) => state.page);
+  return (
+    <Dialog.Root
+      open={page !== null}
+      onOpenChange={(open) => {
+        if (!open) useSettingsDialog.getState().hide();
+      }}
+    >
+      <Dialog.Portal>
+        <Dialog.Overlay className={OVERLAY_CLASS} />
+        <Dialog.Content
+          aria-describedby={undefined}
+          className={cn(
+            CONTENT_CLASS,
+            "flex h-dialog-height max-h-[95vh] w-dialog max-w-[95vw] flex-col overflow-hidden",
+          )}
+        >
+          {page === null ? null : <SettingsEditor page={page} />}
+        </Dialog.Content>
+      </Dialog.Portal>
+    </Dialog.Root>
+  );
+}

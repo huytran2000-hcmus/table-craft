@@ -6,9 +6,9 @@ import { currentPlatform, formatChord } from "@table-craft/desktop/renderer/acti
 import { DDL_ACTION_IDS } from "@table-craft/desktop/renderer/actions/ddlActions.js";
 import { HISTORY_ACTION_IDS } from "@table-craft/desktop/renderer/actions/historyActions.js";
 import { invoke, registry, useActionEnabled } from "@table-craft/desktop/renderer/actions/index.js";
+import { SETTINGS_ACTION_IDS } from "@table-craft/desktop/renderer/actions/settingsActions.js";
 import { TABLE_ACTION_IDS } from "@table-craft/desktop/renderer/actions/tableActions.js";
 import type { OpenTableArgs } from "@table-craft/desktop/renderer/actions/tableCommands.js";
-import { DEFAULT_APPEARANCE } from "@table-craft/desktop/renderer/appearance/tokens.js";
 import { buildTree } from "@table-craft/desktop/renderer/model/datasourceTree.js";
 import { DRAG_OBJECT_TYPE, draggedObjectOf } from "@table-craft/desktop/renderer/model/dragObject.js";
 import {
@@ -43,6 +43,7 @@ import {
   type TreeSelection,
 } from "@table-craft/desktop/renderer/state/datasources.js";
 import { useLayout } from "@table-craft/desktop/renderer/state/layout.js";
+import { themeOf, useRowHeightPx, useSettings } from "@table-craft/desktop/renderer/state/settings.js";
 import { cn } from "@table-craft/desktop/renderer/ui/cn.js";
 import {
   ACTION_ICONS,
@@ -119,7 +120,6 @@ const DOT_CLASS = {
   failed: "bg-danger",
 } as const;
 const INDENT_PX = 16;
-const ROW_HEIGHT_PX = DEFAULT_APPEARANCE.density.rowHeightPx;
 const OVERSCAN_ROWS = 20;
 const NO_POSITIONS: readonly number[] = [];
 
@@ -374,6 +374,41 @@ function LoadWarning() {
   );
 }
 
+/** Why settings.json was set aside, a save failed, or the chosen theme could not be used. */
+function SettingsNotice() {
+  const notice = useSettings((state) => state.notice);
+  const themeNotice = useSettings((state) => themeOf(state).notice);
+  const dismiss = useSettings((state) => state.dismissNotice);
+  if (notice === null && themeNotice === null) return null;
+  return (
+    <div
+      role="alert"
+      data-testid="settings-notice"
+      className="mx-gap mb-gap flex items-start gap-cell rounded border border-warning p-cell text-ink"
+    >
+      <WarningIcon aria-hidden className="mt-0.5 size-icon shrink-0 text-warning" />
+      <span className="flex min-w-0 flex-1 flex-col gap-1 break-words">
+        {notice === null ? null : <span>{notice}</span>}
+        {themeNotice === null ? null : <span>{themeNotice}</span>}
+        <span className="flex justify-end gap-gap">
+          <button
+            type="button"
+            className="text-ink-muted hover:text-ink"
+            onClick={() => invoke(SETTINGS_ACTION_IDS.show)}
+          >
+            Settings…
+          </button>
+          {notice === null ? null : (
+            <button type="button" className="text-ink-muted hover:text-ink" onClick={dismiss}>
+              Dismiss
+            </button>
+          )}
+        </span>
+      </span>
+    </div>
+  );
+}
+
 /** The index of the row's parent: the nearest row above it one level up. */
 function parentIndex(rows: readonly ExplorerRow[], index: number): number {
   const depth = rows[index]?.depth ?? 0;
@@ -435,12 +470,14 @@ export function DatabasePane() {
   );
   const positionsByIndex = useMemo(() => new Map(matches.map((found) => [found.index, found.positions])), [matches]);
   const selectedIndex = rows.findIndex((row) => isSelected(selection, row));
+  const rowHeightPx = useRowHeightPx();
   const virtualizer = useVirtualizer({
     count: rows.length,
     getScrollElement: () => scrollRef.current,
-    estimateSize: () => ROW_HEIGHT_PX,
+    estimateSize: () => rowHeightPx,
     overscan: OVERSCAN_ROWS,
   });
+  useEffect(() => virtualizer.measure(), [virtualizer, rowHeightPx]);
 
   // A catalog node that stopped being a row (its datasource detached, system schemas hidden)
   // hands the selection to its datasource, as DataGrip does.
@@ -578,6 +615,7 @@ export function DatabasePane() {
         ))}
       </div>
       <LoadWarning />
+      <SettingsNotice />
       {loaded && rows.length === 0 ? (
         <EmptyState />
       ) : (

@@ -3,6 +3,7 @@ import { z } from "@table-craft/plugin-api";
 import { ConsoleFileError, type ConsoleFiles } from "@table-craft/desktop/main/consoleFiles.js";
 import { draftSchema } from "@table-craft/desktop/main/datasources.js";
 import { SecretStoreError } from "@table-craft/desktop/main/secrets.js";
+import { settingsSchema, type SettingsService } from "@table-craft/desktop/main/settings.js";
 import { DatasourceError, type DatasourceService } from "@table-craft/desktop/main/service.js";
 import {
   HISTORY_OUTCOMES,
@@ -70,6 +71,9 @@ export interface IpcOptions<Sender> {
   readonly saveFile: (sender: Sender, title: string, defaultName: string) => Promise<string | null>;
   /** The renderer's answer to a held close (`CHANNELS.closeRequested`). */
   readonly answerClose: (sender: Sender, proceed: boolean) => void;
+  readonly settings: SettingsService;
+  /** Creates `<userData>/themes/` if missing and shows it in the file manager. */
+  readonly openThemesFolder: () => Promise<void>;
   readonly log: (message: string, cause: unknown) => void;
 }
 
@@ -146,6 +150,21 @@ export function registerIpc<Sender>(ipc: InvokeRegistrar<Sender>, options: IpcOp
   });
   handle(INVOKE_CHANNELS.deleteConsole, consoleRequest, async ({ datasourceId, name }) => {
     await consoles.delete(datasourceId, name);
+    return null;
+  });
+
+  const { settings } = options;
+  handle(INVOKE_CHANNELS.readSettings, noRequest, () => settings.snapshot());
+  handle(INVOKE_CHANNELS.writeSettings, settingsSchema, async (document) => {
+    await settings.write(document);
+    return null;
+  });
+  handle(INVOKE_CHANNELS.reloadThemes, noRequest, async () => {
+    await settings.reloadThemes();
+    return null;
+  });
+  handle(INVOKE_CHANNELS.openThemesFolder, noRequest, async () => {
+    await options.openThemesFolder();
     return null;
   });
 

@@ -7,7 +7,9 @@ import {
   dialog,
   ipcMain,
   MessageChannelMain,
+  nativeTheme,
   safeStorage,
+  shell,
   utilityProcess,
   type OpenDialogOptions,
   type SaveDialogOptions,
@@ -25,8 +27,20 @@ import { installApplicationMenu } from "@table-craft/desktop/main/menu.js";
 import { listPlugins } from "@table-craft/desktop/main/plugins.js";
 import { createSecretStore, type Cipher } from "@table-craft/desktop/main/secrets.js";
 import { createDatasourceService } from "@table-craft/desktop/main/service.js";
+import {
+  createSettingsService,
+  createSettingsStore,
+  type SettingsService,
+} from "@table-craft/desktop/main/settings.js";
+import { createThemeFolder } from "@table-craft/desktop/main/themes.js";
+import { resolveTheme, type Theme } from "@table-craft/desktop/appearance/themes.js";
 import { ENGINE_PORT_MESSAGE } from "@table-craft/desktop/engine/protocol.js";
-import { CHANNELS, type DatasourceList, type EngineExited } from "@table-craft/desktop/preload/bridge.js";
+import {
+  CHANNELS,
+  type DatasourceList,
+  type EngineExited,
+  type SettingsChanged,
+} from "@table-craft/desktop/preload/bridge.js";
 
 const APP_NAME = "table-craft";
 const WINDOW_WIDTH = 1200;
@@ -87,7 +101,7 @@ const cipher: Cipher = {
   decrypt: (cipherText) => safeStorage.decryptString(Buffer.from(cipherText, CIPHER_ENCODING)),
 };
 
-function broadcast(channel: string, payload: DatasourceList | EngineExited): void {
+function broadcast(channel: string, payload: DatasourceList | EngineExited | SettingsChanged): void {
   for (const window of BrowserWindow.getAllWindows()) window.webContents.send(channel, payload);
 }
 
@@ -114,12 +128,37 @@ const hosts = createHostRegistry<WebContents>({
 
 const closeGuard = createCloseGuard<BrowserWindow>({ quit: () => app.quit() });
 
-function createWindow(): void {
+/**
+ * The theme the settings name, made concrete, after pointing `nativeTheme` at its scheme so menus,
+ * dialogs and the renderer's `prefers-color-scheme` agree (plan 013 decision 8). Only a `"system"`
+ * choice reads the OS, which is why `themeSource` is set first.
+ */
+function applyNativeTheme(settings: SettingsService): Theme {
+  const { settings: current, themes } = settings.snapshot();
+  const choice = current.appearance.theme;
+  // Assigning `themeSource` emits `updated`, which calls back here; only a real change assigns.
+  const pointAt = (source: typeof nativeTheme.themeSource) => {
+    if (nativeTheme.themeSource !== source) nativeTheme.themeSource = source;
+  };
+  if (choice === "system") pointAt("system");
+  const system = {
+    prefersDark: nativeTheme.shouldUseDarkColors,
+    prefersMoreContrast: nativeTheme.shouldUseHighContrastColors,
+  };
+  const { theme } = resolveTheme(choice, system, themes);
+  if (choice !== "system") pointAt(theme.colorScheme);
+  for (const window of BrowserWindow.getAllWindows()) window.setBackgroundColor(theme.colors.canvas);
+  return theme;
+}
+
+function createWindow(settings: SettingsService): void {
   const window = new BrowserWindow({
     title: APP_NAME,
     width: WINDOW_WIDTH,
     height: WINDOW_HEIGHT,
     show: false,
+    // The first frame, before the renderer's bundle runs, is already the theme's canvas.
+    backgroundColor: applyNativeTheme(settings).colors.canvas,
     webPreferences: {
       preload: distPath("../preload/preload.cjs"),
       contextIsolation: true,
@@ -167,10 +206,29 @@ void app.whenReady().then(async () => {
     history,
     onChanged: (list) => broadcast(CHANNELS.datasourcesChanged, list),
   });
+  const themes = createThemeFolder({ directory, files });
+  const settings: SettingsService = await createSettingsService({
+    store: createSettingsStore({ directory, files }),
+    themes,
+    onChanged(changed) {
+      applyNativeTheme(settings);
+      broadcast(CHANNELS.settingsChanged, changed);
+    },
+  });
+  if (settings.snapshot().warning !== null) console.error(`table-craft: ${String(settings.snapshot().warning)}`);
+  nativeTheme.on("updated", () => {
+    if (settings.snapshot().settings.appearance.theme === "system") applyNativeTheme(settings);
+  });
   registerIpc<WebContents>(ipcMain, {
     service,
     consoles,
     history,
+    settings,
+    async openThemesFolder() {
+      await files.makeDirectory(themes.path);
+      const failure = await shell.openPath(themes.path);
+      if (failure !== "") throw new Error(`${themes.path} could not be opened: ${failure}`);
+    },
     chooseFile,
     saveFile,
     answerClose(sender, proceed) {
@@ -180,9 +238,9 @@ void app.whenReady().then(async () => {
     log: (message, cause) => console.error(`table-craft: ${message}`, cause),
   });
   installApplicationMenu(() => BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0] ?? null);
-  createWindow();
+  createWindow(settings);
   app.on("activate", () => {
-    if (BrowserWindow.getAllWindows().length === 0) createWindow();
+    if (BrowserWindow.getAllWindows().length === 0) createWindow(settings);
   });
 });
 

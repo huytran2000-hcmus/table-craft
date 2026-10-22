@@ -4,7 +4,15 @@ import type { TabKind } from "@table-craft/desktop/renderer/state/tabs.js";
 
 /** Every command the app has is one of these (decision 015): menus, palette, keymap and buttons only `invoke`. */
 export type ActionCategory =
-  "Console" | "Result Grid" | "Table Editor" | "Database" | "Editor Tabs" | "Tool Windows" | "Navigation";
+  | "App"
+  | "Editor"
+  | "Console"
+  | "Result Grid"
+  | "Table Editor"
+  | "Database"
+  | "Editor Tabs"
+  | "Tool Windows"
+  | "Navigation";
 
 /** Names, not components, so the registry stays free of React; `ui/icons.ts` maps them. */
 export type ActionIcon =
@@ -51,7 +59,8 @@ export type ActionIcon =
   | "history"
   | "reopen"
   | "explain"
-  | "explainAnalyze";
+  | "explainAnalyze"
+  | "settings";
 
 export interface Action<A = void> {
   readonly id: string;

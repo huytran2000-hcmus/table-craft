@@ -76,6 +76,22 @@ export function seedDatasources(userDataDir: string, datasources: readonly Saved
   );
 }
 
+const SETTINGS_FILE = "settings.json";
+const THEMES_DIRECTORY = "themes";
+
+/** Writes `settings.json` into a profile before launch; a string is written as is, for a corrupt file. */
+export function seedSettings(userDataDir: string, settings: object | string): void {
+  const text = typeof settings === "string" ? settings : JSON.stringify(settings, null, 2);
+  writeFileSync(join(userDataDir, SETTINGS_FILE), text);
+}
+
+/** Writes `<userData>/themes/<name>.json`; a string is written as is, for a broken theme. */
+export function seedTheme(userDataDir: string, name: string, theme: object | string): void {
+  const directory = join(userDataDir, THEMES_DIRECTORY);
+  mkdirSync(directory, { recursive: true });
+  writeFileSync(join(directory, `${name}.json`), typeof theme === "string" ? theme : JSON.stringify(theme, null, 2));
+}
+
 export function newProfile(): string {
   return mkdtempSync(join(tmpdir(), USER_DATA_PREFIX));
 }

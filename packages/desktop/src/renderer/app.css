@@ -68,11 +68,6 @@ body,
   margin: 0;
 }
 
-html {
-  /* Native scrollbars and form controls follow the dark theme. */
-  color-scheme: dark;
-}
-
 body {
   overflow: hidden;
   background: var(--color-canvas);

@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import { EXTRACTOR_KINDS, RESULT_FETCH_ALL_CAP, type ExtractorKind } from "@table-craft/desktop/engine/protocol.js";
+import { EXTRACTOR_KINDS, type ExtractorKind } from "@table-craft/desktop/engine/protocol.js";
 import {
   copyBlockedReason,
   EXTRACTOR_LABELS,
@@ -55,7 +55,7 @@ export function GridToolbar({
           complete: result.complete,
           cursorOpen: result.cursorOpen,
           sorted: !serverSorted && result.sort.length > 0,
-          fetchAllCap: RESULT_FETCH_ALL_CAP,
+          fetchAllCap: result.paging.fetchAllCap,
         })}
       </span>
       {result.fetching === null ? null : (

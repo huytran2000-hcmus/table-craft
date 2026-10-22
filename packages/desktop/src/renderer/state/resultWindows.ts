@@ -9,6 +9,7 @@ import {
 import { EngineRequestError, type EngineClient } from "@table-craft/desktop/renderer/engine/client.js";
 import { widerChars } from "@table-craft/desktop/renderer/grid/widths.js";
 import { withWindow, type ResultTab } from "@table-craft/desktop/renderer/state/resultTab.js";
+import { currentFormats } from "@table-craft/desktop/renderer/state/settings.js";
 
 const UNEXPECTED_HINT = "Restart the app; if it happens again, report it.";
 
@@ -80,7 +81,7 @@ export function createResultWindows(owner: ResultOwner) {
         owner.update(ownerId, resultId, (latest) => ({
           ...latest,
           windows: withWindow(latest.windows, window.offset, window.rows),
-          autoChars: widerChars(latest.autoChars, window.rows),
+          autoChars: widerChars(latest.autoChars, window.rows, latest.typeClasses, currentFormats()),
         }));
       })
       .catch((cause: unknown) => {
@@ -95,7 +96,7 @@ export function createResultWindows(owner: ResultOwner) {
     if (result === undefined || client === undefined || !canFetch(result)) return;
     owner.update(ownerId, resultId, (latest) => ({ ...latest, fetching: all ? "all" : "page" }));
     try {
-      const state = await client.call("result.fetchMore", { handle: result.handle, all });
+      const state = await client.call("result.fetchMore", { handle: result.handle, all, ...result.paging });
       owner.update(ownerId, resultId, (latest) => withState(latest, state));
     } catch (cause) {
       owner.failed(ownerId, result, toError(cause), false);

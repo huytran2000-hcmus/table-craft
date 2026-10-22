@@ -1,6 +1,7 @@
 import { EXTRACTOR_KINDS } from "@table-craft/core";
 import { GENERATED_STATEMENTS, TRANSACTION_MODES, z } from "@table-craft/plugin-api";
 import type { EngineRequest } from "@table-craft/desktop/engine/protocol.js";
+import { FETCH_ALL_CAP_RANGE, PAGE_ROWS_RANGE } from "@table-craft/desktop/settings/settings.js";
 
 const requestId = z.number().int().nonnegative();
 const handle = z.string().min(1);
@@ -11,6 +12,10 @@ const extractor = z.enum(EXTRACTOR_KINDS);
 const columns = z.array(index);
 const relation = z.string().min(1);
 const GENERATOR_STATEMENTS = ["create", ...GENERATED_STATEMENTS] as const;
+const paging = {
+  pageRows: z.number().int().min(PAGE_ROWS_RANGE.min).max(PAGE_ROWS_RANGE.max),
+  fetchAllCap: z.number().int().min(FETCH_ALL_CAP_RANGE.min).max(FETCH_ALL_CAP_RANGE.max),
+};
 const cellInput = z.discriminatedUnion("kind", [
   z.strictObject({ kind: z.literal("text"), text: z.string() }),
   z.strictObject({ kind: z.literal("null") }),
@@ -37,6 +42,7 @@ export const engineRequestSchema = z.discriminatedUnion("type", [
     type: z.literal("statement.execute"),
     sessionId,
     sql: z.string(),
+    ...paging,
   }),
   z.strictObject({ id: requestId, type: z.literal("statement.cancel"), sessionId }),
   z.strictObject({ id: requestId, type: z.literal("script.split"), text: z.string() }),
@@ -64,7 +70,7 @@ export const engineRequestSchema = z.discriminatedUnion("type", [
     limit: z.number().int().positive(),
   }),
   z.strictObject({ id: requestId, type: z.literal("result.release"), handle }),
-  z.strictObject({ id: requestId, type: z.literal("result.fetchMore"), handle, all: z.boolean() }),
+  z.strictObject({ id: requestId, type: z.literal("result.fetchMore"), handle, all: z.boolean(), ...paging }),
   z.strictObject({ id: requestId, type: z.literal("result.stopFetch"), handle }),
   z.strictObject({
     id: requestId,
@@ -117,6 +123,7 @@ export const engineRequestSchema = z.discriminatedUnion("type", [
     relation,
     where: z.string(),
     orderBy: z.string(),
+    ...paging,
   }),
   z.strictObject({ id: requestId, type: z.literal("table.count"), path: namespacePath, relation, where: z.string() }),
   z.strictObject({

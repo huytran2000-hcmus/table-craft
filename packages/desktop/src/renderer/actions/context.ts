@@ -9,6 +9,7 @@ import {
 } from "@table-craft/desktop/renderer/state/consoles.js";
 import { useDdl, type DdlTab } from "@table-craft/desktop/renderer/state/ddl.js";
 import { useDataSourcesDialog } from "@table-craft/desktop/renderer/state/dataSourcesDialog.js";
+import { useSettingsDialog } from "@table-craft/desktop/renderer/state/settingsDialog.js";
 import {
   capabilitiesOf,
   connectionOf,
@@ -97,6 +98,7 @@ export function modalOpen(): boolean {
   return (
     usePalette.getState().mode !== null ||
     useDataSourcesDialog.getState().target !== null ||
+    useSettingsDialog.getState().page !== null ||
     useSecretPrompt.getState().pending !== null ||
     useModal.getState().pending !== null
   );

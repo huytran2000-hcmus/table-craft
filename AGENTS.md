@@ -30,8 +30,9 @@ Run from the repository root.
   console on it, e.g.
   `{"id":"pg","pluginId":"postgres","config":{"host":"127.0.0.1","port":55432,"database":"table_craft","user":"table_craft","password":"table_craft"}}`
   for the `test:db` Postgres (decision 018 and its amendment). `TABLE_CRAFT_USER_DATA` points the
-  profile (layout, datasources, secrets, user plugins) at another directory; the smoke harness gives
-  every launch a fresh one, seeds `datasources.json` with `seedDatasources`, and on macOS passes
+  profile (layout, datasources, secrets, settings, themes, user plugins) at another directory; the
+  smoke harness gives every launch a fresh one, seeds `datasources.json` with `seedDatasources`,
+  `settings.json` with `seedSettings` and a user theme with `seedTheme`, and on macOS passes
   `--use-mock-keychain` so `safeStorage` never touches the real keychain
 - `bun run desktop:package` - electron-builder; macOS is first-class, Windows and Linux best-effort
 
@@ -66,10 +67,17 @@ packages/core/             @table-craft/core: plugin loader, session manager, re
                            completion catalog over it (`catalog/`). Knows nothing about
                            Electron
 packages/desktop/          @table-craft/desktop, the Electron app
+  src/appearance/          pure, shared by main and the renderer: the token types, the
+                           Dark, Light and High contrast themes, both densities,
+                           `resolveTheme` and the contrast pairs (`themes.ts`)
+  src/settings/            pure, shared: the `settings.json` document, its defaults and
+                           ranges, and the field-by-field reader (`settings.ts`)
   src/main/                lifecycle, the window, menus, one engine host per datasource,
                            the datasource list and secrets, console files, the query
                            history (opened at launch, written by the renderer over the
-                           `history.*` channels), the invoke channels (`ipc.ts`)
+                           `history.*` channels), `settings.json` and the user themes
+                           in `<userData>/themes/` (`settings.ts`, `themes.ts`, decision
+                           032), the invoke channels (`ipc.ts`)
   src/preload/             contextBridge; hands the engine port to the renderer and relays
                            menu clicks. `menu.ts` declares the native menu as data
   src/engine/              the utilityProcess; `protocol.ts` is the only module the
@@ -84,7 +92,9 @@ packages/desktop/          @table-craft/desktop, the Electron app
                            `table/` the table data editor: WHERE/ORDER BY bars and the
                            preview; its pending changes are `model/editBuffer.ts`;
                            `state/history.ts` records what runs, `state/executions.ts`
-                           feeds the Services tree
+                           feeds the Services tree; `state/settings.ts` holds the
+                           settings, `appearance/` applies them as CSS variables,
+                           `dialogs/Settings.tsx` edits them
 plugins/<id>/              built-in plugins (@table-craft/plugin-<id>): postgres, mysql,
                            sqlite. Each depends on plugin-api and its driver alone, and
                            ships a `table-craft-plugin.json` beside `src/`; its

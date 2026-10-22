@@ -44,7 +44,7 @@ const TYPE_PROBE_HEADERS = [
   "day",
   "moment",
 ];
-const TYPE_PROBE_CELLS = TYPE_PROBE_EXPECTED.flat().map(formatCell);
+const TYPE_PROBE_CELLS = TYPE_PROBE_EXPECTED.flat().map((value) => formatCell(value));
 const INVALID_SQL = "SELEC * FROM type_probe";
 const SLEEP_SECONDS = 30;
 /** Long enough for the statement to reach the server before the cancel does. */

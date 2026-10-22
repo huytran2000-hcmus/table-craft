@@ -3,11 +3,13 @@ import {
   type Column,
   type ExecutedStatement,
   type ExplainedPlan,
+  type ResultPaging,
   type ResultState,
   type Row,
   type SortKey,
   type TypeClass,
 } from "@table-craft/desktop/engine/protocol.js";
+import type { CellFormats } from "@table-craft/desktop/renderer/grid/format.js";
 import { columnChars } from "@table-craft/desktop/renderer/grid/widths.js";
 import { initialLayout, type ColumnLayout } from "@table-craft/desktop/renderer/model/columnLayout.js";
 import type { GridSelection } from "@table-craft/desktop/renderer/model/gridSelection.js";
@@ -41,6 +43,8 @@ export interface ResultTab extends ResultState {
   readonly stale: boolean;
   /** A pinned tab survives the next run; the others are replaced and their handles released. */
   readonly pinned: boolean;
+  /** The page size and cap it ran with; a settings change applies to the next statement (decision 032). */
+  readonly paging: ResultPaging;
 }
 
 /** What an analysed statement did to the data, for the plan's banner (plan 012 decision 12). */
@@ -124,6 +128,8 @@ export function resultTabOf(
   executed: Omit<ExecutedStatement, "transactionOpen">,
   ids: { readonly id: string; readonly title: string },
   sql: string,
+  paging: ResultPaging,
+  formats: CellFormats,
 ): ResultTab {
   const { firstWindow, ...summary } = executed;
   return {
@@ -131,8 +137,9 @@ export function resultTabOf(
     kind: "rows",
     ...ids,
     sql,
+    paging,
     windows: { [firstWindow.offset]: firstWindow.rows },
-    autoChars: columnChars(summary.columns, firstWindow.rows),
+    autoChars: columnChars(summary.columns, firstWindow.rows, summary.typeClasses, formats),
     sort: [],
     layout: initialLayout(summary.columns.length),
     selection: null,

@@ -3,7 +3,9 @@
  * import it without pulling in `electron` or zod. The types that mirror plugin-api are pinned to
  * their originals by `test/desktop/protocol.test.ts`.
  */
+import type { UserThemeEntry } from "@table-craft/desktop/appearance/themes.js";
 import type { Capability, ProbeResult } from "@table-craft/desktop/engine/protocol.js";
+import type { Settings } from "@table-craft/desktop/settings/settings.js";
 
 export const CHANNELS = {
   /** Main to preload: here is a fresh engine port for the datasource the payload names. */
@@ -16,6 +18,8 @@ export const CHANNELS = {
   engineExited: "table-craft:engine.exited",
   /** Main to a window: the user asked to close it or quit; answer with `answerClose`. */
   closeRequested: "table-craft:window.close-requested",
+  /** Main to every window: settings were saved or the themes reread; the payload is a `SettingsChanged`. */
+  settingsChanged: "table-craft:settings.changed",
 } as const;
 
 /** Renderer to main, through `ipcRenderer.invoke`; each answers with an `InvokeResult`. */
@@ -37,6 +41,10 @@ export const INVOKE_CHANNELS = {
   historySearch: "table-craft:history.search",
   historyClear: "table-craft:history.clear",
   answerClose: "table-craft:window.answer-close",
+  readSettings: "table-craft:settings.read",
+  writeSettings: "table-craft:settings.write",
+  reloadThemes: "table-craft:themes.reload",
+  openThemesFolder: "table-craft:themes.open-folder",
 } as const;
 
 /** The `window.postMessage` kind preload uses to hand a port on; contextBridge cannot carry one. */
@@ -173,6 +181,17 @@ export interface HistoryStatement {
   readonly runs: number;
 }
 
+/** The saved settings and the user themes main read beside them (decision 032). */
+export interface SettingsChanged {
+  readonly settings: Settings;
+  readonly themes: readonly UserThemeEntry[];
+}
+
+export interface SettingsSnapshot extends SettingsChanged {
+  /** Why `settings.json` was set aside at launch, for a one-time notice; null when it read cleanly. */
+  readonly warning: string | null;
+}
+
 /** A failure main can explain; anything else is a bug. */
 export interface BridgeFailure {
   readonly message: string;
@@ -220,4 +239,12 @@ export interface TableCraftBridge {
   onCloseRequested(listener: () => void): () => void;
   /** Lets the held close go ahead, or keeps the window open. */
   answerClose(proceed: boolean): Promise<InvokeResult<null>>;
+  readSettings(): Promise<InvokeResult<SettingsSnapshot>>;
+  /** Saves the whole document; every window, this one included, hears it on `onSettingsChanged`. */
+  writeSettings(settings: Settings): Promise<InvokeResult<null>>;
+  /** Rereads `<userData>/themes/`; every window hears the list on `onSettingsChanged`. */
+  reloadThemes(): Promise<InvokeResult<null>>;
+  /** Creates the themes folder if missing and opens it in the file manager. */
+  openThemesFolder(): Promise<InvokeResult<null>>;
+  onSettingsChanged(listener: (changed: SettingsChanged) => void): () => void;
 }

@@ -1,4 +1,4 @@
-import type { WireValue } from "@table-craft/desktop/engine/protocol.js";
+import type { TypeClass, WireValue } from "@table-craft/desktop/engine/protocol.js";
 
 export const NULL_TEXT = "<null>";
 /** A table editor cell that will take its column's default when submitted. */
@@ -7,9 +7,44 @@ const HEX_PREFIX = "0x";
 const ELLIPSIS = "…";
 const HEX_DIGITS_PER_BYTE = 2;
 
-/** How a cell reads in the grid. Never parses `json` or `date`: the engine already rendered them. */
-export function formatCell(value: WireValue): string {
-  if (value === null) return NULL_TEXT;
+/** The display preferences of the Data Editor settings page (decision 032: display only). */
+export interface CellFormats {
+  readonly nullText: string;
+  readonly groupDigits: boolean;
+}
+
+/** The database's own text: what copy, export, filters, the editor's input and history use. */
+export const RAW_FORMATS: CellFormats = { nullText: NULL_TEXT, groupDigits: false };
+
+const GROUPED_CLASSES: ReadonlySet<TypeClass> = new Set(["integer", "decimal", "float"]);
+/** Only plain decimal text is grouped; exponents, `NaN` and `Infinity` are drawn as printed. */
+const PLAIN_NUMBER = /^(-?)(\d+)(\.\d+)?$/;
+const DIGIT_GROUP = /\B(?=(\d{3})+(?!\d))/g;
+const GROUP_SEPARATOR = ",";
+
+/** `text` with a comma every three digits of its integer part, when it is a plain number. */
+export function groupDigits(text: string): string {
+  const match = PLAIN_NUMBER.exec(text);
+  if (match === null) return text;
+  const [, sign = "", whole = "", fraction = ""] = match;
+  return `${sign}${whole.replace(DIGIT_GROUP, GROUP_SEPARATOR)}${fraction}`;
+}
+
+/**
+ * How a cell reads in the grid. Never parses `json` or `date`: the engine already rendered them.
+ * Without `formats` it is the database's text; the grid draws and measures with the same call.
+ */
+export function formatCell(
+  value: WireValue,
+  typeClass: TypeClass = "text",
+  formats: CellFormats = RAW_FORMATS,
+): string {
+  if (value === null) return formats.nullText;
+  const text = rawText(value);
+  return formats.groupDigits && GROUPED_CLASSES.has(typeClass) ? groupDigits(text) : text;
+}
+
+function rawText(value: Exclude<WireValue, null>): string {
   if (typeof value !== "object") return String(value);
   switch (value.kind) {
     case "bigint":

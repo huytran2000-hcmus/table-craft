@@ -1,4 +1,5 @@
 import {
+  GearSix,
   At,
   BracketsRound,
   Intersect,
@@ -165,4 +166,5 @@ export const ACTION_ICONS: Readonly<Record<ActionIcon, Icon>> = {
   generate: Code,
   history: ClockCounterClockwise,
   reopen: FolderOpen,
+  settings: GearSix,
 };

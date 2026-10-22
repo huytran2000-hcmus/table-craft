@@ -34,6 +34,7 @@ import {
   type ResultTab,
 } from "@table-craft/desktop/renderer/state/resultTab.js";
 import { createResultWindows, toError } from "@table-craft/desktop/renderer/state/resultWindows.js";
+import { currentFormats, currentPaging } from "@table-craft/desktop/renderer/state/settings.js";
 
 export {
   ANALYSED_PLAN_TITLE,
@@ -507,9 +508,11 @@ export function createConsolesStore(dependencies: ConsolesDependencies) {
         const startedAt = dependencies.now();
         try {
           cursorsClosed(id);
+          const paging = currentPaging();
           const { transactionOpen, ...executed } = await client.call("statement.execute", {
             sessionId,
             sql: statement.sql,
+            ...paging,
           });
           const elapsed = dependencies.now() - startedAt;
           ended({ durationMs: elapsed, outcome: "success", rowCount: rowsOf(executed), message: null });
@@ -522,6 +525,8 @@ export function createConsolesStore(dependencies: ConsolesDependencies) {
               executed,
               { id: `${id}/result-${++resultIds}`, title: nextResultTitle(current.results) },
               statement.sql,
+              paging,
+              currentFormats(),
             );
             patch(id, { results: [...current.results, tab], activeResult: tab.id, transactionOpen });
           } else {
@@ -891,9 +896,11 @@ export function createConsolesStore(dependencies: ConsolesDependencies) {
             cursorsClosed(id);
             ended = started(id, tab.sql);
             statementStartedAt = dependencies.now();
+            const paging = currentPaging();
             const { transactionOpen, ...executed } = await client.call("statement.execute", {
               sessionId,
               sql: tab.sql,
+              ...paging,
             });
             const kind = statement?.kind ?? "read";
             const elapsed = dependencies.now() - statementStartedAt;
@@ -906,7 +913,13 @@ export function createConsolesStore(dependencies: ConsolesDependencies) {
             } else {
               if (!latest.stale) void client.call("result.release", { handle: latest.handle }).catch(() => undefined);
               invalidateWindows(resultId);
-              const fresh = resultTabOf(executed, { id: latest.id, title: latest.title }, latest.sql);
+              const fresh = resultTabOf(
+                executed,
+                { id: latest.id, title: latest.title },
+                latest.sql,
+                paging,
+                currentFormats(),
+              );
               const names = (columns: readonly Column[]) => columns.map((column) => column.name);
               const layout = carriedLayout(latest.layout, names(latest.columns), names(fresh.columns));
               const kept = layout === latest.layout;

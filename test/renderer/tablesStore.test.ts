@@ -15,6 +15,8 @@ import {
   submittedScript,
 } from "@table-craft/desktop/renderer/state/tables.js";
 import type { HistoryEntry } from "@table-craft/desktop/preload/bridge.js";
+import { useSettings } from "@table-craft/desktop/renderer/state/settings.js";
+import { DEFAULT_SETTINGS } from "@table-craft/desktop/settings/settings.js";
 
 const TARGET = { datasourceId: "pg", path: ["public"], relation: "edit_probe" };
 const IDENTITY: EditableIdentity = { identity: ["id"] };
@@ -130,11 +132,31 @@ describe("tables store", () => {
     const { session, calls } = await openedTable();
 
     expect(calls("table.query")).toEqual([
-      { sessionId: "s1", path: ["public"], relation: "edit_probe", where: "", orderBy: "" },
+      {
+        sessionId: "s1",
+        path: ["public"],
+        relation: "edit_probe",
+        where: "",
+        orderBy: "",
+        pageRows: DEFAULT_SETTINGS.data.pageRows,
+        fetchAllCap: DEFAULT_SETTINGS.data.fetchAllCap,
+      },
     ]);
     expect(session().status).toBe("ready");
     expect(session().result?.rowCount).toBe(2);
     expect(session().editable).toEqual(IDENTITY);
+  });
+
+  it("givenPageSizeSetting_whenTableOpened_thenQueryCarriesIt", async () => {
+    const before = useSettings.getState().settings;
+    useSettings.setState({ settings: { ...before, data: { ...before.data, pageRows: 100, fetchAllCap: 2_000 } } });
+    try {
+      const { calls } = await openedTable();
+
+      expect(calls("table.query")).toEqual([expect.objectContaining({ pageRows: 100, fetchAllCap: 2_000 })]);
+    } finally {
+      useSettings.setState({ settings: before });
+    }
   });
 
   it("givenRefusedWhere_whenApplied_thenErrorUnderBarsAndRowsKept", async () => {

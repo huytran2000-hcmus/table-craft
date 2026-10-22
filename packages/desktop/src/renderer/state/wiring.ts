@@ -7,7 +7,10 @@ import {
   useDatasources,
   type DatasourcesStore,
 } from "@table-craft/desktop/renderer/state/datasources.js";
+import { applyAppearance } from "@table-craft/desktop/renderer/appearance/apply.js";
+import { appearanceOf } from "@table-craft/desktop/renderer/appearance/tokens.js";
 import { useExecutions, type ExecutionsStore } from "@table-craft/desktop/renderer/state/executions.js";
+import { themeOf, useSettings, type SettingsStore } from "@table-craft/desktop/renderer/state/settings.js";
 import { tablesOf, useTables, type TablesStore } from "@table-craft/desktop/renderer/state/tables.js";
 import { useTabs, type TabsStore } from "@table-craft/desktop/renderer/state/tabs.js";
 
@@ -112,4 +115,58 @@ export function installDatasourceSync(onFirstList: () => void): () => void {
     offChanged();
     offExited();
   };
+}
+
+const DARK_QUERY = "(prefers-color-scheme: dark)";
+const MORE_CONTRAST_QUERY = "(prefers-contrast: more)";
+
+/** The part of a `MediaQueryList` the appearance follows. */
+export interface MediaQuery {
+  readonly matches: boolean;
+  addEventListener(type: "change", listener: () => void): void;
+  removeEventListener(type: "change", listener: () => void): void;
+}
+
+export interface AppearanceTarget {
+  readonly matchMedia: (query: string) => MediaQuery;
+  readonly apply: typeof applyAppearance;
+}
+
+/**
+ * Keeps the window's look in step with the settings (decision 032): applies them now, again on
+ * every change, and whenever the OS's scheme or contrast preference changes, which a `"system"`
+ * theme follows (plan 013 decision 8). Returns the unsubscribe.
+ */
+export function installAppearance(
+  store: SettingsStore = useSettings,
+  target: AppearanceTarget = { matchMedia: (query) => window.matchMedia(query), apply: applyAppearance },
+): () => void {
+  const dark = target.matchMedia(DARK_QUERY);
+  const contrast = target.matchMedia(MORE_CONTRAST_QUERY);
+  const readSystem = () =>
+    store.getState().setSystem({ prefersDark: dark.matches, prefersMoreContrast: contrast.matches });
+  const apply = () => {
+    const state = store.getState();
+    const { theme } = themeOf(state);
+    target.apply(appearanceOf(state.settings, theme), theme.colorScheme);
+  };
+  readSystem();
+  apply();
+  const offStore = store.subscribe((state, previous) => {
+    if (state.settings !== previous.settings || state.system !== previous.system || state.themes !== previous.themes) {
+      apply();
+    }
+  });
+  dark.addEventListener("change", readSystem);
+  contrast.addEventListener("change", readSystem);
+  return () => {
+    offStore();
+    dark.removeEventListener("change", readSystem);
+    contrast.removeEventListener("change", readSystem);
+  };
+}
+
+/** Follows main's broadcasts of saved settings and reread themes; returns the unsubscribe. */
+export function installSettingsSync(store: SettingsStore = useSettings): () => void {
+  return bridge().onSettingsChanged((changed) => store.getState().changed(changed));
 }

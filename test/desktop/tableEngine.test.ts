@@ -9,6 +9,7 @@ import type {
   SubmittedEdits,
   TableQuery,
 } from "@table-craft/desktop/engine/protocol.js";
+import { RESULT_FETCH_ALL_CAP, RESULT_PAGE_ROWS } from "@table-craft/desktop/engine/protocol.js";
 import { SQLITE_MANIFEST } from "../support/manifests.js";
 import { seededSqliteFile } from "../support/sqliteFixture.js";
 
@@ -18,6 +19,7 @@ const LOADED_SQLITE: PluginLoadResult = {
   manifest: SQLITE_MANIFEST,
   plugin: sqlite,
 };
+const PAGING = { pageRows: RESULT_PAGE_ROWS, fetchAllCap: RESULT_FETCH_ALL_CAP };
 const MAIN = ["main"];
 const EDIT_PROBE = "edit_probe";
 
@@ -48,7 +50,7 @@ async function query(
   orderBy = "",
 ): Promise<TableQuery> {
   return resultOf<TableQuery>(
-    await connection.handle({ id: 2, type: "table.query", sessionId, path: MAIN, relation, where, orderBy }),
+    await connection.handle({ id: 2, type: "table.query", ...PAGING, sessionId, path: MAIN, relation, where, orderBy }),
   );
 }
 
@@ -100,6 +102,7 @@ describe("engine table editor", () => {
     const response = await connection.handle({
       id: 9,
       type: "table.query",
+      ...PAGING,
       sessionId,
       path: MAIN,
       relation: EDIT_PROBE,
@@ -116,6 +119,7 @@ describe("engine table editor", () => {
     const response = await connection.handle({
       id: 9,
       type: "table.query",
+      ...PAGING,
       sessionId,
       path: MAIN,
       relation: "gone",
@@ -192,6 +196,7 @@ describe("engine table editor", () => {
       await connection.handle({
         id: 3,
         type: "statement.execute",
+        ...PAGING,
         sessionId: other,
         sql: "DELETE FROM edit_probe WHERE id = 2",
       }),

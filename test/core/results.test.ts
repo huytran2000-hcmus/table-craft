@@ -12,6 +12,8 @@ const ROW_COUNT = 1_200;
 const WINDOW_OFFSET = 1_000;
 const HUGE_ROW_COUNT = 200_000;
 const SMALL_PAGE = 2;
+const PER_CALL_PAGE = 10;
+const PER_CALL_CAP = 25;
 const INTEGER_COLUMN: readonly Column[] = [{ name: "n", type: "INTEGER" }];
 
 function resultOf(count: number, onReturn?: () => void): ExecuteResult {
@@ -162,6 +164,19 @@ describe("ResultStore", () => {
     expect(stopped.cursorOpen).toBe(true);
     expect(stopped.rowCount).toBeLessThan(RESULT_FETCH_ALL_CAP);
     expect((await store.fetchMore(handle, { all: false })).rowCount).toBe(stopped.rowCount + RESULT_PAGE_ROWS);
+  });
+
+  it("givenLimitsWithEachCall_whenPutAndFetched_thenPageAndCapAreTheCallers", async () => {
+    const store = new ResultStore();
+    const limits = { pageRows: PER_CALL_PAGE, fetchAllCap: PER_CALL_CAP };
+    const { handle, rowCount } = await store.put(resultOf(ROW_COUNT), limits);
+
+    const nextPage = await store.fetchMore(handle, { all: false, ...limits });
+    const all = await store.fetchMore(handle, { all: true, ...limits });
+
+    expect(rowCount).toBe(PER_CALL_PAGE);
+    expect(nextPage.rowCount).toBe(2 * PER_CALL_PAGE);
+    expect(all).toEqual({ rowCount: PER_CALL_CAP, complete: false, cursorOpen: false });
   });
 
   it("givenFailingCursor_whenFetchMore_thenRejectsAndCursorClosed", async () => {

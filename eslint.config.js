@@ -60,6 +60,36 @@ const RENDERER_FENCE_GLOBALS = ["process", "Buffer", "require", "__dirname", "__
 const RENDERER_FENCE_RULE =
   "The renderer is a pure view. Reach the engine over the port; import types from @table-craft/desktop/engine/protocol.js.";
 
+/**
+ * Theme and settings data that main and the renderer both import (decision 032): it must load in
+ * either process, so it touches neither Node, electron, zod nor the DOM.
+ */
+const SHARED_FILES = ["packages/desktop/src/appearance/**/*.ts", "packages/desktop/src/settings/**/*.ts"];
+const SHARED_PURITY_IMPORTS = [
+  ...CORE_IMPORTS,
+  ...ELECTRON_IMPORTS,
+  "@table-craft/plugin-*",
+  "@table-craft/plugin-*/**",
+  "@table-craft/desktop/engine/**",
+  "@table-craft/desktop/main/**",
+  "@table-craft/desktop/preload/**",
+  "@table-craft/desktop/renderer/**",
+  "node:*",
+  "zod",
+  "zod/**",
+];
+const SHARED_PURITY_GLOBALS = [
+  ...RENDERER_FENCE_GLOBALS,
+  "window",
+  "document",
+  "navigator",
+  "localStorage",
+  "matchMedia",
+  "getComputedStyle",
+];
+const SHARED_PURITY_RULE =
+  "Shared appearance and settings modules are pure data for main and the renderer: no Node, electron, zod or DOM.";
+
 /** @param {...{ group: string[], message: string }} groups */
 function restrictImports(...groups) {
   return [
@@ -127,6 +157,16 @@ export default tseslint.config(
       "no-restricted-globals": [
         "error",
         ...RENDERER_FENCE_GLOBALS.map((name) => ({ name, message: RENDERER_FENCE_RULE })),
+      ],
+    },
+  },
+  {
+    files: SHARED_FILES,
+    rules: {
+      "no-restricted-imports": restrictImports({ group: SHARED_PURITY_IMPORTS, message: SHARED_PURITY_RULE }),
+      "no-restricted-globals": [
+        "error",
+        ...SHARED_PURITY_GLOBALS.map((name) => ({ name, message: SHARED_PURITY_RULE })),
       ],
     },
   },

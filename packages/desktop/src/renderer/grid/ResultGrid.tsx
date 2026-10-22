@@ -20,11 +20,10 @@ import { currentPlatform, formatChord } from "@table-craft/desktop/renderer/acti
 import { REGION_ATTRIBUTE } from "@table-craft/desktop/renderer/actions/context.js";
 import { GRID_ACTION_IDS, type SortArgs } from "@table-craft/desktop/renderer/actions/gridActions.js";
 import { invoke, registry, useActionEnabled } from "@table-craft/desktop/renderer/actions/index.js";
-import { DEFAULT_APPEARANCE } from "@table-craft/desktop/renderer/appearance/tokens.js";
-import { DEFAULT_TEXT, formatCell, NULL_TEXT } from "@table-craft/desktop/renderer/grid/format.js";
+import { DEFAULT_TEXT, formatCell, type CellFormats } from "@table-craft/desktop/renderer/grid/format.js";
 import { GridToolbar } from "@table-craft/desktop/renderer/grid/GridToolbar.js";
 import { ValuePanel } from "@table-craft/desktop/renderer/grid/ValuePanel.js";
-import { displayChars } from "@table-craft/desktop/renderer/grid/widths.js";
+import { displayChars, widerChars } from "@table-craft/desktop/renderer/grid/widths.js";
 import {
   columnTemplate,
   fittedTo,
@@ -48,11 +47,11 @@ import {
 import { sortMarkOf } from "@table-craft/desktop/renderer/model/sortKeys.js";
 import { rowAt, windowOffsetOf, type ResultTab } from "@table-craft/desktop/renderer/state/resultTab.js";
 import { useLayout } from "@table-craft/desktop/renderer/state/layout.js";
+import { currentFormats, useCellFormats, useRowHeightPx } from "@table-craft/desktop/renderer/state/settings.js";
 import { cn } from "@table-craft/desktop/renderer/ui/cn.js";
 import { SortAscendingMark, SortDescendingMark, TYPE_GLYPHS } from "@table-craft/desktop/renderer/ui/icons.js";
 
 const OVERSCAN_ROWS = 20;
-const ROW_HEIGHT_PX = DEFAULT_APPEARANCE.density.rowHeightPx;
 const MIN_GUTTER_DIGITS = 2;
 const STALE_TEXT = "Results from a closed connection; rerun to refresh";
 const CELL = "truncate border-r border-line px-cell leading-(--spacing-row)";
@@ -203,12 +202,21 @@ function Rows({ ownerId, result, visible, host, edits }: RowsProps) {
   const { windows, selection } = result;
   const rowCount = edits === undefined ? result.rowCount : gridRowCount(edits.buffer, result.rowCount);
   const bounds: GridBounds = { rows: rowCount, columns: visible.length };
+  const rowHeightPx = useRowHeightPx();
   const virtualizer = useVirtualizer({
     count: rowCount,
     getScrollElement: () => scroller.current,
-    estimateSize: () => ROW_HEIGHT_PX,
+    estimateSize: () => rowHeightPx,
     overscan: OVERSCAN_ROWS,
   });
+  useEffect(() => virtualizer.measure(), [virtualizer, rowHeightPx]);
+  const formats = useCellFormats();
+  const { autoChars: storedChars, typeClasses } = result;
+  /** Widths were measured with the formats of their time; a later NULL text or grouping must still fit. */
+  const autoChars = useMemo(
+    () => widerChars(storedChars, Object.values(windows).flat(), typeClasses, formats),
+    [storedChars, windows, typeClasses, formats],
+  );
   const items = virtualizer.getVirtualItems();
   const first = items[0]?.index;
   const last = items.at(-1)?.index;
@@ -291,7 +299,7 @@ function Rows({ ownerId, result, visible, host, edits }: RowsProps) {
         return;
       }
     }
-    const page = Math.max(Math.floor((scroller.current?.clientHeight ?? ROW_HEIGHT_PX) / ROW_HEIGHT_PX) - 1, 1);
+    const page = Math.max(Math.floor((scroller.current?.clientHeight ?? rowHeightPx) / rowHeightPx) - 1, 1);
     const moves: Record<string, [number, number]> = {
       ArrowUp: [-1, 0],
       ArrowDown: [1, 0],
@@ -312,7 +320,7 @@ function Rows({ ownerId, result, visible, host, edits }: RowsProps) {
   }
 
   const gutterDigits = Math.max(String(rowCount).length, MIN_GUTTER_DIGITS);
-  const template = `calc(${String(gutterDigits)}ch + 2 * var(--spacing-cell)) ${columnTemplate(result.layout, result.autoChars)}`;
+  const template = `calc(${String(gutterDigits)}ch + 2 * var(--spacing-cell)) ${columnTemplate(result.layout, autoChars)}`;
   const rect = selection === null ? null : rectOf(selection);
 
   return (
@@ -413,7 +421,8 @@ function Rows({ ownerId, result, visible, host, edits }: RowsProps) {
                       mark={row.mark ?? (pending === undefined ? null : "modified")}
                       row={item.index}
                       position={position}
-                      numeric={NUMERIC.has(result.typeClasses[column] ?? "text")}
+                      typeClass={result.typeClasses[column] ?? "text"}
+                      formats={formats}
                       selected={rect !== null && contains(rect, item.index, position)}
                       focused={selection?.focus.row === item.index && selection.focus.column === position}
                     />
@@ -519,13 +528,15 @@ function CellEditorInput({
 function cellDisplay(
   value: WireValue | undefined,
   pending: CellInput | undefined,
+  typeClass: TypeClass,
+  formats: CellFormats,
 ): { readonly text: string; readonly tone: "null" | "default" | null } {
   if (pending?.kind === "text") return { text: pending.text, tone: null };
-  if (pending?.kind === "null") return { text: NULL_TEXT, tone: "null" };
+  if (pending?.kind === "null") return { text: formats.nullText, tone: "null" };
   if (pending?.kind === "default") return { text: DEFAULT_TEXT, tone: "default" };
   if (value === undefined) return { text: "…", tone: null };
-  if (value === null) return { text: NULL_TEXT, tone: "null" };
-  return { text: formatCell(value), tone: null };
+  if (value === null) return { text: formats.nullText, tone: "null" };
+  return { text: formatCell(value, typeClass, formats), tone: null };
 }
 
 const MARK_CLASS: Readonly<Record<EditMark, string>> = {
@@ -540,7 +551,8 @@ function GridCell({
   mark,
   row,
   position,
-  numeric,
+  typeClass,
+  formats,
   selected,
   focused,
 }: {
@@ -549,11 +561,13 @@ function GridCell({
   readonly mark: EditMark | null;
   readonly row: number;
   readonly position: number;
-  readonly numeric: boolean;
+  readonly typeClass: TypeClass;
+  readonly formats: CellFormats;
   readonly selected: boolean;
   readonly focused: boolean;
 }) {
-  const shown = cellDisplay(value, pending);
+  const shown = cellDisplay(value, pending, typeClass, formats);
+  const numeric = NUMERIC.has(typeClass);
   return (
     <div
       role="gridcell"
@@ -637,8 +651,12 @@ function HeaderCell({ ownerId, host, result, column, position, bounds, select }:
 
   function fit(): void {
     let widest = displayChars(name);
+    const typeClass = result.typeClasses[column];
+    const formats = currentFormats();
     for (const rows of Object.values(result.windows)) {
-      for (const row of rows) widest = Math.max(widest, displayChars(formatCell(row[column] ?? null)));
+      for (const row of rows) {
+        widest = Math.max(widest, displayChars(formatCell(row[column] ?? null, typeClass, formats)));
+      }
     }
     setLayout(fittedTo(result.layout, column, widest));
   }

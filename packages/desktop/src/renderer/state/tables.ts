@@ -40,6 +40,7 @@ import {
 import { history } from "@table-craft/desktop/renderer/state/history.js";
 import { resultTabOf, rowAt, type ResultTab } from "@table-craft/desktop/renderer/state/resultTab.js";
 import { createResultWindows, toError } from "@table-craft/desktop/renderer/state/resultWindows.js";
+import { currentFormats, currentPaging } from "@table-craft/desktop/renderer/state/settings.js";
 
 /** Which table a tab shows: a relation inside a namespace path of a datasource. */
 export interface TableTarget {
@@ -392,12 +393,14 @@ export function createTablesStore(dependencies: TablesDependencies) {
       const ended = started(id, LOAD_LABEL, null);
       try {
         cursorClosed(id);
+        const paging = currentPaging();
         const answer = await client.call("table.query", {
           sessionId,
           path: current.path,
           relation: current.relation,
           where: clauses.where,
           orderBy: clauses.orderBy,
+          ...paging,
         });
         ended({ outcome: "success", rowCount: answer.statement.rowCount, message: null, sql: answer.sql });
         const latest = get().tables[id];
@@ -411,6 +414,8 @@ export function createTablesStore(dependencies: TablesDependencies) {
           answer.statement,
           { id: `${id}/data-${String(++resultIds)}`, title: RESULT_TITLE },
           answer.sql,
+          paging,
+          currentFormats(),
         );
         const names = (columns: readonly { readonly name: string }[]) => columns.map((column) => column.name);
         const layout =

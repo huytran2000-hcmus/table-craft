@@ -301,38 +301,38 @@ A request is `{ id, type, ...params }`; the engine answers `{ id, type, result }
 `id` and `type`, or `engine.error`. Requests are parsed before routing. Sessions and result
 handles belong to the port that created them and are released when it closes.
 
-| Request                 | Params                                                   | Result                                                                                                         |
-| ----------------------- | -------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
-| `session.open`          | none                                                     | `{ sessionId, pluginName, capabilities, serverVersion }`                                                       |
-| `script.split`          | `text`                                                   | `ClassifiedStatement[]`: `{ from, to, sql, kind, destructive }`                                                |
-| `statement.execute`     | `sessionId`, `sql`                                       | `{ handle, columns, typeClasses, rowCount, complete, cursorOpen, rowsAffected, firstWindow, transactionOpen }` |
-| `sql.explainable`       | `sql`, `analyze`                                         | `Explainability`: `{ ok: true, writes }` or `{ ok: false, reason }`; no session; needs `explain`               |
-| `statement.explain`     | `sessionId`, `sql`, `analyze`                            | `{ plan: ExplainedPlan, transactionOpen }`; needs `explain`, or `explainAnalyze` to analyse; see Explain       |
-| `transaction.setMode`   | `sessionId`, `mode`                                      | `{ mode, transactionOpen }`                                                                                    |
-| `transaction.commit`    | `sessionId`                                              | `{ mode, transactionOpen }`; a no-op when nothing is open                                                      |
-| `transaction.rollback`  | `sessionId`                                              | `{ mode, transactionOpen }`; a no-op when nothing is open                                                      |
-| `statement.cancel`      | `sessionId`                                              | `null`; stops the running statement, a no-op when idle                                                         |
-| `result.window`         | `handle`, `offset`, `limit`                              | `{ offset, rows }`, at most `RESULT_WINDOW_ROWS` rows                                                          |
-| `result.release`        | `handle`                                                 | `null`; releasing twice is not an error                                                                        |
-| `result.fetchMore`      | `handle`, `all`                                          | `ResultState { rowCount, complete, cursorOpen }`; one page, or up to `RESULT_FETCH_ALL_CAP`                    |
-| `result.stopFetch`      | `handle`                                                 | `ResultState`; stops a running fetch, the cursor stays open                                                    |
-| `result.sort`           | `handle`, `keys: { column, direction }[]`                | `ResultState`; windows read through the new order, `[]` restores it                                            |
-| `result.extract`        | `handle`, `extractor`, `rows: { from, to }[]`, `columns` | the text, rows in sorted order                                                                                 |
-| `result.export`         | `handle`, `extractor`, `path`, `columns`                 | `{ path, rows, bytes, elapsedMs }`; `path` must be absolute                                                    |
-| `session.close`         | `sessionId`                                              | `null`; releases the session's handles, then closes it                                                         |
-| `catalog.namespaces`    | `refresh?`                                               | `Namespace[]`                                                                                                  |
-| `catalog.describe`      | `path`, `refresh?`                                       | `{ catalog, introspectedAt, elapsedMs }`                                                                       |
-| `catalog.qualifiedName` | `path`, `name`                                           | the plugin's quoting, e.g. `"public"."orders"`                                                                 |
-| `catalog.definition`    | `path`, `name`                                           | the relation's DDL text, read anew each time; needs `ddl`; see DDL and SQL generation                          |
-| `sql.generate`          | `path`, `name`, `statement`                              | `create`, `drop`, `select`, `insert` or `update` text for the relation; `create` is `catalog.definition`       |
-| `table.query`           | `sessionId`, `path`, `relation`, `where`, `orderBy`      | `TableQuery { statement, sql, editable, columns, foreignKeys, referencing }`; see Table data editor            |
-| `table.count`           | `path`, `relation`, `where`                              | the row count, read on a short-lived session of its own                                                        |
-| `table.orderBy`         | `terms: { name, direction }[]`                           | the ORDER BY text in the plugin's quoting, e.g. `"qty" DESC, "label"`                                          |
-| `table.condition`       | `handle`, `rows`, `columns: { column, name }[]`          | a WHERE condition matching those rows' values, written against `name`                                          |
-| `completion.complete`   | `text`, `offset`, `scope?: { path, relation }`           | `{ from, to, items, validFor }`; see Completion and navigation                                                 |
-| `navigation.resolve`    | `text`, `offset`                                         | `Declaration` or `null`; see Completion and navigation                                                         |
-| `edits.preview`         | `handle`, `edits: RowEdit[]`                             | the statements Submit would run                                                                                |
-| `edits.submit`          | `sessionId`, `handle`, `edits: RowEdit[]`                | `{ statements, rowsAffected }`, or `editRejected` after a rollback                                             |
+| Request                 | Params                                                                         | Result                                                                                                         |
+| ----------------------- | ------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------- |
+| `session.open`          | none                                                                           | `{ sessionId, pluginName, capabilities, serverVersion }`                                                       |
+| `script.split`          | `text`                                                                         | `ClassifiedStatement[]`: `{ from, to, sql, kind, destructive }`                                                |
+| `statement.execute`     | `sessionId`, `sql`, `pageRows`, `fetchAllCap`                                  | `{ handle, columns, typeClasses, rowCount, complete, cursorOpen, rowsAffected, firstWindow, transactionOpen }` |
+| `sql.explainable`       | `sql`, `analyze`                                                               | `Explainability`: `{ ok: true, writes }` or `{ ok: false, reason }`; no session; needs `explain`               |
+| `statement.explain`     | `sessionId`, `sql`, `analyze`                                                  | `{ plan: ExplainedPlan, transactionOpen }`; needs `explain`, or `explainAnalyze` to analyse; see Explain       |
+| `transaction.setMode`   | `sessionId`, `mode`                                                            | `{ mode, transactionOpen }`                                                                                    |
+| `transaction.commit`    | `sessionId`                                                                    | `{ mode, transactionOpen }`; a no-op when nothing is open                                                      |
+| `transaction.rollback`  | `sessionId`                                                                    | `{ mode, transactionOpen }`; a no-op when nothing is open                                                      |
+| `statement.cancel`      | `sessionId`                                                                    | `null`; stops the running statement, a no-op when idle                                                         |
+| `result.window`         | `handle`, `offset`, `limit`                                                    | `{ offset, rows }`, at most `RESULT_WINDOW_ROWS` rows                                                          |
+| `result.release`        | `handle`                                                                       | `null`; releasing twice is not an error                                                                        |
+| `result.fetchMore`      | `handle`, `all`, `pageRows`, `fetchAllCap`                                     | `ResultState { rowCount, complete, cursorOpen }`; one page, or up to `fetchAllCap`                             |
+| `result.stopFetch`      | `handle`                                                                       | `ResultState`; stops a running fetch, the cursor stays open                                                    |
+| `result.sort`           | `handle`, `keys: { column, direction }[]`                                      | `ResultState`; windows read through the new order, `[]` restores it                                            |
+| `result.extract`        | `handle`, `extractor`, `rows: { from, to }[]`, `columns`                       | the text, rows in sorted order                                                                                 |
+| `result.export`         | `handle`, `extractor`, `path`, `columns`                                       | `{ path, rows, bytes, elapsedMs }`; `path` must be absolute                                                    |
+| `session.close`         | `sessionId`                                                                    | `null`; releases the session's handles, then closes it                                                         |
+| `catalog.namespaces`    | `refresh?`                                                                     | `Namespace[]`                                                                                                  |
+| `catalog.describe`      | `path`, `refresh?`                                                             | `{ catalog, introspectedAt, elapsedMs }`                                                                       |
+| `catalog.qualifiedName` | `path`, `name`                                                                 | the plugin's quoting, e.g. `"public"."orders"`                                                                 |
+| `catalog.definition`    | `path`, `name`                                                                 | the relation's DDL text, read anew each time; needs `ddl`; see DDL and SQL generation                          |
+| `sql.generate`          | `path`, `name`, `statement`                                                    | `create`, `drop`, `select`, `insert` or `update` text for the relation; `create` is `catalog.definition`       |
+| `table.query`           | `sessionId`, `path`, `relation`, `where`, `orderBy`, `pageRows`, `fetchAllCap` | `TableQuery { statement, sql, editable, columns, foreignKeys, referencing }`; see Table data editor            |
+| `table.count`           | `path`, `relation`, `where`                                                    | the row count, read on a short-lived session of its own                                                        |
+| `table.orderBy`         | `terms: { name, direction }[]`                                                 | the ORDER BY text in the plugin's quoting, e.g. `"qty" DESC, "label"`                                          |
+| `table.condition`       | `handle`, `rows`, `columns: { column, name }[]`                                | a WHERE condition matching those rows' values, written against `name`                                          |
+| `completion.complete`   | `text`, `offset`, `scope?: { path, relation }`                                 | `{ from, to, items, validFor }`; see Completion and navigation                                                 |
+| `navigation.resolve`    | `text`, `offset`                                                               | `Declaration` or `null`; see Completion and navigation                                                         |
+| `edits.preview`         | `handle`, `edits: RowEdit[]`                                                   | the statements Submit would run                                                                                |
+| `edits.submit`          | `sessionId`, `handle`, `edits: RowEdit[]`                                      | `{ statements, rowsAffected }`, or `editRejected` after a rollback                                             |
 
 A statement reads its first page and keeps the cursor open; the session's next statement, a
 commit, rollback or mode switch, `result.release`, `session.close` and the engine's exit close it
@@ -350,11 +350,16 @@ namespace list and each described catalog (`core/catalog/cache.ts`) with when it
 and how long it took; `refresh` asks again, and a second describe of a path in flight joins the
 first. The cache dies with the engine, so a disconnect or an engine exit forgets it.
 
-| Constant               | Value   | Meaning                                                       |
-| ---------------------- | ------- | ------------------------------------------------------------- |
-| `RESULT_WINDOW_ROWS`   | 500     | Rows per window; `firstWindow` is the window at offset 0      |
-| `RESULT_PAGE_ROWS`     | 500     | Rows a statement and each Fetch Next Page read (decision 025) |
-| `RESULT_FETCH_ALL_CAP` | 100 000 | Rows Fetch All stops at; the cursor closes there              |
+| Constant               | Value   | Meaning                                                                     |
+| ---------------------- | ------- | --------------------------------------------------------------------------- |
+| `RESULT_WINDOW_ROWS`   | 500     | Rows per window; `firstWindow` is the window at offset 0                    |
+| `RESULT_PAGE_ROWS`     | 500     | The default `pageRows`: rows a statement and each Fetch Next Page read      |
+| `RESULT_FETCH_ALL_CAP` | 100 000 | The default `fetchAllCap`: rows Fetch All stops at; the cursor closes there |
+
+`pageRows` (10–10,000) and `fetchAllCap` (1,000–1,000,000, at least `pageRows`) are the Data
+Editor settings, sent with every `statement.execute`, `table.query` and `result.fetchMore`, so the
+engine holds no preferences (decision 032). A result keeps the paging it ran with; a change in
+Settings applies to the next statement (decision 025).
 
 ### engine.error
 
@@ -460,11 +465,17 @@ run either.
 | `services.clearExecutions`               | Clear Executions                      |          |                        |
 | `services.copySql`                       | Copy Execution SQL                    |          |                        |
 | `services.openInConsole`                 | Open Execution in Console             |          |                        |
+| `settings.show`                          | Settings…                             | `⌘,`     | `Ctrl+,`               |
+| `editor.zoomIn`                          | Increase Editor Font Size             | `⌘=` ³   | `Ctrl+=` ³             |
+| `editor.zoomOut`                         | Decrease Editor Font Size             | `⌘-` ³   | `Ctrl+-` ³             |
+| `editor.zoomReset`                       | Reset Editor Font Size                | `⌘0` ³   | `Ctrl+0` ³             |
 
 ¹ Only with focus in the Database tool window (`shortcutRegion`); elsewhere the key reaches the
 focused element. ² Only with focus in a result grid (region `grid`); in the editor and
 the value panel ⌘C and ⌘A stay native. The datasource actions act on the selected tree node with focus in the Database
 tool window, else on the active console's datasource. `console.new` opens on that datasource too.
+³ Only with focus in the SQL editor (region `editor`), so `⌘-` in the Database tool window is still
+Collapse All (decision 027).
 
 Shortcuts are declared as platform-neutral chords (`Mod+Shift+A`, `Shift Shift`) and dispatched by
 one capture-phase `keydown` listener on the window. A chord whose action is disabled reaches the
@@ -480,8 +491,10 @@ Find Action (`⇧⌘A`) and Search Everywhere (`⇧⇧`) are one palette. Search
 them. Results are ranked by an in-house fuzzy scorer, and with an empty query the most recently
 run actions come first.
 
-The native menu is declared in `preload/menu.ts` and built by main: File (New Data Source…, New
-Console; Data Source Properties…, Disconnect, Synchronize; Close Tab),
+The native menu is declared in `preload/menu.ts` and built by main. On macOS the app menu is
+explicit: About, Settings… (`⌘,`), Services, Hide, Hide Others, Show All, Quit. Then File (New Data
+Source…, New Console; Data Source Properties…, Disconnect, Synchronize; Settings… on Windows and
+Linux only; Close Tab),
 Edit (role), View (Tool Windows ▸ Database, Services; Hide All Tool Windows; Show System Schemas;
 Query History…, Open Closed Console…; Find Action…; Search
 Everywhere; Toggle Developer Tools), Window (role, macOS only), Help (Find Action…). An item shows its
@@ -539,8 +552,8 @@ statement's error also shows in the toolbar.
 Plan 007. `renderer/grid/ResultGrid.tsx` draws a result as DataGrip does: a toolbar, a sticky
 header and row-number gutter, virtualized rows, and an optional value panel on the right.
 
-**Paging.** A statement answers with its first `RESULT_PAGE_ROWS` rows and an open cursor
-(decision 025). The toolbar reads, left to right: Fetch Next Page, Fetch All, Rerun, Cancel fetch
+**Paging.** A statement answers with its first page, Settings' page size (500 by default), and an
+open cursor (decision 025). The toolbar reads, left to right: Fetch Next Page, Fetch All, Rerun, Cancel fetch
 while a fetch runs, the state label, then the extractor select, Copy, Export Data… and Value Panel.
 
 | Label                               | When                                                           |
@@ -548,7 +561,7 @@ while a fetch runs, the state label, then the extractor select, Copy, Export Dat
 | `5,000 rows`                        | Everything was read                                            |
 | `500+ rows`                         | The cursor is open; Fetch Next Page and Fetch All are enabled  |
 | `500+ rows · fetching stopped`      | Something closed the cursor first; Rerun runs it again         |
-| `100,000+ rows · fetch cap reached` | Fetch All stopped at `RESULT_FETCH_ALL_CAP`                    |
+| `100,000+ rows · fetch cap reached` | Fetch All stopped at Settings' Fetch All limit                 |
 | `… · sorted locally`                | Appended while a local sort is on a result not completely read |
 
 **Columns.** The header shows the column name with a type glyph (number, text, date, bool, json,
@@ -588,8 +601,12 @@ Bytes carry only their 32-byte preview, so a longer value copies clipped (`0x…
 `<result title>.<ext>`), then sends `result.export` with the visible columns; Output logs rows,
 size and time.
 
-**Values.** `NULL` reads `<null>` in `text-grid-null` italics, unlike the text `'<null>'`. The
-value panel (⇧↵) shows the focused cell: JSON pretty-printed in a read-only editor, text wrapped,
+**Values.** `NULL` reads as Settings' NULL text (`<null>` by default) in `text-grid-null`
+italics, unlike the text `'<null>'`. With Group digits on, a number cell (`integer`, `decimal`,
+`float`) whose text is `^-?\d+(\.\d+)?$` draws `,` every three integer digits; exponents, `NaN`
+and `Infinity` draw as printed. Column widths measure the drawn text. Both are display only: the
+value panel, Copy, Export, the filters, the inline editor and history keep the database's text
+(decision 032). The value panel (⇧↵) shows the focused cell: JSON pretty-printed in a read-only editor, text wrapped,
 bytes as hex lines with `32 of 2,048 bytes shown`, `NULL` muted.
 
 **Memory.** A tab keeps at most `MAX_LOADED_WINDOWS = 20` windows of `RESULT_WINDOW_ROWS`; loading
@@ -1022,6 +1039,10 @@ request is parsed with Zod in main.
 | `engine.connect`           | `datasourceId`, typed `secrets?` | `connected`, `needsSecrets { keys }` or `failed`                     |
 | `engine.disconnect`        | `datasourceId`                   | `null` once the engine has exited                                    |
 | `dialog.choose-file`       | `title`                          | a path, or `null`                                                    |
+| `settings.read`            | none                             | `{ settings, themes, warning }`; see Settings and appearance         |
+| `settings.write`           | the whole settings document      | `null`; saved, then broadcast as `settings.changed`                  |
+| `themes.reload`            | none                             | `null`; rereads `<userData>/themes/`, then broadcasts                |
+| `themes.open-folder`       | none                             | `null`; creates the folder if missing and opens it                   |
 
 Console ids and names must match `CONSOLE_NAME_PATTERN = /^[\w.-]{1,64}$/` and not be dots alone,
 so no request leaves `<userData>/consoles/`. A listed datasource carries `storedSecrets` (the keys
@@ -1091,6 +1112,73 @@ hint.
 `TABLE_CRAFT_DATASOURCE`, JSON `{ id, pluginId, config }`, adds one ephemeral datasource at the top
 of the list, named by its id, never written to disk, its secrets kept Until restart, and opens a
 console on it at launch. A malformed value stops the app naming the variable (decision 018).
+
+## Settings and appearance
+
+Plan 013, decisions 012 and 032. Preferences are `<userData>/settings.json`, owned by main
+(`main/settings.ts`), read before the window opens and written atomically:
+
+```json
+{
+  "version": 1,
+  "appearance": {
+    "theme": "system",
+    "density": "comfortable",
+    "fonts": {
+      "ui": { "family": null, "sizePx": 13 },
+      "editor": { "family": null, "sizePx": 13 },
+      "grid": { "family": null, "sizePx": 12 }
+    }
+  },
+  "data": { "nullText": "<null>", "groupDigits": false, "pageRows": 500, "fetchAllCap": 100000 }
+}
+```
+
+| Field                | Values                                                                   | Default       |
+| -------------------- | ------------------------------------------------------------------------ | ------------- |
+| `appearance.theme`   | `system`, `dark`, `light`, `highContrast`, `user:<file stem>`            | `system`      |
+| `appearance.density` | `comfortable`, `compact`                                                 | `comfortable` |
+| `appearance.fonts.*` | `{ family: string \| null, sizePx: 8–32 }`; `null` is the built-in stack | 13, 13, 12    |
+| `data.nullText`      | 1–16 characters                                                          | `<null>`      |
+| `data.groupDigits`   | boolean                                                                  | `false`       |
+| `data.pageRows`      | 10–10,000                                                                | 500           |
+| `data.fetchAllCap`   | 1,000–1,000,000, at least `pageRows`                                     | 100,000       |
+
+Each field is read on its own: a missing or out-of-range one takes its default and the rest stand.
+A file that is not JSON, not an object or from a newer version is renamed to
+`settings.json.corrupt-<ms>`, the app opens with defaults, and the Database tool window shows the
+notice. The defaults, ranges and field reader are one pure module,
+`packages/desktop/src/settings/settings.ts`, shared by main and the renderer.
+
+The renderer loads the document before its first render and keeps it in `state/settings.ts`. A
+change in the Settings dialog applies at once and is written with `settings.write`; main saves it,
+sets `nativeTheme.themeSource` and the window's background to the theme's canvas, and broadcasts
+`settings.changed { settings, themes }` to every window. A failed write restores the previous value
+and says why in the dialog.
+
+Themes are colour token sets (`packages/desktop/src/appearance/themes.ts`, design-system.md): Dark,
+Light, High contrast, and Follow system, which picks High contrast when `prefers-contrast: more`
+matches, else Dark or Light from `prefers-color-scheme`, and follows both live. A user theme is
+`<userData>/themes/<stem>.json`, `{ name, base, colors }` with `base` a built-in theme and
+`colors` any colour tokens, `syntax` and `datasource` as partial objects. Main reads at most 64
+files of at most 64 KiB, validates them, and lists each resolved over its base or with its errors;
+a broken one cannot be chosen, and a chosen one that is gone or broken falls back to Dark with a
+notice. Reload Themes rereads the folder; nothing watches it.
+
+The UI, editor and grid fonts each have a family and a size; the family list comes from
+`queryLocalFonts()`, monospace families first for the editor and grid, with a free-text field when
+the list is unavailable. Compact density makes rows 20 px instead of 24 and the cell padding and
+gap 6 px instead of 8. In the SQL editor `⌘=`, `⌘-` and `⌘0` change the saved editor font size by
+1 px and reset it to 13.
+
+NULL text and Group digits change what the grid draws and measures, nothing else (decision 032).
+The page size and Fetch All limit travel with each request (see Renderer to engine).
+
+The Settings dialog (`⌘,`; the macOS app menu's Settings…, File → Settings… elsewhere) has three
+pages: Appearance (theme, Reload Themes, Open Themes Folder, density, UI font), Editor (editor
+font, the zoom chords) and Data Editor (grid font, NULL text, Group digits, page size, Fetch All
+limit). Each page has Restore Defaults; a value outside its range is refused inline and not saved.
+Keymap editing and date and time formats are not settings in v1.
 
 ## Storage
 

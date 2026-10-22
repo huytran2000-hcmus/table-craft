@@ -247,6 +247,19 @@ describe("grid keymap", () => {
     expect(ran).toEqual(["grid.selectAll", "grid.toggleValuePanel", "grid.rerun"]);
   });
 
+  it("givenModMinus_whenPressedInEditorThenDatabasePane_thenZoomOutThenCollapseAll", () => {
+    let region: FocusRegion = "editor";
+    const { dispatch, ran } = dispatcherIn(() => region);
+
+    dispatch(keydown({ key: "=", code: "Equal", metaKey: true }));
+    dispatch(keydown({ key: "-", code: "Minus", metaKey: true }));
+    dispatch(keydown({ key: "0", code: "Digit0", metaKey: true }));
+    region = "database";
+    dispatch(keydown({ key: "-", code: "Minus", metaKey: true }));
+
+    expect(ran).toEqual(["editor.zoomIn", "editor.zoomOut", "editor.zoomReset", "explorer.collapseAll"]);
+  });
+
   it("givenGridChords_whenListed_thenAllScopedToTheGrid", () => {
     const gridChords = ALL_ACTIONS.filter(
       (action) => action.category === "Result Grid" && action.shortcut !== undefined,

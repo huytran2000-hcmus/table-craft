@@ -4,8 +4,15 @@
  * Main never decides whether an action is enabled.
  */
 
+/** Which platforms show an entry; every platform when absent. */
+export type MenuPlatform = "mac" | "notMac";
+
+interface PlatformEntry {
+  readonly only?: MenuPlatform;
+}
+
 /** An item that runs a renderer action. `accelerator` is Electron's spelling of the action's chord. */
-export interface ActionMenuItem {
+export interface ActionMenuItem extends PlatformEntry {
   readonly kind: "action";
   readonly label: string;
   readonly actionId: string;
@@ -13,30 +20,53 @@ export interface ActionMenuItem {
 }
 
 /** Electron's built-in menu or item roles that this menu uses. */
-export type MenuRole = "editMenu" | "windowMenu" | "toggleDevTools";
+export type MenuRole =
+  "editMenu" | "windowMenu" | "toggleDevTools" | "about" | "services" | "hide" | "hideOthers" | "unhide" | "quit";
 
-export interface RoleMenuItem {
+export interface RoleMenuItem extends PlatformEntry {
   readonly kind: "role";
   readonly role: MenuRole;
-  readonly macOnly?: boolean;
 }
 
-export interface SubmenuItem {
+export interface SubmenuItem extends PlatformEntry {
   readonly kind: "submenu";
   readonly label: string;
   readonly items: readonly MenuEntry[];
 }
 
-export interface SeparatorItem {
+export interface SeparatorItem extends PlatformEntry {
   readonly kind: "separator";
 }
 
 export type MenuEntry = ActionMenuItem | RoleMenuItem | SubmenuItem | SeparatorItem;
 
 const SEPARATOR: SeparatorItem = { kind: "separator" };
+const SETTINGS_ACCELERATOR = "CmdOrCtrl+,";
 
-/** The menu bar after the macOS app menu, which main adds from the `appMenu` role on darwin only. */
+/**
+ * The menu bar. On macOS the app menu is spelled out rather than taken from the `appMenu` role,
+ * so Settings… sits where macOS users look for it (plan 013 decision 16); macOS titles it with
+ * the app's name whatever the label says.
+ */
 export const APPLICATION_MENU: readonly MenuEntry[] = [
+  {
+    kind: "submenu",
+    label: "table-craft",
+    only: "mac",
+    items: [
+      { kind: "role", role: "about" },
+      SEPARATOR,
+      { kind: "action", label: "Settings…", actionId: "settings.show", accelerator: SETTINGS_ACCELERATOR },
+      SEPARATOR,
+      { kind: "role", role: "services" },
+      SEPARATOR,
+      { kind: "role", role: "hide" },
+      { kind: "role", role: "hideOthers" },
+      { kind: "role", role: "unhide" },
+      SEPARATOR,
+      { kind: "role", role: "quit" },
+    ],
+  },
   {
     kind: "submenu",
     label: "File",
@@ -53,6 +83,14 @@ export const APPLICATION_MENU: readonly MenuEntry[] = [
       },
       { kind: "action", label: "Disconnect", actionId: "datasource.disconnect", accelerator: "CmdOrCtrl+F2" },
       { kind: "action", label: "Synchronize", actionId: "database.synchronize", accelerator: "CmdOrCtrl+Alt+Y" },
+      { kind: "separator", only: "notMac" },
+      {
+        kind: "action",
+        label: "Settings…",
+        actionId: "settings.show",
+        accelerator: SETTINGS_ACCELERATOR,
+        only: "notMac",
+      },
       SEPARATOR,
       { kind: "action", label: "Close Tab", actionId: "tab.close", accelerator: "CmdOrCtrl+W" },
     ],
@@ -89,13 +127,21 @@ export const APPLICATION_MENU: readonly MenuEntry[] = [
     ],
   },
   // Elsewhere the role adds Close with a registered Ctrl+W, which would close the window instead of the tab.
-  { kind: "role", role: "windowMenu", macOnly: true },
+  { kind: "role", role: "windowMenu", only: "mac" },
   {
     kind: "submenu",
     label: "Help",
     items: [{ kind: "action", label: "Find Action…", actionId: "palette.findAction" }],
   },
 ];
+
+/** The entries one platform shows, at every depth. */
+export function menuFor(mac: boolean, entries: readonly MenuEntry[] = APPLICATION_MENU): readonly MenuEntry[] {
+  const shown = mac ? "mac" : "notMac";
+  return entries
+    .filter((entry) => entry.only === undefined || entry.only === shown)
+    .map((entry) => (entry.kind === "submenu" ? { ...entry, items: menuFor(mac, entry.items) } : entry));
+}
 
 /** Every action id the menu names, for the test that checks each one is registered. */
 export function menuActionIds(entries: readonly MenuEntry[] = APPLICATION_MENU): readonly string[] {

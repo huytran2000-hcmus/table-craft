@@ -1,4 +1,4 @@
-import type { Appearance } from "@table-craft/desktop/renderer/appearance/tokens.js";
+import type { Appearance, ColorScheme } from "@table-craft/desktop/renderer/appearance/tokens.js";
 
 function kebab(name: string): string {
   return name.replace(/[A-Z]/g, (letter) => `-${letter.toLowerCase()}`);
@@ -63,6 +63,12 @@ export function appearanceVariables(appearance: Appearance): Readonly<Record<str
   };
 }
 
-export function applyAppearance(appearance: Appearance, root: HTMLElement = document.documentElement): void {
+/** Writes every variable, and `color-scheme` so native scrollbars and controls match the theme. */
+export function applyAppearance(
+  appearance: Appearance,
+  colorScheme: ColorScheme,
+  root: HTMLElement = document.documentElement,
+): void {
   for (const [name, value] of Object.entries(appearanceVariables(appearance))) root.style.setProperty(name, value);
+  root.style.setProperty("color-scheme", colorScheme);
 }
