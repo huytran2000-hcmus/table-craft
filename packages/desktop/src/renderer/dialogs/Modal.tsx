@@ -62,7 +62,7 @@ function Body({ request }: { readonly request: Exclude<ModalRequest, { kind: Pic
           />
         </label>
       ) : (
-        <Dialog.Description className={cn(request.kind === "notice" && "text-danger")}>
+        <Dialog.Description className={cn(request.kind === "notice" && request.tone !== "info" && "text-danger")}>
           {request.message}
           {request.kind === "notice" ? <span className="block text-ink-muted">{request.hint}</span> : null}
         </Dialog.Description>

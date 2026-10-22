@@ -152,7 +152,8 @@ export const APP_ACTIONS: readonly AnyAction[] = [
     id: ACTION_IDS.toggleTransactionMode,
     title: "Toggle Transaction Mode (Auto/Manual)",
     category: "Console",
-    when: (context) => hasTransactions(context) && context.console?.status !== "running",
+    when: (context) =>
+      hasTransactions(context) && context.console?.status !== "running" && context.console?.status !== "confirming",
     run: async (context) => {
       if (context.activeTab !== null) await toggleTransactionMode(context.activeTab.id);
     },

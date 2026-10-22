@@ -20,6 +20,7 @@ import {
   withWindow,
   type ResultTab,
 } from "@table-craft/desktop/renderer/state/consoles.js";
+import { createExecutionsStore } from "@table-craft/desktop/renderer/state/executions.js";
 
 const TOTAL_ROWS = 50_000;
 const FIRST_PAGE = 500;
@@ -87,7 +88,13 @@ function pagingEngine() {
 
 async function ranQuery() {
   const engine = pagingEngine();
-  const store = createConsolesStore({ connect: () => Promise.resolve(engine.client), now: () => 0, clock: () => 0 });
+  const executions = createExecutionsStore();
+  const store = createConsolesStore({
+    connect: () => Promise.resolve(engine.client),
+    now: () => 0,
+    clock: () => 0,
+    executions: executions.getState(),
+  });
   await store.getState().open("c1", "pg", { sql: "SELECT n FROM big" });
   await store.getState().run("c1", "all");
   const result = (): ResultTab => {
@@ -96,7 +103,8 @@ async function ranQuery() {
     return found;
   };
   const calls = (type: string) => engine.call.mock.calls.filter(([name]) => name === type);
-  return { ...engine, store, result, calls };
+  const servicesRowCounts = () => executions.getState().byTab.c1?.map((execution) => execution.rowCount);
+  return { ...engine, store, result, calls, servicesRowCounts };
 }
 
 describe("result grid state", () => {
@@ -114,6 +122,15 @@ describe("result grid state", () => {
     expect(result()).toMatchObject({ rowCount: 1_000, complete: false, cursorOpen: true, fetching: null });
     await store.getState().fetchMore("c1", result().id, true);
     expect(result()).toMatchObject({ rowCount: TOTAL_ROWS, complete: true, cursorOpen: false });
+  });
+
+  it("givenFetchAll_whenFinished_thenServicesRowShowsAllRows", async () => {
+    const { store, result, servicesRowCounts } = await ranQuery();
+    expect(servicesRowCounts()).toEqual([FIRST_PAGE]);
+
+    await store.getState().fetchMore("c1", result().id, true);
+
+    expect(servicesRowCounts()).toEqual([TOTAL_ROWS]);
   });
 
   it("givenTwentyOneWindows_whenAnotherLoads_thenFurthestEvicted", () => {

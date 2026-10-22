@@ -10,10 +10,12 @@ import { afterEach, describe, expect, it } from "vitest";
 import { MYSQL_CONFIG, POSTGRES_CONFIG, withWrongPassword } from "../support/databases.js";
 import {
   activeEditorTab,
-  evidenceFor,
-  datasourceStatus,
+  CLOSE_HOOK_TIMEOUT_MS,
+  closeApp,
   DATABASES_ENABLED,
+  datasourceStatus,
   editorTabs,
+  evidenceFor,
   findAction,
   gridText,
   LAUNCH_TIMEOUT_MS,
@@ -48,9 +50,9 @@ describe.runIf(DATABASES_ENABLED)("shell live test", () => {
   let running: RunningApp | null = null;
 
   afterEach(async () => {
-    await running?.app.close();
+    await closeApp(running?.app);
     running = null;
-  });
+  }, CLOSE_HOOK_TIMEOUT_MS);
 
   async function launchPostgres() {
     running = await launchApp(POSTGRES);

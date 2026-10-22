@@ -12,6 +12,8 @@ import { MYSQL_CONFIG, POSTGRES_CONFIG } from "../support/databases.js";
 import { seededSqliteFile } from "../support/sqliteFixture.js";
 import {
   activeEditorTab,
+  CLOSE_HOOK_TIMEOUT_MS,
+  closeApp,
   DATABASES_ENABLED,
   EVIDENCE_WINDOW,
   evidenceFor,
@@ -145,11 +147,11 @@ describe.runIf(DATABASES_ENABLED)("database explorer live test", () => {
   });
 
   afterEach(async () => {
-    await running?.app.close();
+    await closeApp(running?.app);
     running = null;
     // Every scenario expects the fixture's three tables in public.
     await asOwner([`DROP TABLE IF EXISTS public.${NEW_TABLE}`]);
-  });
+  }, CLOSE_HOOK_TIMEOUT_MS);
 
   async function launch(datasource: Datasource): Promise<Page> {
     running = await launchApp(datasource);
@@ -435,7 +437,7 @@ describe.runIf(DATABASES_ENABLED)("database explorer live test", () => {
           await expect.poll(() => editor.textContent()).toBe(qualified);
           await captureWindow(page, "copy-name");
         }
-        await running?.app.close();
+        await closeApp(running?.app);
         running = null;
       }
     },

@@ -17,6 +17,8 @@ import { MYSQL_CONFIG, POSTGRES_CONFIG } from "../support/databases.js";
 import { seededSqliteFile } from "../support/sqliteFixture.js";
 import {
   answerSecretPrompt,
+  CLOSE_HOOK_TIMEOUT_MS,
+  closeApp,
   DATABASES_ENABLED,
   EVIDENCE_WINDOW,
   evidenceFor,
@@ -69,10 +71,6 @@ const COUNT_ORDERS = "SELECT count(*) AS n FROM orders";
 const ORDER_COUNT = "3";
 const ANALYSE_DELETE = "EXPLAIN ANALYZE DELETE FROM orders";
 const CREATE_TABLE = "CREATE TABLE t (id int)";
-
-/** How long `app.close()` may take before the scenario kills the app; an unanswered dialog blocks it. */
-const CLOSE_DEADLINE_MS = 10_000;
-const HOOK_TIMEOUT_MS = CLOSE_DEADLINE_MS * 3;
 
 /** Runs `statements` straight through the plugin, outside the app, one at a time. */
 async function asOwner(plugin: DatasourcePlugin, config: unknown, statements: readonly string[]): Promise<void> {
@@ -184,21 +182,17 @@ async function clipboardText(app: ElectronApplication): Promise<string> {
 describe.runIf(DATABASES_ENABLED)("Explain Plan and Explain Analyse live test", () => {
   let running: RunningApp | null = null;
 
-  async function closeApp(): Promise<void> {
+  async function closeRunning(): Promise<void> {
     const current = running;
     running = null;
-    if (current === null) return;
-    const closed = current.app.close().then(() => true);
-    const late = new Promise<false>((settle) => setTimeout(() => settle(false), CLOSE_DEADLINE_MS));
-    // SIGTERM is a graceful quit, which an open transaction holds up; only SIGKILL frees its row locks.
-    if (!(await Promise.race([closed, late]))) current.app.process().kill("SIGKILL");
+    await closeApp(current?.app);
   }
 
   afterEach(async () => {
-    await closeApp();
+    await closeRunning();
     await asOwner(postgres, POSTGRES_CONFIG, [RESTORE_ORDER_ONE, "DROP TABLE IF EXISTS public.t"]);
     await asOwner(mysql, MYSQL_CONFIG, [RESTORE_ORDER_ONE]);
-  }, HOOK_TIMEOUT_MS);
+  }, CLOSE_HOOK_TIMEOUT_MS);
 
   async function launch(datasource: Datasource): Promise<Page> {
     running = await launchApp(datasource);

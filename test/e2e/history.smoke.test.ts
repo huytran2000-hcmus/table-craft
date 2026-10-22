@@ -17,6 +17,8 @@ import { seededSqliteFile } from "../support/sqliteFixture.js";
 import {
   activeEditorTab,
   answerSecretPrompt,
+  CLOSE_HOOK_TIMEOUT_MS,
+  closeApp,
   DATABASES_ENABLED,
   editorTabs,
   EVIDENCE_WINDOW,
@@ -42,6 +44,7 @@ import {
 } from "./harness.js";
 
 const captureWindow = evidenceFor("011");
+const capture014 = evidenceFor("014");
 
 const PASSWORD = POSTGRES_CONFIG.password;
 const { password: _postgresPassword, ...POSTGRES_PLAIN } = POSTGRES_CONFIG;
@@ -72,9 +75,6 @@ function sqlite(): Datasource {
   return { id: "lite", pluginId: "sqlite", config: { path: seededSqliteFile() } };
 }
 
-/** How long `app.close()` may take before the scenario kills the app. */
-const CLOSE_DEADLINE_MS = 10_000;
-const HOOK_TIMEOUT_MS = CLOSE_DEADLINE_MS * 3;
 const TABLES_GROUP = "tables 6";
 /** Console text autosaves after a pause (plan 004); the scenario that closes a console waits it out. */
 const AUTOSAVE_WAIT_MS = 5_000;
@@ -84,6 +84,8 @@ const ORDERS_SQL = "SELECT * FROM orders ORDER BY id";
 const ORDER_COUNT_SQL = "SELECT count(*) AS n FROM orders";
 const THREE_STATEMENTS = [CUSTOMERS_SQL, ORDERS_SQL, ORDER_COUNT_SQL];
 const SLEEP_SQL = "SELECT pg_sleep(2)";
+/** More rows than one page (500), so the first answer leaves the cursor open. */
+const PAGING_SQL = "SELECT g AS n FROM generate_series(1, 5000) g";
 const RESTORE_ORDER_ONE = "UPDATE orders SET total = 19.99 WHERE id = 1";
 const TIME_OF_DAY = /\d{2}:\d{2}:\d{2}/;
 const DURATION = /\d+ ms|\d+\.\d s/;
@@ -169,16 +171,13 @@ async function ariaLabels(rows: Locator): Promise<(string | null)[]> {
 describe.runIf(DATABASES_ENABLED)("query history and Services live test", () => {
   let running: RunningApp | null = null;
 
-  async function closeApp(): Promise<void> {
+  async function closeRunning(): Promise<void> {
     const current = running;
     running = null;
-    if (current === null) return;
-    const closed = current.app.close().then(() => true);
-    const late = new Promise<false>((settle) => setTimeout(() => settle(false), CLOSE_DEADLINE_MS));
-    if (!(await Promise.race([closed, late]))) current.app.process().kill();
+    await closeApp(current?.app);
   }
 
-  afterEach(closeApp, HOOK_TIMEOUT_MS);
+  afterEach(closeRunning, CLOSE_HOOK_TIMEOUT_MS);
 
   /** Launches on the profile's saved datasources only. */
   async function launchSaved(userDataDir: string): Promise<Page> {
@@ -292,7 +291,7 @@ describe.runIf(DATABASES_ENABLED)("query history and Services live test", () => 
       await consoleOn(page, "mysql");
       await runStatement(page, CUSTOMERS_SQL);
       await runStatement(page, ORDER_COUNT_SQL);
-      await closeApp();
+      await closeRunning();
 
       page = await launchSaved(userDataDir);
       await treeNode(page, "mysql").click();
@@ -508,6 +507,86 @@ describe.runIf(DATABASES_ENABLED)("query history and Services live test", () => 
 
       expect(await historyEntries(page, "lite").count()).toBe(0);
       expect(await historyDialog(page, "lite").getByText("No statements yet.", { exact: true }).count()).toBe(1);
+    },
+    SCENARIO_TIMEOUT_MS,
+  );
+
+  /*
+   * Plan 014's loose ends (decision 18 b–d): what Services and the history say after Fetch All, a
+   * confirmation and a failed submit. Their evidence belongs to plan 014.
+   */
+
+  it(
+    "givenFetchAll_whenFinished_thenServicesRowShowsAllRows",
+    async () => {
+      const page = await launchEphemeral(POSTGRES);
+      await startStatement(page, PAGING_SQL);
+      const execution = serviceRow(page, "execution").first();
+      await expect.poll(() => execution.textContent(), { timeout: LAUNCH_TIMEOUT_MS }).toMatch(/(^|\D)500 rows/);
+
+      await page
+        .getByRole("toolbar", { name: "Result" })
+        .getByRole("button", { name: "Fetch All", exact: true })
+        .click();
+
+      await expect.poll(() => execution.textContent(), { timeout: LAUNCH_TIMEOUT_MS }).toContain("5000 rows");
+      await expect.poll(() => page.getByTestId("result-state").textContent()).toBe("5,000 rows");
+      await capture014(page, "services-fetch-all");
+    },
+    SCENARIO_TIMEOUT_MS,
+  );
+
+  it(
+    "givenDestructiveConfirmOpen_whenStatusRead_thenWaitingForConfirmation",
+    async () => {
+      const page = await launchEphemeral(sqlite());
+      await startStatement(page, "DELETE FROM orders");
+      const confirm = page.getByRole("dialog", { name: "Run a destructive statement?" });
+      await confirm.waitFor({ timeout: LAUNCH_TIMEOUT_MS });
+
+      expect(await page.getByTestId("console").getByText("Waiting for confirmation…", { exact: true }).count()).toBe(1);
+      // The open dialog hides the window from the accessibility tree, so these rows are found by CSS.
+      const behindDialog = page.locator('section[aria-label="Services"] [role="treeitem"]');
+      expect(await ariaLabels(behindDialog.and(page.locator('[data-kind="session"]')))).toEqual([
+        "console, waiting for confirmation…",
+      ]);
+      expect(await behindDialog.and(page.locator('[data-kind="execution"]')).count()).toBe(0);
+      await capture014(page, "waiting-confirm");
+
+      await confirm.getByRole("button", { name: "Cancel", exact: true }).click();
+      await expect.poll(() => ariaLabels(serviceRow(page, "session"))).toEqual(["console, idle"]);
+      expect(await page.getByTestId("console").getByText("Waiting for confirmation…", { exact: true }).count()).toBe(0);
+    },
+    SCENARIO_TIMEOUT_MS,
+  );
+
+  it(
+    "givenTableSubmitFails_whenHistoryOpened_thenErrorEntryWithScript",
+    async () => {
+      const page = await launchWith([SAVED_POSTGRES]);
+      await consoleOn(page, "pg");
+      await openTable(page, "orders");
+      await page.getByTestId("filter-order-by").locator(".cm-content").fill("id");
+      await page.getByTestId("filter-order-by").locator(".cm-content").press("Enter");
+      await expect.poll(() => tableCell(page, 0, 0).textContent()).toBe("1");
+      await tableCell(page, 0, 2).click();
+      await page.keyboard.press("Enter");
+      const field = page.getByTestId("table-editor").locator("[data-editing] input");
+      await field.fill("-1");
+      await field.press("Enter");
+      await page.getByTestId("table-editor").getByRole("button", { name: "Submit", exact: true }).click();
+      // orders_total_nonnegative refuses it, so nothing changes and nothing needs restoring.
+      await expect
+        .poll(() => page.getByTestId("table-error").textContent(), { timeout: LAUNCH_TIMEOUT_MS })
+        .toContain("orders_total_nonnegative");
+
+      await openHistory(page, "pg");
+
+      const script = `UPDATE "public"."orders" SET "total" = '-1' WHERE "id" = 1;`;
+      expect(await entryLabels(page, "pg")).toEqual([script]);
+      expect(await historyEntries(page, "pg").first().locator('[data-outcome="error"]').count()).toBe(1);
+      expect(await linesOf(page, "history-preview")).toBe(script);
+      await capture014(page, "history-failed-submit");
     },
     SCENARIO_TIMEOUT_MS,
   );

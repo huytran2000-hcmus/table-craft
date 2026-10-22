@@ -19,6 +19,7 @@ import { statementsToRun, type RunScope, type TextSpan } from "@table-craft/desk
 import { useCatalog } from "@table-craft/desktop/renderer/state/catalog.js";
 import { useDatasources } from "@table-craft/desktop/renderer/state/datasources.js";
 import {
+  NO_EXECUTION_REPORTER,
   useExecutions,
   type ExecutionEnd,
   type ExecutionReporter,
@@ -58,7 +59,8 @@ export { canFetch, toError } from "@table-craft/desktop/renderer/state/resultWin
  * One console's session. `failed` when it could not open and `disconnected` when its engine went
  * away or it was restored at launch; Run opens a new session from either.
  */
-export type ConsoleStatus = "connecting" | "ready" | "running" | "failed" | "disconnected";
+/** `confirming`: a run waits on its destructive or Analyse question, and its time has not started. */
+export type ConsoleStatus = "connecting" | "ready" | "running" | "confirming" | "failed" | "disconnected";
 
 export type OutputTone = "info" | "success" | "warning" | "error";
 
@@ -298,6 +300,9 @@ function statementCount(count: number): string {
   return `${count} ${count === 1 ? "statement" : "statements"}`;
 }
 
+/** Finishes one execution in Services and history; `executionId` names its Services row. */
+type Ended = ((end: ExecutionEnd) => void) & { readonly executionId: number };
+
 export function createConsolesStore(dependencies: ConsolesDependencies) {
   /** The client each console's session lives on; not state, because nothing renders from it. */
   const clients = new Map<string, EngineClient>();
@@ -306,7 +311,11 @@ export function createConsolesStore(dependencies: ConsolesDependencies) {
   const clock = dependencies.clock ?? (() => Date.now());
   const confirmDestructive = dependencies.confirmDestructive ?? (() => Promise.resolve(true));
   const confirmAnalyse = dependencies.confirmAnalyse ?? (() => Promise.resolve(true));
-  const executions = dependencies.executions ?? { start: () => 0, finish: () => undefined };
+  const executions = dependencies.executions ?? NO_EXECUTION_REPORTER;
+  /** The execution each result tab came from, by result id, so fetching more updates its row count. */
+  const producedBy = new Map<string, number>();
+  /** When each console's current run started; a confirmation restarts it once answered. */
+  const runStarts = new Map<string, number>();
   let entries = 0;
   let flashes = 0;
   let resultIds = 0;
@@ -319,6 +328,10 @@ export function createConsolesStore(dependencies: ConsolesDependencies) {
       failed: (id, result, error, window) => {
         if (window) patch(id, { error });
         else logError(id, firstLine(result.sql), error);
+      },
+      fetched: (id, resultId, rowCount) => {
+        const executionId = producedBy.get(resultId);
+        if (executionId !== undefined) executions.recount(id, executionId, rowCount);
       },
     });
     const { invalidate: invalidateWindows, forget } = windows;
@@ -341,11 +354,11 @@ export function createConsolesStore(dependencies: ConsolesDependencies) {
     }
 
     /** One statement on its way to the engine: Services lists it now, history once it ends. */
-    function started(id: string, sql: string, label: string = firstLine(sql)): (end: ExecutionEnd) => void {
+    function started(id: string, sql: string, label: string = firstLine(sql)): Ended {
       const startedAt = clock();
       const datasourceId = get().consoles[id]?.datasourceId;
       const executionId = executions.start(id, { label, sql, startedAt });
-      return (end) => {
+      const ended = (end: ExecutionEnd): void => {
         const durationMs = Math.max(0, Math.round(end.durationMs));
         executions.finish(id, executionId, { ...end, durationMs });
         if (datasourceId === undefined) return;
@@ -361,6 +374,7 @@ export function createConsolesStore(dependencies: ConsolesDependencies) {
           source: "console",
         });
       };
+      return Object.assign(ended, { executionId });
     }
 
     function rowsOf(executed: Pick<ExecutedStatement, "columns" | "rowCount" | "rowsAffected">): number | null {
@@ -417,6 +431,7 @@ export function createConsolesStore(dependencies: ConsolesDependencies) {
       const client = clients.get(id);
       for (const result of results) {
         forget(result.id);
+        producedBy.delete(result.id);
         if (result.kind === "rows" && client !== undefined && !result.stale) {
           void client.call("result.release", { handle: result.handle }).catch(() => undefined);
         }
@@ -528,6 +543,7 @@ export function createConsolesStore(dependencies: ConsolesDependencies) {
               paging,
               currentFormats(),
             );
+            producedBy.set(tab.id, ended.executionId);
             patch(id, { results: [...current.results, tab], activeResult: tab.id, transactionOpen });
           } else {
             patch(id, { transactionOpen });
@@ -594,7 +610,7 @@ export function createConsolesStore(dependencies: ConsolesDependencies) {
       const current = get().consoles[id];
       const client = clients.get(id);
       if (current?.sessionId == null || current.status !== "ready" || client === undefined) return;
-      const startedAt = dependencies.now();
+      runStarts.set(id, dependencies.now());
       patch(id, { status: "running", error: null });
       let outcome: RunOutcome = "failed";
       try {
@@ -608,8 +624,27 @@ export function createConsolesStore(dependencies: ConsolesDependencies) {
       patch(id, {
         // A detach while running already said the session is gone, and why.
         status: latest?.status === "disconnected" || latest?.status === "failed" ? latest.status : "ready",
-        lastRun: { durationMs: dependencies.now() - startedAt, outcome },
+        lastRun: { durationMs: runTime(id), outcome },
       });
+    }
+
+    /** Asks `ask` with the console waiting on the answer; the run's time starts once it is given. */
+    async function confirmed(id: string, ask: () => Promise<boolean>): Promise<boolean> {
+      patch(id, { status: "confirming" });
+      try {
+        return await ask();
+      } finally {
+        // A detach while asking already said the session is gone.
+        if (get().consoles[id]?.status === "confirming") patch(id, { status: "running" });
+        runStarts.set(id, dependencies.now());
+      }
+    }
+
+    function runTime(id: string): number {
+      const now = dependencies.now();
+      const startedAt = runStarts.get(id) ?? now;
+      runStarts.delete(id);
+      return now - startedAt;
     }
 
     /** Refused or declined: Output says why and nothing runs (plan 012 decision 9). */
@@ -635,7 +670,9 @@ export function createConsolesStore(dependencies: ConsolesDependencies) {
       const verdict = await client.call("sql.explainable", { sql: statement.sql, analyze });
       if (!verdict.ok) return notRun(id, sql, verdict.reason);
       const mode = get().consoles[id]?.txMode ?? "auto";
-      if (analyze && verdict.writes && !(await confirmAnalyse({ statement, mode }))) return notRun(id, "", DECLINED);
+      if (analyze && verdict.writes && !(await confirmed(id, () => confirmAnalyse({ statement, mode })))) {
+        return notRun(id, "", DECLINED);
+      }
       if (replacing === null) {
         replaceUnpinned(id);
         patch(id, { flash: { from: statement.from, to: statement.to, seq: ++flashes } });
@@ -767,7 +804,7 @@ export function createConsolesStore(dependencies: ConsolesDependencies) {
         const client = clients.get(id);
         if (current?.sessionId == null || current.status !== "ready" || client === undefined) return;
         const { sessionId } = current;
-        const startedAt = dependencies.now();
+        runStarts.set(id, dependencies.now());
         patch(id, { status: "running", error: null });
         let outcome: RunOutcome = "failed";
         try {
@@ -778,7 +815,7 @@ export function createConsolesStore(dependencies: ConsolesDependencies) {
             outcome = "succeeded";
           } else {
             const destructive = statements.filter((statement) => statement.destructive !== null);
-            if (destructive.length > 0 && !(await confirmDestructive(destructive))) {
+            if (destructive.length > 0 && !(await confirmed(id, () => confirmDestructive(destructive)))) {
               log(id, { sql: "", message: "Cancelled; nothing ran.", tone: "warning" });
               patch(id, { activeResult: OUTPUT_TAB });
               outcome = "cancelled";
@@ -796,7 +833,7 @@ export function createConsolesStore(dependencies: ConsolesDependencies) {
         patch(id, {
           // A detach while running already said the session is gone, and why.
           status: latest?.status === "disconnected" || latest?.status === "failed" ? latest.status : "ready",
-          lastRun: { durationMs: dependencies.now() - startedAt, outcome },
+          lastRun: { durationMs: runTime(id), outcome },
         });
       },
 
@@ -882,19 +919,24 @@ export function createConsolesStore(dependencies: ConsolesDependencies) {
           return;
         const { sessionId } = current;
         const sql = firstLine(tab.sql);
-        const startedAt = dependencies.now();
+        runStarts.set(id, dependencies.now());
         patch(id, { status: "running", error: null });
         let outcome: RunOutcome;
-        let ended: ((end: ExecutionEnd) => void) | null = null;
-        let statementStartedAt = startedAt;
+        let ended: Ended | null = null;
+        let statementStartedAt = dependencies.now();
         try {
           const [statement] = await client.call("script.split", { text: tab.sql });
-          if (statement !== undefined && statement.destructive !== null && !(await confirmDestructive([statement]))) {
+          if (
+            statement !== undefined &&
+            statement.destructive !== null &&
+            !(await confirmed(id, () => confirmDestructive([statement])))
+          ) {
             log(id, { sql: "", message: "Cancelled; nothing ran.", tone: "warning" });
             outcome = "cancelled";
           } else {
             cursorsClosed(id);
             ended = started(id, tab.sql);
+            producedBy.set(resultId, ended.executionId);
             statementStartedAt = dependencies.now();
             const paging = currentPaging();
             const { transactionOpen, ...executed } = await client.call("statement.execute", {
@@ -950,7 +992,7 @@ export function createConsolesStore(dependencies: ConsolesDependencies) {
         const latest = get().consoles[id];
         patch(id, {
           status: latest?.status === "disconnected" || latest?.status === "failed" ? latest.status : "ready",
-          lastRun: { durationMs: dependencies.now() - startedAt, outcome },
+          lastRun: { durationMs: runTime(id), outcome },
         });
       },
 
@@ -1032,6 +1074,7 @@ export const useConsoles = createConsolesStore({
   executions: {
     start: (tabId, start) => useExecutions.getState().start(tabId, start),
     finish: (tabId, executionId, end) => useExecutions.getState().finish(tabId, executionId, end),
+    recount: (tabId, executionId, rowCount) => useExecutions.getState().recount(tabId, executionId, rowCount),
   },
   record: (entry) => history.record(entry),
 });

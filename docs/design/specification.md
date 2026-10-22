@@ -497,7 +497,9 @@ Source…, New Console; Data Source Properties…, Disconnect, Synchronize; Sett
 Linux only; Close Tab),
 Edit (role), View (Tool Windows ▸ Database, Services; Hide All Tool Windows; Show System Schemas;
 Query History…, Open Closed Console…; Find Action…; Search
-Everywhere; Toggle Developer Tools), Window (role, macOS only), Help (Find Action…). An item shows its
+Everywhere; Toggle Developer Tools), Window (role, macOS only), Help (Find Action…; About
+table-craft on Windows and Linux only, which shows the name, version, Electron and Chromium; macOS
+has the standard About panel with the same version). An item shows its
 action's accelerator with `registerAccelerator: false` and, when clicked, sends the action id to
 the renderer on `table-craft:invoke-action`; main never decides whether an action is enabled.
 
@@ -528,8 +530,10 @@ with `renderer/model/statementAt.ts`:
 The statement about to run flashes in the editor. Statements run one after another on the
 console's session; the first error or cancel stops the batch, and Output says how many were
 skipped. Before anything runs, every destructive statement in the batch is listed in one dialog
-with its reason, Execute or Cancel; Cancel runs nothing and logs `Cancelled; nothing ran.`. Run on
-a disconnected console connects first (decision 021).
+with its reason, Execute or Cancel; Cancel runs nothing and logs `Cancelled; nothing ran.`. While
+that dialog, or Explain Analyse's, is open the console's status reads `Waiting for confirmation…`,
+and the run's timer starts when it is answered. Run on a disconnected console connects first
+(decision 021).
 
 ### Results and Output
 
@@ -928,8 +932,9 @@ goes on. Recorded: every statement a console runs (Run, Run All, Rerun) when it 
 is cancelled, with the duration of the statement alone, its row count (rows retrieved, else rows
 affected) and the error's message. Not recorded: statements a failure skipped, a batch whose
 destructive confirmation was declined, `Nothing to run`, table loads and counts, and anything on the
-`TABLE_CRAFT_DATASOURCE` datasource. A successful table submit is one entry with source `table`
-whose text is its statements, each ending in `;`, one per line.
+`TABLE_CRAFT_DATASOURCE` datasource. A table submit is one entry with source `table` whose text is
+its statements, each ending in `;`, one per line; a failed one is recorded with outcome error and
+the database's message, its text previewed again from the same edits.
 
 Query History… (`⌥⌘E`) works on the active console's datasource or the selected one in the Database
 tool window, whose context menu lists it after New Console. The dialog is a `ListPicker`
@@ -944,12 +949,13 @@ the emptied list.
 
 Services is a tree (`renderer/model/servicesTree.ts`) with the Database tool window's keyboard
 model: each datasource with an open console or table tab and its connection state, under it one
-session per tab (console or table glyph, the tab's title, idle, running, failed or disconnected,
-the last run's duration), and under each session its last `EXECUTIONS_PER_SESSION = 50` executions,
+session per tab (console or table glyph, the tab's title, idle, running, waiting for confirmation…,
+failed or disconnected, the last run's duration), and under each session its last
+`EXECUTIONS_PER_SESSION = 50` executions,
 newest first, kept in the renderer for as long as the tab is open (`renderer/state/executions.ts`).
 An execution shows its outcome glyph, a spinner and the elapsed time ticking each second while it
 runs, its label (a console statement's first line, `Load rows`, `Count rows`, `Submit 2
-statements`), rows, duration and start time. Everything starts expanded; `No open sessions.` when
+statements`), rows (updated when Fetch All reads the rest), duration and start time. Everything starts expanded; `No open sessions.` when
 there is nothing. Enter or a click on a session or execution activates its tab. A session's context
 menu holds Cancel Running Statement while a console runs and Clear Executions; an execution with
 SQL holds Copy Execution SQL and Open Execution in Console.
@@ -1179,6 +1185,47 @@ pages: Appearance (theme, Reload Themes, Open Themes Folder, density, UI font), 
 font, the zoom chords) and Data Editor (grid font, NULL text, Group digits, page size, Fetch All
 limit). Each page has Restore Defaults; a value outside its range is refused inline and not saved.
 Keymap editing and date and time formats are not settings in v1.
+
+## Packaging
+
+Plan 014, decision 033. electron-builder (`packages/desktop/electron-builder.yml`) packs `dist/`
+(main, engine, preload, renderer) and a generated `package.json` into `app.asar`, without source
+maps or `node_modules`: Vite inlines every runtime dependency, so `@table-craft/core` and
+`plugin-api` are dev dependencies. The built-in plugins ship beside the archive as real files in
+`<resources>/plugins/<id>/`, with `<resources>/icon.png`; the engine forks from inside the archive.
+`main/paths.ts` (`appPaths`) resolves the engine, preload, renderer, plugin directory and icon for
+a development run (under `dist/`) and a packaged one.
+
+Targets: a DMG per macOS architecture (arm64, x64), NSIS for Windows x64, AppImage for Linux x64,
+each named `table-craft-<version>-<arch>.<ext>` in `packages/desktop/release/`.
+`bun run desktop:package` builds the host's platform and architecture (`--x64` builds an Intel DMG
+on Apple silicon); `bun run desktop:package:dir` builds only the unpacked app. Both go through
+`scripts/package.ts`, which never publishes.
+
+The version comes from git (`scripts/version.ts`): `X.Y.Z` when HEAD carries exactly one
+`vX.Y.Z` tag, `0.0.0-dev.<short sha>` otherwise, and two such tags stop the build naming both. It
+is passed as `extraMetadata.version`; nothing in the tree holds it. A development run reports
+`0.0.0`.
+
+Signing: without a Developer ID (`CSC_LINK` or `CSC_NAME`), macOS builds are signed ad hoc with
+the hardened runtime off, so the arm64 app launches; a Developer ID build keeps the hardened runtime
+with `build/entitlements.mac.plist` (JIT and unsigned executable memory). Windows and Linux are
+unsigned. The icon is `build/icon.svg` in the Dark tokens, rendered to `build/icon.png` (1024 px)
+by `node --experimental-strip-types packages/desktop/scripts/render-icon.ts`.
+
+`bun run test:smoke:packaged` builds the unpacked app and runs `test/e2e/packaged.smoke.test.ts`
+against it through `TABLE_CRAFT_APP_EXECUTABLE` (`scripts/packaged-executable.ts` names the
+host's binary): the three plugins available, the built version, the daily loop on SQLite and a
+setting surviving a relaunch; `test:smoke:packaged:db` adds PostgreSQL and MySQL through the
+bundled drivers. `test/e2e/workflows.ts` holds the daily loop, which `workflows.smoke.test.ts`
+runs on the development build against each database.
+
+CI (`.github/workflows/ci.yml`) runs on every push and pull request: `verify` on Ubuntu (lint,
+format, typecheck, unit tests, the contract suite on PostgreSQL and MySQL) and `package` on macOS
+arm64, macOS x64, Windows x64 and Linux x64, each building its installer, running the packaged
+suite on SQLite and uploading the installer. The macOS jobs block; Windows and Linux are
+best-effort. A `v*` tag adds a draft GitHub release with the installers once the blocking jobs
+pass.
 
 ## Storage
 

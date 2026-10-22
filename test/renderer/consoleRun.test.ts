@@ -7,13 +7,14 @@ import type {
   TransactionState,
 } from "@table-craft/desktop/engine/protocol.js";
 import { EngineRequestError, type EngineClient } from "@table-craft/desktop/renderer/engine/client.js";
-import { executedText } from "@table-craft/desktop/renderer/model/format.js";
-import { createConsolesStore, OUTPUT_TAB } from "@table-craft/desktop/renderer/state/consoles.js";
+import { executedText, serviceState } from "@table-craft/desktop/renderer/model/format.js";
+import { createConsolesStore, OUTPUT_TAB, type ConsoleSession } from "@table-craft/desktop/renderer/state/consoles.js";
 import { createExecutionsStore } from "@table-craft/desktop/renderer/state/executions.js";
 import { createHistoryClient } from "@table-craft/desktop/renderer/state/history.js";
 import type { HistoryEntry } from "@table-craft/desktop/preload/bridge.js";
 
 const SESSION_ID = "s1";
+const ANSWER_AFTER_MS = 10_000;
 
 /** Splits on `;` and classifies by the first word, enough to drive the store the way a plugin would. */
 function split(text: string): ClassifiedStatement[] {
@@ -153,6 +154,30 @@ describe("console runs", () => {
     expect(session().activeResult).toBe(OUTPUT_TAB);
     expect(session().lastRun?.outcome).toBe("failed");
     expect(session().status).toBe("ready");
+  });
+
+  it("givenDestructiveConfirmOpen_whenStatusRead_thenWaitingForConfirmation", async () => {
+    const engine = fakeEngine();
+    let now = 0;
+    const asked: (ConsoleSession | undefined)[] = [];
+    const store = createConsolesStore({
+      connect: () => Promise.resolve(engine.client),
+      now: () => now,
+      clock: () => 0,
+      confirmDestructive: () => {
+        asked.push(store.getState().consoles.c1);
+        now += ANSWER_AFTER_MS;
+        return Promise.resolve(true);
+      },
+    });
+    await store.getState().open("c1", "pg", { sql: "DROP TABLE t" });
+
+    await store.getState().run("c1", "all");
+
+    expect(asked.map((session) => session?.status)).toEqual(["confirming"]);
+    expect(asked.map((session) => (session === undefined ? null : serviceState(session)))).toEqual(["waiting"]);
+    // The time spent answering is not the run's.
+    expect(store.getState().consoles.c1?.lastRun).toEqual({ durationMs: 0, outcome: "succeeded" });
   });
 
   it("givenDestructiveStatementCancelled_whenBatchRuns_thenNothingRuns", async () => {

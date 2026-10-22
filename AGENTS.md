@@ -34,7 +34,20 @@ Run from the repository root.
   smoke harness gives every launch a fresh one, seeds `datasources.json` with `seedDatasources`,
   `settings.json` with `seedSettings` and a user theme with `seedTheme`, and on macOS passes
   `--use-mock-keychain` so `safeStorage` never touches the real keychain
-- `bun run desktop:package` - electron-builder; macOS is first-class, Windows and Linux best-effort
+- `bun run desktop:package` - the installer for this host's platform and architecture in
+  `packages/desktop/release/`, versioned from git by `scripts/version.ts`; macOS is first-class,
+  Windows and Linux best-effort. After a build, `bun run --cwd packages/desktop package --x64`
+  makes an Intel DMG on Apple silicon. Never commit `release/`
+- `bun run desktop:package:dir` - only the unpacked app, which the packaged suite launches
+- `bun run test:smoke:packaged` - build the unpacked app and run `test/e2e/packaged.smoke.test.ts`
+  against it on SQLite; `test:smoke:packaged:db` adds PostgreSQL and MySQL. `TABLE_CRAFT_APP_EXECUTABLE`
+  points the harness at a packaged binary instead of the dev build
+- `node --experimental-strip-types packages/desktop/scripts/render-icon.ts` - re-render
+  `build/icon.png` from `build/icon.svg` (under Node: Playwright hangs connecting to Electron under
+  Bun)
+
+CI (`.github/workflows/ci.yml`) runs `verify` (lint, format, typecheck, test, test:db) and the
+packaged suite on macOS arm64 and x64 (blocking), Windows and Linux (best-effort) on every push.
 
 Bun is the toolchain only. Electron runs Node, so nothing under `packages/*/src` or
 `plugins/*/src` may use `Bun.*` APIs, and drivers must be Node-compatible (decision 001).
@@ -67,6 +80,14 @@ packages/core/             @table-craft/core: plugin loader, session manager, re
                            completion catalog over it (`catalog/`). Knows nothing about
                            Electron
 packages/desktop/          @table-craft/desktop, the Electron app
+  build/                   electron-builder resources: the icon (SVG source and rendered
+                           PNG) and the macOS entitlements
+  scripts/                 packaging: `package.ts` (electron-builder with the version and
+                           signing flags), `version.ts`, `packaged-executable.ts`,
+                           `render-icon.ts`
+  electron-builder.yml     the packaged layout and targets (decision 033)
+  src/main/paths.ts        where the engine, preload, renderer, plugins and icon live,
+                           in a development run and a packaged one
   src/appearance/          pure, shared by main and the renderer: the token types, the
                            Dark, Light and High contrast themes, both densities,
                            `resolveTheme` and the contrast pairs (`themes.ts`)
@@ -102,10 +123,12 @@ plugins/<id>/              built-in plugins (@table-craft/plugin-<id>): postgres
                            the EXPLAIN statement and reads the plan (subpath `./explain`)
 test/                      Vitest suites, `givenX_whenY_thenZ`
   db/                      compose.yml, the fixture schema per dialect, contract runs per database
-  e2e/                     Playwright `_electron` suites and the shared harness
+  e2e/                     Playwright `_electron` suites and the shared harness;
+                           `workflows.ts` is the daily loop the dev and packaged suites run
   renderer/                renderer unit tests, typechecked with the DOM lib; no jsdom
   support/                 fixtures shared across suites (type_probe rows, seeded SQLite, configs);
                            `plans/` holds real EXPLAIN outputs, byte-exact (prettier skips it)
+.github/workflows/         ci.yml: verify, package per platform, draft release on a v* tag
 docs/design/               specification.md, design-system.md
 docs/decisions/            one numbered file per durable decision
 docs/plans/                one plan per feature, committed with its Live test section

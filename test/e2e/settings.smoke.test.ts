@@ -17,6 +17,8 @@ import { MYSQL_CONFIG, POSTGRES_CONFIG } from "../support/databases.js";
 import { seededSqliteFile } from "../support/sqliteFixture.js";
 import {
   activeEditorTab,
+  CLOSE_HOOK_TIMEOUT_MS,
+  closeApp,
   DATABASES_ENABLED,
   EVIDENCE_WINDOW,
   evidenceFor,
@@ -45,9 +47,6 @@ const MYSQL: Datasource = { id: "mysql", pluginId: "mysql", config: MYSQL_CONFIG
 function sqlite(): Datasource {
   return { id: "lite", pluginId: "sqlite", config: { path: seededSqliteFile() } };
 }
-
-const CLOSE_DEADLINE_MS = 10_000;
-const HOOK_TIMEOUT_MS = CLOSE_DEADLINE_MS * 3;
 
 const DARK_CANVAS = "#1e1f22";
 const LIGHT_CANVAS = "#ffffff";
@@ -285,19 +284,16 @@ async function pageFits(page: Page): Promise<boolean> {
 describe.runIf(DATABASES_ENABLED)("settings and appearance live test", () => {
   let running: RunningApp | null = null;
 
-  async function closeApp(): Promise<void> {
+  async function closeRunning(): Promise<void> {
     const current = running;
     running = null;
-    if (current === null) return;
-    const closed = current.app.close().then(() => true);
-    const late = new Promise<false>((settle) => setTimeout(() => settle(false), CLOSE_DEADLINE_MS));
-    if (!(await Promise.race([closed, late]))) current.app.process().kill("SIGKILL");
+    await closeApp(current?.app);
   }
 
   afterEach(async () => {
-    await closeApp();
+    await closeRunning();
     await asOwner(mysql, MYSQL_CONFIG, PAGE_PROBE_TEARDOWN);
-  }, HOOK_TIMEOUT_MS);
+  }, CLOSE_HOOK_TIMEOUT_MS);
 
   async function launch(datasource: Datasource, userDataDir?: string): Promise<RunningApp> {
     running = await launchApp(datasource, userDataDir === undefined ? {} : { userDataDir });
@@ -591,7 +587,7 @@ describe.runIf(DATABASES_ENABLED)("settings and appearance live test", () => {
       await expect.poll(() => resultState(page).textContent()).toBe(`${String(SMALL_PAGE)}+ rows`);
       await toolbarButton(page, "Fetch Next Page").click();
       await expect.poll(() => resultState(page).textContent()).toBe(`${String(SMALL_PAGE * 2)}+ rows`);
-      await closeApp();
+      await closeRunning();
 
       const mysqlPage = (await launch(MYSQL, userDataDir)).page;
       const tree = toolWindow(mysqlPage, "Database");
@@ -627,7 +623,7 @@ describe.runIf(DATABASES_ENABLED)("settings and appearance live test", () => {
       await fillSetting(first.page, "NULL text", NULL_SYMBOL);
       await closeSettings(first.page);
       await expect.poll(() => savedSettings(userDataDir)?.data["nullText"]).toBe(NULL_SYMBOL);
-      await closeApp();
+      await closeRunning();
 
       const { app, page } = await launch(sqlite(), userDataDir);
       expect(await windowBackground(app)).toBe(LIGHT_CANVAS.toUpperCase());

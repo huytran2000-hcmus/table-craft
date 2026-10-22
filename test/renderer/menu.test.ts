@@ -45,6 +45,14 @@ describe("application menu", () => {
     expect(menuActionIds(menuFor(false)).filter((id) => id === "settings.show")).toHaveLength(1);
   });
 
+  it("givenWindowsOrLinux_whenBuilt_thenHelpEndsWithAbout", () => {
+    const help = menuFor(false).find((entry) => entry.kind === "submenu" && entry.label === "Help");
+    const macHelp = menuFor(true).find((entry) => entry.kind === "submenu" && entry.label === "Help");
+
+    expect(help?.kind === "submenu" ? labelsOf(help.items) : []).toEqual(["Find Action…", "-", "About table-craft"]);
+    expect(macHelp?.kind === "submenu" ? labelsOf(macHelp.items) : []).toEqual(["Find Action…"]);
+  });
+
   it("givenMenuDeclaration_whenComparedWithRegistry_thenEveryActionIdExists", () => {
     const registered = new Set(ALL_ACTIONS.map((action) => action.id));
 

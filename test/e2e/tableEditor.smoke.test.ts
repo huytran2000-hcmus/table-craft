@@ -17,19 +17,23 @@ import { MYSQL_CONFIG, POSTGRES_CONFIG } from "../support/databases.js";
 import { seededSqliteFile } from "../support/sqliteFixture.js";
 import {
   activeEditorTab,
+  CLOSE_HOOK_TIMEOUT_MS,
+  closeApp,
+  columnSnapshot,
   DATABASES_ENABLED,
   editorTabs,
   EVIDENCE_WINDOW,
   evidenceFor,
+  findAction,
   LAUNCH_TIMEOUT_MS,
   launchApp,
   newProfile,
   openConsoleOn,
   pressChord,
-  startStatement,
   SCENARIO_TIMEOUT_MS,
   seedDatasources,
   setWindowSize,
+  startStatement,
   toolWindow,
   waitUntilReady,
   type Datasource,
@@ -45,10 +49,6 @@ function sqlite(): Datasource {
   return { id: "lite", pluginId: "sqlite", config: { path: seededSqliteFile() } };
 }
 
-/** How long `app.close()` may take before the scenario kills the app. */
-const CLOSE_DEADLINE_MS = 10_000;
-/** Closing with pending changes asks first, so the hook may wait out the close deadline. */
-const HOOK_TIMEOUT_MS = CLOSE_DEADLINE_MS * 3;
 const TABLES_GROUP = "tables 6";
 const VIEWS_GROUP = "views 1";
 
@@ -98,16 +98,7 @@ function cell(page: Page, row: number, column: number) {
 
 /** The loaded cells of one visible column, top to bottom. */
 async function columnValues(page: Page, column: number): Promise<string[]> {
-  const cells = await editor(page)
-    .locator(`[role="gridcell"][data-col="${String(column)}"]`)
-    .all();
-  const entries = await Promise.all(
-    cells.map(async (element) => ({
-      row: Number(await element.getAttribute("data-row")),
-      text: (await element.textContent()) ?? "",
-    })),
-  );
-  return entries.sort((left, right) => left.row - right.row).map((entry) => entry.text);
+  return columnSnapshot(editor(page).locator(`[role="gridcell"][data-col="${String(column)}"]`));
 }
 
 function editorButton(page: Page, name: string) {
@@ -177,19 +168,16 @@ describe.runIf(DATABASES_ENABLED)("table data editor live test", () => {
   beforeAll(resetFixtures);
   afterAll(resetFixtures);
 
-  async function closeApp(): Promise<void> {
+  async function closeRunning(): Promise<void> {
     const current = running;
     running = null;
-    if (current === null) return;
-    const closed = current.app.close().then(() => true);
-    const late = new Promise<false>((settle) => setTimeout(() => settle(false), CLOSE_DEADLINE_MS));
-    if (!(await Promise.race([closed, late]))) current.app.process().kill();
+    await closeApp(current?.app);
   }
 
   afterEach(async () => {
-    await closeApp();
+    await closeRunning();
     await resetFixtures();
-  }, HOOK_TIMEOUT_MS);
+  }, CLOSE_HOOK_TIMEOUT_MS);
 
   async function launch(datasource: Datasource | null, userDataDir?: string): Promise<Page> {
     running = await launchApp(datasource, userDataDir === undefined ? {} : { userDataDir });
@@ -354,6 +342,32 @@ describe.runIf(DATABASES_ENABLED)("table data editor live test", () => {
       await editor(page).getByRole("toolbar", { name: "Result" }).getByRole("button", { name: "Rerun" }).click();
       await dialog(page).getByRole("button", { name: "Discard" }).click();
       await expect.poll(() => columnValues(page, 2)).toEqual(["19.99", "5.00"]);
+    },
+    SCENARIO_TIMEOUT_MS,
+  );
+
+  it(
+    "givenSqliteEditProbePending_whenRevertSelectedThenRevertAll_thenValuesBackAndNothingPending",
+    async () => {
+      const page = await launch(sqlite());
+      await openFromTree(page, "edit_probe");
+      await editCell(page, 0, 1, "changed");
+      await editCell(page, 1, 1, "also changed");
+      await editorButton(page, "Add Row").click();
+      await expect.poll(() => pending(page).textContent()).toBe("3 pending changes");
+
+      await cell(page, 0, 1).click();
+      await pressChord(page, "Alt+Z");
+
+      await expect.poll(() => cell(page, 0, 1).textContent()).toBe("first");
+      expect(await cell(page, 0, 1).getAttribute("data-edit")).toBeNull();
+      expect(await pending(page).textContent()).toBe("2 pending changes");
+
+      await findAction(page, "Revert All");
+
+      await expect.poll(() => pending(page).count()).toBe(0);
+      expect(await columnValues(page, 1)).toEqual(["first", "second"]);
+      expect(await editor(page).locator("[data-edit]").count()).toBe(0);
     },
     SCENARIO_TIMEOUT_MS,
   );

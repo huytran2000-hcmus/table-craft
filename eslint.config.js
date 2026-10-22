@@ -102,7 +102,7 @@ function restrictImports(...groups) {
 
 export default tseslint.config(
   {
-    ignores: ["dist/**", "**/dist/**", "node_modules/**", "release/**", "test/fixtures/**"],
+    ignores: ["dist/**", "**/dist/**", "node_modules/**", "release/**", "**/release/**", "test/fixtures/**"],
   },
   js.configs.recommended,
   ...tseslint.configs.recommendedTypeChecked,

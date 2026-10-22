@@ -33,6 +33,7 @@ import {
 import { clampSelection, type GridSelection } from "@table-craft/desktop/renderer/model/gridSelection.js";
 import { useDatasources } from "@table-craft/desktop/renderer/state/datasources.js";
 import {
+  NO_EXECUTION_REPORTER,
   useExecutions,
   type ExecutionEnd,
   type ExecutionReporter,
@@ -285,7 +286,9 @@ export function createTablesStore(dependencies: TablesDependencies) {
   const clients = new Map<string, EngineClient>();
   const now = dependencies.now ?? (() => performance.now());
   const clock = dependencies.clock ?? (() => Date.now());
-  const executions = dependencies.executions ?? { start: () => 0, finish: () => undefined };
+  const executions = dependencies.executions ?? NO_EXECUTION_REPORTER;
+  /** The load each result came from, by result id, so fetching more updates its row count. */
+  const producedBy = new Map<string, number>();
   let resultIds = 0;
 
   return create<TablesState>()((set, get) => {
@@ -294,6 +297,10 @@ export function createTablesStore(dependencies: TablesDependencies) {
       result: (id, resultId) => resultOf(id, resultId),
       update: (id, resultId, change) => updateResult(id, resultId, change),
       failed: (id, _result, error) => patch(id, { error }),
+      fetched: (id, resultId, rowCount) => {
+        const executionId = producedBy.get(resultId);
+        if (executionId !== undefined) executions.recount(id, executionId, rowCount);
+      },
     });
 
     function patch(id: string, change: Partial<TableSession>): void {
@@ -306,11 +313,12 @@ export function createTablesStore(dependencies: TablesDependencies) {
     function started(id: string, label: string, sql: string | null) {
       const begun = now();
       const executionId = executions.start(id, { label, sql, startedAt: clock() });
-      return (end: Omit<ExecutionEnd, "durationMs">): number => {
+      const ended = (end: Omit<ExecutionEnd, "durationMs">): number => {
         const durationMs = Math.max(0, Math.round(now() - begun));
         executions.finish(id, executionId, { ...end, durationMs });
         return durationMs;
       };
+      return Object.assign(ended, { executionId });
     }
 
     function failed(error: EngineError): Omit<ExecutionEnd, "durationMs"> {
@@ -408,6 +416,7 @@ export function createTablesStore(dependencies: TablesDependencies) {
         const previous = latest.result;
         if (previous !== null) {
           windows.forget(previous.id);
+          producedBy.delete(previous.id);
           if (!previous.stale) void client.call("result.release", { handle: previous.handle }).catch(() => undefined);
         }
         const fresh = resultTabOf(
@@ -417,6 +426,7 @@ export function createTablesStore(dependencies: TablesDependencies) {
           paging,
           currentFormats(),
         );
+        producedBy.set(fresh.id, ended.executionId);
         const names = (columns: readonly { readonly name: string }[]) => columns.map((column) => column.name);
         const layout =
           previous === null
@@ -472,7 +482,10 @@ export function createTablesStore(dependencies: TablesDependencies) {
         if (closing === undefined) return;
         const { [id]: _closed, ...rest } = get().tables;
         set({ tables: rest });
-        if (closing.result !== null) windows.forget(closing.result.id);
+        if (closing.result !== null) {
+          windows.forget(closing.result.id);
+          producedBy.delete(closing.result.id);
+        }
         const client = clients.get(id);
         clients.delete(id);
         if (closing.sessionId === null || client === undefined) return;
@@ -705,13 +718,11 @@ export function createTablesStore(dependencies: TablesDependencies) {
         patch(id, { status: "submitting", error: null });
         const startedAt = clock();
         const ended = started(id, SUBMIT_LABEL, null);
+        const { handle } = current.result;
+        const edits = toEdits(current.buffer);
         try {
           cursorClosed(id);
-          const submitted = await client.call("edits.submit", {
-            sessionId: current.sessionId,
-            handle: current.result.handle,
-            edits: toEdits(current.buffer),
-          });
+          const submitted = await client.call("edits.submit", { sessionId: current.sessionId, handle, edits });
           const sql = submittedScript(submitted.statements);
           const rowCount = submitted.rowsAffected;
           const label = submitLabel(submitted.statements.length);
@@ -732,7 +743,25 @@ export function createTablesStore(dependencies: TablesDependencies) {
           return true;
         } catch (cause) {
           const error = toError(cause);
-          ended(failed(error));
+          const end = failed(error);
+          // The failure names no statements; the same edits preview to the script that was sent.
+          const statements = await client.call("edits.preview", { handle, edits }).catch(() => null);
+          if (statements === null) {
+            ended(end);
+          } else {
+            const sql = submittedScript(statements);
+            const durationMs = ended({ ...end, label: submitLabel(statements.length), sql });
+            dependencies.record?.({
+              datasourceId: current.datasourceId,
+              sql,
+              startedAt,
+              durationMs,
+              outcome: end.outcome,
+              rowCount: null,
+              message: end.message,
+              source: "table",
+            });
+          }
           patch(id, { status: settled(id), error });
           return false;
         }
@@ -784,6 +813,7 @@ export const useTables = createTablesStore({
   executions: {
     start: (tabId, start) => useExecutions.getState().start(tabId, start),
     finish: (tabId, executionId, end) => useExecutions.getState().finish(tabId, executionId, end),
+    recount: (tabId, executionId, rowCount) => useExecutions.getState().recount(tabId, executionId, rowCount),
   },
   record: (entry) => history.record(entry),
 });

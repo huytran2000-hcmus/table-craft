@@ -32,6 +32,7 @@
   "include": [
     "packages/*/src/**/*.ts",
     "packages/*/vite.*.ts",
+    "packages/*/scripts/**/*.ts",
     "plugins/*/src/**/*.ts",
     "test/**/*.ts",
     "vitest.config.ts",

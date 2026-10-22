@@ -23,8 +23,8 @@ Status: Accepted
 - Query history per datasource, and a Services window listing sessions and executions with timings
 - EXPLAIN plan view
 - Settings and appearance: themes, user themes, three font settings, density, data-editor formats
-- Packaging: macOS (arm64, x64) first-class; Windows (NSIS) and Linux (AppImage) built in CI,
-  best-effort
+- Packaging: macOS (arm64, x64) first-class; Windows (NSIS) and Linux (AppImage) built in
+  [CI](../../.github/workflows/ci.yml), best-effort
 
 **v1.1**: SSH tunnels, saved query files.
 

@@ -13,6 +13,8 @@ import { afterEach, describe, expect, it } from "vitest";
 import { MYSQL_CONFIG, POSTGRES_CONFIG } from "../support/databases.js";
 import { seededSqliteFile } from "../support/sqliteFixture.js";
 import {
+  closeApp,
+  columnSnapshot,
   DATABASES_ENABLED,
   EVIDENCE_WINDOW,
   evidenceFor,
@@ -56,8 +58,6 @@ const POSTGRES_TOTALS = [
 ].join(" ");
 const BIG_BYTES = 2048;
 const POSTGRES_VALUES = `SELECT id, doc, payload, decode(repeat('ab', ${String(BIG_BYTES)}), 'hex') AS big FROM type_probe WHERE id = 1`;
-/** How long `app.close()` may take before the scenario kills the app. */
-const CLOSE_DEADLINE_MS = 10_000;
 /** A row is `--spacing-row`, 24 px; a window is 500 rows. */
 const WINDOW_HEIGHT_PX = 500 * 24;
 const MAX_LOADED_WINDOWS = 20;
@@ -118,14 +118,7 @@ async function columnNames(page: Page): Promise<string[]> {
 
 /** The loaded cells of one visible column, top to bottom. */
 async function columnValues(page: Page, column: number): Promise<string[]> {
-  const cells = await page.locator(`[role="gridcell"][data-col="${String(column)}"]`).all();
-  const entries = await Promise.all(
-    cells.map(async (element) => ({
-      row: Number(await element.getAttribute("data-row")),
-      text: (await element.textContent()) ?? "",
-    })),
-  );
-  return entries.sort((left, right) => left.row - right.row).map((entry) => entry.text);
+  return columnSnapshot(page.locator(`[role="gridcell"][data-col="${String(column)}"]`));
 }
 
 function resultTab(page: Page, title: string) {
@@ -190,17 +183,14 @@ describe.runIf(DATABASES_ENABLED)("result grid live test", () => {
   let running: RunningApp | null = null;
   const scratch: string[] = [];
 
-  async function closeApp(): Promise<void> {
+  async function closeRunning(): Promise<void> {
     const current = running;
     running = null;
-    if (current === null) return;
-    const closed = current.app.close().then(() => true);
-    const late = new Promise<false>((settle) => setTimeout(() => settle(false), CLOSE_DEADLINE_MS));
-    if (!(await Promise.race([closed, late]))) current.app.process().kill();
+    await closeApp(current?.app);
   }
 
   afterEach(async () => {
-    await closeApp();
+    await closeRunning();
     for (const path of scratch.splice(0)) rmSync(path, { recursive: true, force: true });
   });
 
@@ -424,6 +414,32 @@ describe.runIf(DATABASES_ENABLED)("result grid live test", () => {
       expect(lines).toHaveLength(PAGING_ROWS + 2);
       expect(lines[0]).toBe("n,hash");
       await captureWindow(page, "export-csv");
+    },
+    SCENARIO_TIMEOUT_MS,
+  );
+
+  it(
+    "givenTsvExtractor_whenExported_thenFileIsTabSeparated",
+    async () => {
+      const { app, page } = await launch(sqlite());
+      const folder = mkdtempSync(join(tmpdir(), "table-craft-export-"));
+      scratch.push(folder);
+      const path = join(folder, "customers.tsv");
+      await app.evaluate(({ dialog }, filePath) => {
+        dialog.showSaveDialog = () => Promise.resolve({ canceled: false, filePath });
+      }, path);
+      await query(page, "SELECT * FROM customers ORDER BY id");
+
+      await toolbar(page).getByLabel("Extractor").selectOption({ label: "TSV" });
+      await toolbarButton(page, "Export Data…").click();
+
+      await resultTab(page, "Output").click();
+      await expect
+        .poll(() => output(page).textContent(), { timeout: LAUNCH_TIMEOUT_MS })
+        .toContain(`2 rows exported to ${path}`);
+      expect(readFileSync(path, "utf8")).toBe(
+        "id\tname\temail\n1\tAda Lovelace\tada@example.com\n2\tGrace Hopper\tgrace@example.com\n",
+      );
     },
     SCENARIO_TIMEOUT_MS,
   );

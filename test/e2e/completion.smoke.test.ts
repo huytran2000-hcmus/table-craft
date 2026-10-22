@@ -17,6 +17,8 @@ import { MYSQL_CONFIG, POSTGRES_CONFIG } from "../support/databases.js";
 import { seededSqliteFile } from "../support/sqliteFixture.js";
 import {
   activeEditorTab,
+  CLOSE_HOOK_TIMEOUT_MS,
+  closeApp,
   DATABASES_ENABLED,
   enginePids,
   EVIDENCE_WINDOW,
@@ -43,19 +45,35 @@ function sqlite(path = seededSqliteFile()): Datasource {
   return { id: "lite", pluginId: "sqlite", config: { path } };
 }
 
-/** How long `app.close()` may take before the scenario kills the app. */
-const CLOSE_DEADLINE_MS = 10_000;
-const HOOK_TIMEOUT_MS = CLOSE_DEADLINE_MS * 2;
 const TABLES_GROUP = "tables 6";
 const WIDE_TABLES = 500;
 const WIDE_COLUMNS = 30;
 /** Plan 009 decision 19: completion over a 500-table schema answers within this. */
 const WIDE_COMPLETION_BUDGET_MS = 100;
 /**
- * CodeMirror ignores Enter for its `interactionDelay` (75 ms) after the popup opens, so a keystroke
- * already in flight cannot pick an option; a person never beats it, Playwright does.
+ * CodeMirror ignores Enter for its `interactionDelay` (75 ms, `@codemirror/autocomplete`'s default)
+ * after the popup opens, so a keystroke already in flight cannot pick an option; a person never
+ * beats it, Playwright does.
  */
-const ACCEPT_AFTER_MS = 150;
+const INTERACTION_DELAY_MS = 75;
+/**
+ * True once Enter would accept `label`: CodeMirror refuses while the option is not selected, while
+ * a pending source has the popup disabled, and inside `interactionDelay`. The delay is counted from
+ * when this check first saw the popup, which is never earlier than CodeMirror's own timestamp. A
+ * string, because the root program has no DOM lib.
+ */
+function acceptable(label: string): string {
+  return `(() => {
+    const popup = document.querySelector('.cm-tooltip-autocomplete');
+    if (popup === null) return false;
+    const seen = (window.__popupSeen ??= new WeakMap());
+    if (!seen.has(popup)) seen.set(popup, performance.now());
+    if (performance.now() - seen.get(popup) < ${String(INTERACTION_DELAY_MS)}) return false;
+    if (popup.classList.contains('cm-tooltip-autocomplete-disabled')) return false;
+    return popup.querySelector('[aria-selected] .cm-completionLabel')?.textContent === ${JSON.stringify(label)};
+  })()`;
+}
+const ACCEPT_ATTEMPTS = 5;
 /** Basic Completion, CodeMirror's `Ctrl-Space` on every platform. */
 const BASIC_COMPLETION = "Control+Space";
 
@@ -151,8 +169,10 @@ async function completeAt(page: Page, sql: string, caret = sql.length): Promise<
   await options(page).first().waitFor({ timeout: LAUNCH_TIMEOUT_MS });
 }
 
-async function acceptCompletion(page: Page): Promise<void> {
-  await new Promise((settle) => setTimeout(settle, ACCEPT_AFTER_MS));
+/** Presses Enter on `label` once CodeMirror would take it, instead of after a fixed sleep. */
+async function acceptCompletion(page: Page, label: string): Promise<void> {
+  // Polled with `evaluate`: `waitForFunction` re-evaluates the string, which the window's CSP refuses.
+  await expect.poll(() => page.evaluate<boolean>(acceptable(label)), { timeout: LAUNCH_TIMEOUT_MS }).toBe(true);
   await page.keyboard.press("Enter");
 }
 
@@ -167,16 +187,13 @@ function treeRow(page: Page, name: string) {
 describe.runIf(DATABASES_ENABLED)("completion and navigation live test", () => {
   let running: RunningApp | null = null;
 
-  async function closeApp(): Promise<void> {
+  async function closeRunning(): Promise<void> {
     const current = running;
     running = null;
-    if (current === null) return;
-    const closed = current.app.close().then(() => true);
-    const late = new Promise<false>((settle) => setTimeout(() => settle(false), CLOSE_DEADLINE_MS));
-    if (!(await Promise.race([closed, late]))) current.app.process().kill();
+    await closeApp(current?.app);
   }
 
-  afterEach(closeApp, HOOK_TIMEOUT_MS);
+  afterEach(closeRunning, CLOSE_HOOK_TIMEOUT_MS);
 
   /** Launches on `datasource` and waits for its current namespace to be described in the tree. */
   async function launch(datasource: Datasource, tables = TABLES_GROUP): Promise<Page> {
@@ -247,9 +264,24 @@ describe.runIf(DATABASES_ENABLED)("completion and navigation live test", () => {
       const join = "customers c ON c.id = o.customer_id";
       await expect.poll(async () => (await optionLabels(page))[0]).toBe(join);
       await captureWindow(page, "join-on");
-      await acceptCompletion(page);
-      await expect.poll(() => editorText(page)).toBe(`${sql}${join}`);
-      await expect.poll(() => popup(page).count()).toBe(0);
+      await acceptCompletion(page, join);
+      await expect.poll(() => editorText(page), { timeout: LAUNCH_TIMEOUT_MS }).toBe(`${sql}${join}`);
+      await expect.poll(() => popup(page).count(), { timeout: LAUNCH_TIMEOUT_MS }).toBe(0);
+    },
+    SCENARIO_TIMEOUT_MS,
+  );
+
+  it(
+    "givenCompletionOpen_whenOptionSelected_thenEnterAcceptsWithoutSleeping",
+    async () => {
+      const page = await launch(sqlite());
+
+      // Enter straight after the popup shows is the race a fixed sleep only made rarer.
+      for (let attempt = 0; attempt < ACCEPT_ATTEMPTS; attempt++) {
+        await completeAt(page, "SELECT * FROM ord");
+        await acceptCompletion(page, "orders");
+        await expect.poll(() => editorText(page), { timeout: LAUNCH_TIMEOUT_MS }).toBe("SELECT * FROM orders");
+      }
     },
     SCENARIO_TIMEOUT_MS,
   );
@@ -268,11 +300,11 @@ describe.runIf(DATABASES_ENABLED)("completion and navigation live test", () => {
         await completeAt(page, "SELECT * FROM Li");
 
         await expect.poll(async () => (await optionLabels(page))[0]).toBe("Line Items");
-        await acceptCompletion(page);
-        await expect.poll(() => editorText(page)).toBe(`SELECT * FROM ${quoted}`);
+        await acceptCompletion(page, "Line Items");
+        await expect.poll(() => editorText(page), { timeout: LAUNCH_TIMEOUT_MS }).toBe(`SELECT * FROM ${quoted}`);
         // MySQL's backticks are the case the other two cannot show.
         if (datasource.pluginId === "mysql") await captureWindow(page, "quoted-identifier");
-        await closeApp();
+        await closeRunning();
       }
     },
     SCENARIO_TIMEOUT_MS * 3,
@@ -309,8 +341,8 @@ describe.runIf(DATABASES_ENABLED)("completion and navigation live test", () => {
 
       await option(page, "customer_id").waitFor({ timeout: LAUNCH_TIMEOUT_MS });
       await captureWindow(page, "where-bar");
-      await acceptCompletion(page);
-      await expect.poll(() => where.textContent()).toBe("customer_id");
+      await acceptCompletion(page, "customer_id");
+      await expect.poll(() => where.textContent(), { timeout: LAUNCH_TIMEOUT_MS }).toBe("customer_id");
     },
     SCENARIO_TIMEOUT_MS,
   );

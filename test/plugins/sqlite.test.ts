@@ -80,6 +80,27 @@ describe("sqlite plugin", () => {
     }
   });
 
+  it("givenViewOverDroppedTable_whenSchemaDescribed_thenViewListedWithoutColumns", async () => {
+    const session = await sqlite.connect(IN_MEMORY, WRITABLE);
+    try {
+      await session.execute("CREATE TABLE gone (id INTEGER)");
+      await session.execute("CREATE TABLE kept (id INTEGER)");
+      await session.execute("CREATE VIEW broken AS SELECT id FROM gone");
+      await session.execute("DROP TABLE gone");
+
+      const introspector = session.introspector;
+      if (introspector === undefined) throw new Error("The SQLite plugin introspects.");
+      const catalog = await introspector.describe(["main"]);
+
+      expect(catalog.relations.map((relation) => [relation.name, relation.columns.length])).toEqual([
+        ["broken", 0],
+        ["kept", 1],
+      ]);
+    } finally {
+      await session.close();
+    }
+  });
+
   it("givenPathInMissingDirectory_whenConnecting_thenRejectsWithConnectionFailed", async () => {
     const failure: unknown = await sqlite.connect(UNREACHABLE, WRITABLE).catch((error: unknown) => error);
 

@@ -32,7 +32,14 @@ export type ModalRequest =
       readonly confirm: string;
       readonly placeholder?: string;
     }
-  | { readonly kind: "notice"; readonly title: string; readonly message: string; readonly hint: string }
+  | {
+      readonly kind: "notice";
+      readonly title: string;
+      readonly message: string;
+      readonly hint: string;
+      /** A notice reports a failure unless it says it is `info`, like About. */
+      readonly tone?: "info";
+    }
   | {
       /** SQL shown whole, one statement a block, before it runs: the table editor's Preview. */
       readonly kind: "statements";

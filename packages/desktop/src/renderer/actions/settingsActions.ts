@@ -1,16 +1,37 @@
 import { defineAction, type AnyAction } from "@table-craft/desktop/renderer/actions/registry.js";
+import { bridge } from "@table-craft/desktop/renderer/bridge.js";
+import { useModal } from "@table-craft/desktop/renderer/state/modal.js";
 import { useSettings } from "@table-craft/desktop/renderer/state/settings.js";
 import { useSettingsDialog } from "@table-craft/desktop/renderer/state/settingsDialog.js";
 import { DEFAULT_SETTINGS, zoomEditorFont } from "@table-craft/desktop/settings/settings.js";
 
 export const SETTINGS_ACTION_IDS = {
   show: "settings.show",
+  about: "app.about",
   zoomIn: "editor.zoomIn",
   zoomOut: "editor.zoomOut",
   zoomReset: "editor.zoomReset",
 } as const;
 
 const ZOOM_STEP_PX = 1;
+const ABOUT_TITLE = "About table-craft";
+
+/** Help → About on Windows and Linux; macOS's app menu has the native panel (plan 014 decision 9). */
+async function showAbout(): Promise<void> {
+  const answer = await bridge().appInfo();
+  if (!answer.ok) {
+    await useModal.getState().ask({ kind: "notice", title: ABOUT_TITLE, ...answer.error });
+    return;
+  }
+  const { name, version, electron, chromium } = answer.value;
+  await useModal.getState().ask({
+    kind: "notice",
+    tone: "info",
+    title: ABOUT_TITLE,
+    message: `${name} ${version}`,
+    hint: `Electron ${electron} · Chromium ${chromium}`,
+  });
+}
 
 function zoom(steps: number): Promise<void> {
   return useSettings.getState().update((settings) => {
@@ -31,6 +52,12 @@ export const SETTINGS_ACTIONS: readonly AnyAction[] = [
     icon: "settings",
     shortcut: "Mod+,",
     run: () => useSettingsDialog.getState().show(),
+  }),
+  defineAction({
+    id: SETTINGS_ACTION_IDS.about,
+    title: ABOUT_TITLE,
+    category: "App",
+    run: showAbout,
   }),
   defineAction({
     id: SETTINGS_ACTION_IDS.zoomIn,

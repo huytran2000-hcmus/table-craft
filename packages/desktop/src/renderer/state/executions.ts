@@ -42,7 +42,16 @@ export interface ExecutionReporter {
   /** Answers the id `finish` takes. */
   readonly start: (tabId: string, start: ExecutionStart) => number;
   readonly finish: (tabId: string, executionId: number, end: ExecutionEnd) => void;
+  /** Fetch Next Page or Fetch All grew the result the execution produced to `rowCount` rows. */
+  readonly recount: (tabId: string, executionId: number, rowCount: number) => void;
 }
+
+/** A reporter for a store built without Services. */
+export const NO_EXECUTION_REPORTER: ExecutionReporter = {
+  start: () => 0,
+  finish: () => undefined,
+  recount: () => undefined,
+};
 
 export interface ExecutionsState extends ExecutionReporter {
   /** Newest first, by tab id. */
@@ -82,6 +91,17 @@ export function createExecutionsStore(limit = EXECUTIONS_PER_SESSION) {
         byTab: {
           ...get().byTab,
           [tabId]: kept.map((execution) => (execution.id === executionId ? { ...execution, ...end } : execution)),
+        },
+      });
+    },
+
+    recount(tabId, executionId, rowCount) {
+      const kept = get().byTab[tabId];
+      if (kept === undefined || !kept.some((execution) => execution.id === executionId)) return;
+      set({
+        byTab: {
+          ...get().byTab,
+          [tabId]: kept.map((execution) => (execution.id === executionId ? { ...execution, rowCount } : execution)),
         },
       });
     },

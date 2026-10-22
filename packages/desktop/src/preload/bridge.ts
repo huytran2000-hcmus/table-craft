@@ -45,6 +45,7 @@ export const INVOKE_CHANNELS = {
   writeSettings: "table-craft:settings.write",
   reloadThemes: "table-craft:themes.reload",
   openThemesFolder: "table-craft:themes.open-folder",
+  appInfo: "table-craft:app.info",
 } as const;
 
 /** The `window.postMessage` kind preload uses to hand a port on; contextBridge cannot carry one. */
@@ -201,6 +202,14 @@ export interface BridgeFailure {
 export type InvokeResult<T> =
   { readonly ok: true; readonly value: T } | { readonly ok: false; readonly error: BridgeFailure };
 
+/** What Help → About shows (plan 014 decision 9); `version` is `0.0.0` in development. */
+export interface AppInfo {
+  readonly name: string;
+  readonly version: string;
+  readonly electron: string;
+  readonly chromium: string;
+}
+
 export interface TableCraftBridge {
   listDatasources(): Promise<InvokeResult<DatasourceList>>;
   saveDatasource(request: SaveDatasourceRequest): Promise<InvokeResult<DatasourceView>>;
@@ -240,6 +249,7 @@ export interface TableCraftBridge {
   /** Lets the held close go ahead, or keeps the window open. */
   answerClose(proceed: boolean): Promise<InvokeResult<null>>;
   readSettings(): Promise<InvokeResult<SettingsSnapshot>>;
+  appInfo(): Promise<InvokeResult<AppInfo>>;
   /** Saves the whole document; every window, this one included, hears it on `onSettingsChanged`. */
   writeSettings(settings: Settings): Promise<InvokeResult<null>>;
   /** Rereads `<userData>/themes/`; every window hears the list on `onSettingsChanged`. */

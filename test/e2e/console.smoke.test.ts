@@ -15,6 +15,7 @@ import { MYSQL_CONFIG, POSTGRES_CONFIG } from "../support/databases.js";
 import { seededSqliteFile } from "../support/sqliteFixture.js";
 import {
   activeEditorTab,
+  closeApp,
   DATABASES_ENABLED,
   editorTabs,
   enginePids,
@@ -67,8 +68,6 @@ const DOLLAR_QUOTED_SCRIPT = [
   "$$ LANGUAGE plpgsql;",
   `SELECT ${SMOKE_FUNCTION}(2, 3) AS sum;`,
 ].join("\n");
-/** How long `app.close()` may take before the scenario kills the app; an unanswered dialog blocks it. */
-const CLOSE_DEADLINE_MS = 10_000;
 /** The autosave debounce (500 ms) with room for the write. */
 const AUTOSAVE_WAIT_MS = 5_000;
 /** A page expression, because this program has no DOM lib. */
@@ -170,17 +169,14 @@ describe.runIf(DATABASES_ENABLED)("SQL console live test", () => {
   let running: RunningApp | null = null;
   let drivingUpdates = 0;
 
-  async function closeApp(): Promise<void> {
+  async function closeRunning(): Promise<void> {
     const current = running;
     running = null;
-    if (current === null) return;
-    const closed = current.app.close().then(() => true);
-    const late = new Promise<false>((settle) => setTimeout(() => settle(false), CLOSE_DEADLINE_MS));
-    if (!(await Promise.race([closed, late]))) current.app.process().kill();
+    await closeApp(current?.app);
   }
 
   afterEach(async () => {
-    await closeApp();
+    await closeRunning();
     const undo = Array.from({ length: drivingUpdates }, () => UNDO_DRIVING_UPDATE);
     drivingUpdates = 0;
     // Every scenario expects the fixture's three tables and its orders, untouched.
@@ -408,7 +404,7 @@ describe.runIf(DATABASES_ENABLED)("SQL console live test", () => {
           timeout: AUTOSAVE_WAIT_MS,
         })
         .toBe(sql);
-      await closeApp();
+      await closeRunning();
 
       page = await launch(null, { userDataDir });
 

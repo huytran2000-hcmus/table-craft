@@ -6,6 +6,8 @@
  */
 import { afterEach, describe, expect, it } from "vitest";
 import {
+  CLOSE_HOOK_TIMEOUT_MS,
+  closeApp,
   gridText,
   launchApp,
   runStatement,
@@ -21,9 +23,9 @@ describe.runIf(SMOKE_ENABLED)("desktop smoke", () => {
   let running: RunningApp | null = null;
 
   afterEach(async () => {
-    await running?.app.close();
+    await closeApp(running?.app);
     running = null;
-  });
+  }, CLOSE_HOOK_TIMEOUT_MS);
 
   it(
     "givenBuiltApp_whenSelectOneRun_thenGridShowsTheRow",

@@ -1,18 +1,47 @@
-# How the Vite bundles become an installable app. `bun run build` produces `dist/`; electron-builder
-# only wraps it. Packaging is untested until its own plan (plan 001, out of scope).
 appId: dev.table-craft.desktop
 productName: table-craft
 
 directories:
   output: release
+  buildResources: build
 
-# Every runtime dependency is inlined by Vite, so `dist/` is the whole app.
+# Decision 033: the bundles go into app.asar; the built-in plugins ship beside it as real files.
+# Vite inlines every runtime dependency, so no node_modules ships.
 files:
   - dist/**
-
+  - "!dist/resources/**"
+  - "!**/*.map"
+  - "!node_modules/**"
+extraResources:
+  - from: dist/resources/plugins
+    to: plugins
+    filter:
+      - "**/*"
+      - "!**/*.map"
+  # The window icon on Windows and Linux, where the window does not take it from the bundle.
+  - from: build/icon.png
+    to: icon.png
+asar: true
 npmRebuild: false
+icon: build/icon.png
+# The default leaves x64 unnamed, which reads as universal beside the arm64 DMG.
+artifactName: ${productName}-${version}-${arch}.${ext}
 
 mac:
   category: public.app-category.developer-tools
-  # Ad-hoc signing. A real identity belongs to whoever ships the build.
-  identity: null
+  target: dmg
+  # For a Developer ID build (CSC_LINK or CSC_NAME set) and notarisation. Without one,
+  # scripts/package.ts signs ad hoc and turns the hardened runtime off: its library validation
+  # refuses an ad-hoc-signed Electron Framework, which has no Team ID (plan 014 deviation).
+  hardenedRuntime: true
+  entitlements: build/entitlements.mac.plist
+  entitlementsInherit: build/entitlements.mac.plist
+
+win:
+  target: nsis
+
+linux:
+  target: AppImage
+  category: Development
+  # Otherwise the binary is named after the package, `@table-craft/desktop`.
+  executableName: table-craft

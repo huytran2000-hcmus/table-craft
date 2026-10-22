@@ -7,7 +7,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { basename, join, resolve } from "node:path";
-import { _electron, type ElectronApplication, type Page } from "playwright-core";
+import { _electron, type ElectronApplication, type Locator, type Page } from "playwright-core";
 import { expect } from "vitest";
 
 export const SMOKE_ENABLED = process.env["TABLE_CRAFT_SMOKE"] === "1";
@@ -16,8 +16,18 @@ export const DATABASES_ENABLED = SMOKE_ENABLED && process.env["TABLE_CRAFT_SMOKE
 /** When set, `captureWindow` saves PNGs there; otherwise it does nothing. */
 const EVIDENCE_DIR = process.env["TABLE_CRAFT_EVIDENCE_DIR"];
 
+/**
+ * The packaged app's executable to drive instead of `dist/main/main.js` (plan 014), set by
+ * `bun run test:smoke:packaged`; `LaunchOptions.executable` overrides it per launch.
+ */
+export const APP_EXECUTABLE = process.env["TABLE_CRAFT_APP_EXECUTABLE"] || undefined;
+
 export const LAUNCH_TIMEOUT_MS = 30_000;
 export const SCENARIO_TIMEOUT_MS = LAUNCH_TIMEOUT_MS * 2;
+/** How long `app.close()` may take before `closeApp` kills the app; an unanswered dialog blocks it. */
+export const CLOSE_DEADLINE_MS = 10_000;
+/** An `afterEach` that closes the app and then cleans up a database needs room for both. */
+export const CLOSE_HOOK_TIMEOUT_MS = CLOSE_DEADLINE_MS * 3;
 
 const REPOSITORY_ROOT = resolve(import.meta.dirname, "../..");
 const DESKTOP_ROOT = join(REPOSITORY_ROOT, "packages/desktop");
@@ -106,6 +116,11 @@ export interface RunningApp {
 export interface LaunchOptions {
   /** Defaults to a fresh temporary directory, so nothing persists between launches. */
   readonly userDataDir?: string;
+  /**
+   * An app executable to launch with no entry argument, such as the packaged app; defaults to
+   * `TABLE_CRAFT_APP_EXECUTABLE`, else the `electron` binary running `dist/main/main.js`.
+   */
+  readonly executable?: string;
 }
 
 export interface GridText {
@@ -131,10 +146,31 @@ export async function launchApp(
   if (datasource !== null) env[DATASOURCE_ENV] = JSON.stringify(datasource);
   const userDataDir = options.userDataDir ?? newProfile();
   env[USER_DATA_ENV] = userDataDir;
-  const args = process.platform === "darwin" ? [MOCK_KEYCHAIN_FLAG, MAIN_ENTRY] : [MAIN_ENTRY];
-  const app = await _electron.launch({ executablePath: electronBinary(), args, env });
+  const executable = options.executable ?? APP_EXECUTABLE;
+  const entry = executable === undefined ? [MAIN_ENTRY] : [];
+  const args = process.platform === "darwin" ? [MOCK_KEYCHAIN_FLAG, ...entry] : entry;
+  const app = await _electron.launch({ executablePath: executable ?? electronBinary(), args, env });
   const page = await app.firstWindow();
   return { app, page, userDataDir };
+}
+
+/**
+ * Closes the app, and kills its process when `app.close()` has not finished within
+ * `CLOSE_DEADLINE_MS`, so a dialog left open by a failed scenario never hangs the next one.
+ */
+export async function closeApp(app: ElectronApplication | null | undefined): Promise<void> {
+  if (app === null || app === undefined) return;
+  let timer: NodeJS.Timeout | undefined;
+  const closed = app.close().then(
+    () => true,
+    () => true,
+  );
+  const late = new Promise<false>((settle) => {
+    timer = setTimeout(() => settle(false), CLOSE_DEADLINE_MS);
+  });
+  const inTime = await Promise.race([closed, late]);
+  clearTimeout(timer);
+  if (!inTime) app.process().kill("SIGKILL");
 }
 
 export async function setWindowSize(app: ElectronApplication, size: { width: number; height: number }): Promise<void> {
@@ -196,6 +232,32 @@ export async function gridText(page: Page): Promise<GridText> {
     headers: await page.getByRole("columnheader").allTextContents(),
     cells: await page.getByRole("gridcell").allTextContents(),
   };
+}
+
+interface CellSnapshot {
+  readonly row: number;
+  readonly text: string;
+}
+
+/** The part of a DOM element `columnSnapshot` reads; the root program has no DOM lib. */
+interface CellElement {
+  getAttribute(name: string): string | null;
+  readonly textContent: string | null;
+}
+
+/**
+ * The texts of `cells`, a grid's cells of one column, ordered by `data-row`. Read in one snapshot:
+ * listing them and then reading each races a re-render, and a cell gone in between makes its read
+ * wait out Playwright's 30 s default before the poll retries (found live, plan 014).
+ */
+export async function columnSnapshot(cells: Locator): Promise<string[]> {
+  const entries = await cells.evaluateAll((elements: readonly CellElement[]): CellSnapshot[] =>
+    elements.map((element) => ({
+      row: Number(element.getAttribute("data-row")),
+      text: element.textContent ?? "",
+    })),
+  );
+  return entries.sort((left, right) => left.row - right.row).map((entry) => entry.text);
 }
 
 export function consoleAlert(page: Page) {

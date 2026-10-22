@@ -9,6 +9,7 @@ import {
   HISTORY_OUTCOMES,
   HISTORY_SOURCES,
   INVOKE_CHANNELS,
+  type AppInfo,
   type BridgeFailure,
   type HistoryEntry,
   type InvokeResult,
@@ -74,6 +75,7 @@ export interface IpcOptions<Sender> {
   readonly settings: SettingsService;
   /** Creates `<userData>/themes/` if missing and shows it in the file manager. */
   readonly openThemesFolder: () => Promise<void>;
+  readonly appInfo: () => AppInfo;
   readonly log: (message: string, cause: unknown) => void;
 }
 
@@ -167,6 +169,7 @@ export function registerIpc<Sender>(ipc: InvokeRegistrar<Sender>, options: IpcOp
     await options.openThemesFolder();
     return null;
   });
+  handle(INVOKE_CHANNELS.appInfo, noRequest, () => options.appInfo());
 
   const { history } = options;
   handle(INVOKE_CHANNELS.historyRecord, historyEntry, (entry) => {

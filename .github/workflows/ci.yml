@@ -1,0 +1,98 @@
+# Plan 014, decisions 15 and 16: verify on Linux, package and smoke-test the packaged app on every
+# target, and on a `v*` tag collect the installers into a draft release.
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+    tags: ["v*"]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: .bun-version
+      - run: bun install --frozen-lockfile
+      - run: bun run lint
+      - run: bun run format:check
+      - run: bun run typecheck
+      - run: bun run test
+      - run: bun run test:db
+
+  package:
+    name: package (${{ matrix.name }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 40
+    # Decision 014: macOS is first-class, Windows and Linux best-effort.
+    continue-on-error: ${{ !matrix.blocking }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: macOS arm64
+            runner: macos-15
+            blocking: true
+            installer: packages/desktop/release/*.dmg
+          - name: macOS x64
+            runner: macos-15-intel
+            blocking: true
+            installer: packages/desktop/release/*.dmg
+          - name: Windows x64
+            runner: windows-latest
+            blocking: false
+            installer: packages/desktop/release/*.exe
+          - name: Linux x64
+            runner: ubuntu-latest
+            blocking: false
+            installer: packages/desktop/release/*.AppImage
+    steps:
+      - uses: actions/checkout@v7
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: .bun-version
+      - run: bun install --frozen-lockfile
+      - run: bun run desktop:package
+      - name: Smoke-test the packaged app
+        if: runner.os != 'Linux'
+        run: bun run test:smoke:packaged
+      # Ubuntu 24.04's AppArmor forbids the unprivileged user namespaces Chromium's sandbox needs,
+      # and the runner has no display.
+      - name: Smoke-test the packaged app (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          xvfb-run --auto-servernum bun run test:smoke:packaged
+      - uses: actions/upload-artifact@v7
+        with:
+          name: installer-${{ runner.os }}-${{ runner.arch }}
+          path: ${{ matrix.installer }}
+          if-no-files-found: error
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [verify, package]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: installer-*
+          path: installers
+          merge-multiple: true
+      - name: Draft the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" installers/* --draft --generate-notes --repo "$GITHUB_REPOSITORY"

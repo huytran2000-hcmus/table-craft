@@ -13,10 +13,12 @@ import { seededSqliteFile } from "../support/sqliteFixture.js";
 import { TYPE_PROBE_EXPECTED } from "../support/typeProbe.js";
 import {
   cancelButton,
-  evidenceFor,
+  CLOSE_HOOK_TIMEOUT_MS,
+  closeApp,
   consoleAlert,
   DATABASES_ENABLED,
   EVIDENCE_WINDOW,
+  evidenceFor,
   gridText,
   launchApp,
   runButton,
@@ -90,9 +92,9 @@ describe.runIf(DATABASES_ENABLED)("desktop against real databases", () => {
   }
 
   afterEach(async () => {
-    await running?.app.close();
+    await closeApp(running?.app);
     running = null;
-  });
+  }, CLOSE_HOOK_TIMEOUT_MS);
 
   describe.each(TARGETS)("$name", (target) => {
     it(

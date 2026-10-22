@@ -190,6 +190,20 @@ describe("explain in the console", () => {
     });
   });
 
+  it("givenAnalyseConfirmOpen_whenStatusRead_thenWaitingForConfirmation", async () => {
+    const { store, confirmAnalyse, session } = await opened("DELETE FROM orders");
+    const asked: string[] = [];
+    confirmAnalyse.mockImplementation(() => {
+      asked.push(session().status);
+      return Promise.resolve(false);
+    });
+
+    await store.getState().explain("c1", true);
+
+    expect(asked).toEqual(["confirming"]);
+    expect(session().status).toBe("ready");
+  });
+
   it("givenAnalyseOfWriteDeclined_whenRun_thenNothingRunsOrIsRecorded", async () => {
     const { store, explained, recorded, executions, output, session } = await opened("DELETE FROM orders", {
       confirm: false,

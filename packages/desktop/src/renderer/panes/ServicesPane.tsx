@@ -7,6 +7,7 @@ import {
   connectionText,
   formatDuration,
   rowsText,
+  SERVICE_STATE_TEXT,
   type ServiceState,
 } from "@table-craft/desktop/renderer/model/format.js";
 import {
@@ -36,6 +37,7 @@ const STATE_CLASS: Readonly<Record<ServiceState, string>> = {
   connecting: "text-ink-muted",
   idle: "text-ink-muted",
   running: "text-accent",
+  waiting: "text-warning",
   failed: "text-danger",
   disconnected: "text-ink-muted",
 };
@@ -127,7 +129,7 @@ function SessionLine({ row }: { readonly row: Extract<ServiceRow, { kind: "sessi
         className={cn("size-icon shrink-0", node.state === "running" ? "animate-spin text-accent" : "text-ink-muted")}
       />
       <span className="truncate">{node.title}</span>
-      <span className={STATE_CLASS[node.state]}>{node.state}</span>
+      <span className={STATE_CLASS[node.state]}>{SERVICE_STATE_TEXT[node.state]}</span>
       {node.lastDurationMs === null ? null : (
         <span className="ml-auto shrink-0 text-ink-muted tabular-nums">{formatDuration(node.lastDurationMs)}</span>
       )}
@@ -154,7 +156,7 @@ function ExecutionLine({ execution, now }: { readonly execution: Execution; read
 
 function rowLabel(row: ServiceRow): string {
   if (row.kind === "datasource") return row.node.name;
-  if (row.kind === "session") return `${row.node.title}, ${row.node.state}`;
+  if (row.kind === "session") return `${row.node.title}, ${SERVICE_STATE_TEXT[row.node.state]}`;
   return `${row.node.label}, ${row.node.outcome}`;
 }
 

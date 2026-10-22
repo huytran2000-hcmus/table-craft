@@ -14,6 +14,7 @@ import { TINT_BORDER } from "@table-craft/desktop/renderer/ui/tint.js";
 const STATUS_TEXT = {
   connecting: "Connecting…",
   running: "Running…",
+  confirming: "Waiting for confirmation…",
   ready: "",
   failed: "",
   disconnected: "Disconnected; Run reconnects.",

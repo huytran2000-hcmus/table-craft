@@ -11,6 +11,8 @@ import { seededSqliteFile } from "../support/sqliteFixture.js";
 import {
   activeEditorTab,
   answerSecretPrompt,
+  CLOSE_HOOK_TIMEOUT_MS,
+  closeApp,
   consoleAlert,
   contentSize,
   DATABASES_ENABLED,
@@ -105,9 +107,9 @@ describe.runIf(DATABASES_ENABLED)("datasources live test", () => {
   let running: RunningApp | null = null;
 
   afterEach(async () => {
-    await running?.app.close();
+    await closeApp(running?.app);
     running = null;
-  });
+  }, CLOSE_HOOK_TIMEOUT_MS);
 
   async function launch(datasources: readonly SavedDatasource[] = [], userDataDir = newProfile()) {
     seedDatasources(userDataDir, datasources);
@@ -118,7 +120,7 @@ describe.runIf(DATABASES_ENABLED)("datasources live test", () => {
   }
 
   async function relaunch(userDataDir: string) {
-    await running?.app.close();
+    await closeApp(running?.app);
     running = await launchApp(null, { userDataDir });
     await setWindowSize(running.app, EVIDENCE_WINDOW);
     await toolWindow(running.page, "Database").waitFor();

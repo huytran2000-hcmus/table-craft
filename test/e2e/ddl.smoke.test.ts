@@ -13,17 +13,22 @@ import { MYSQL_CONFIG, POSTGRES_CONFIG } from "../support/databases.js";
 import { seededSqliteFile } from "../support/sqliteFixture.js";
 import {
   activeEditorTab,
+  CLOSE_HOOK_TIMEOUT_MS,
+  closeApp,
   DATABASES_ENABLED,
   editorTabs,
   EVIDENCE_WINDOW,
   evidenceFor,
+  gridText,
   LAUNCH_TIMEOUT_MS,
   launchApp,
   pressChord,
   runAllButton,
+  runStatement,
   SCENARIO_TIMEOUT_MS,
   setWindowSize,
   sqlEditor,
+  startStatement,
   toolWindow,
   waitUntilReady,
   type Datasource,
@@ -39,9 +44,6 @@ function sqlite(): Datasource {
   return { id: "lite", pluginId: "sqlite", config: { path: seededSqliteFile() } };
 }
 
-/** How long `app.close()` may take before the scenario kills the app. */
-const CLOSE_DEADLINE_MS = 10_000;
-const HOOK_TIMEOUT_MS = CLOSE_DEADLINE_MS * 2;
 const TABLES_GROUP = "tables 6";
 const VIEWS_GROUP = "views 1";
 const ADDED_COLUMN = "ALTER TABLE orders ADD COLUMN note text";
@@ -140,16 +142,13 @@ async function chooseStatement(page: Page, relation: string, label: string): Pro
 describe.runIf(DATABASES_ENABLED)("DDL and SQL generation live test", () => {
   let running: RunningApp | null = null;
 
-  async function closeApp(): Promise<void> {
+  async function closeRunning(): Promise<void> {
     const current = running;
     running = null;
-    if (current === null) return;
-    const closed = current.app.close().then(() => true);
-    const late = new Promise<false>((settle) => setTimeout(() => settle(false), CLOSE_DEADLINE_MS));
-    if (!(await Promise.race([closed, late]))) current.app.process().kill();
+    await closeApp(current?.app);
   }
 
-  afterEach(closeApp, HOOK_TIMEOUT_MS);
+  afterEach(closeRunning, CLOSE_HOOK_TIMEOUT_MS);
 
   /** Launches on `datasource` and waits for its current namespace to be described in the tree. */
   async function launch(datasource: Datasource): Promise<Page> {
@@ -344,10 +343,48 @@ describe.runIf(DATABASES_ENABLED)("DDL and SQL generation live test", () => {
         await expect.poll(() => linesOf(page, "generator-preview")).toMatch(select);
         // MySQL's backticks are the case the other two cannot show.
         if (datasource.pluginId === "mysql") await captureWindow(page, "generator-select");
-        await closeApp();
+        await closeRunning();
       }
     },
     SCENARIO_TIMEOUT_MS * 3,
+  );
+
+  it(
+    "givenSqliteOrders_whenGeneratingDropThenCreateAndRunningBoth_thenTheTableIsBackEmpty",
+    async () => {
+      const page = await launch(sqlite());
+      await selectRelation(page, "orders");
+      await openGenerator(page, "orders");
+
+      await chooseStatement(page, "orders", "CREATE");
+      const create = await linesOf(page, "generator-preview");
+      expect(create).toMatch(/^CREATE TABLE orders \(/);
+      expect(create).toContain("customer_id INTEGER NOT NULL REFERENCES customers (id)");
+      expect(create).toContain("CREATE INDEX orders_placed_at_idx ON orders (placed_at);");
+      await chooseStatement(page, "orders", "DROP");
+      const drop = await linesOf(page, "generator-preview");
+      expect(drop).toBe(`DROP TABLE "main"."orders";`);
+      await generator(page, "orders").getByRole("button", { name: "Open in Console", exact: true }).click();
+      await expect.poll(() => editorText(page)).toBe(drop);
+      await waitUntilReady(page);
+      await runAllButton(page).click();
+      const confirm = page.getByRole("dialog", { name: "Run a destructive statement?" });
+      await confirm.getByRole("button", { name: "Execute", exact: true }).click();
+      await confirm.waitFor({ state: "detached" });
+      await expect.poll(() => output(page).textContent()).toContain(`${drop.replace(/;$/, "")}completed in`);
+      // customer_totals reads orders, so this also covers a view that no longer compiles.
+      await expect.poll(() => treeRow(page, "orders").count(), { timeout: LAUNCH_TIMEOUT_MS }).toBe(0);
+      expect(await treeRow(page, "tables 5").count()).toBe(1);
+      expect(await treeRow(page, "views 1").count()).toBe(1);
+
+      await startStatement(page, create);
+      await expect.poll(() => treeRow(page, "orders").count(), { timeout: LAUNCH_TIMEOUT_MS }).toBe(1);
+      await waitUntilReady(page);
+      await runStatement(page, "SELECT count(*) AS n FROM orders");
+
+      expect((await gridText(page)).cells).toEqual(["0"]);
+    },
+    SCENARIO_TIMEOUT_MS,
   );
 
   it(

@@ -102,8 +102,19 @@ export function sqliteIntrospector(database: DatabaseSync): Introspector {
       .map((column) => column.name);
   }
 
+  function columnRows(schema: string, name: string, kind: Relation["kind"]): ColumnRow[] {
+    try {
+      return all<ColumnRow>(COLUMNS_SQL, name, schema);
+    } catch (cause) {
+      // SQLite lets a table a view reads be dropped; the view stays listed but no longer compiles,
+      // and one such view must not fail its whole schema. It shows without columns.
+      if (kind === "view") return [];
+      throw cause;
+    }
+  }
+
   function describeRelation(schema: string, name: string, kind: Relation["kind"]): Relation {
-    const rows = all<ColumnRow>(COLUMNS_SQL, name, schema).filter((row) => row.hidden !== HIDDEN_VIRTUAL_COLUMN);
+    const rows = columnRows(schema, name, kind).filter((row) => row.hidden !== HIDDEN_VIRTUAL_COLUMN);
     const keyColumns = rows.filter((row) => row.pk > 0).sort((left, right) => left.pk - right.pk);
     const rowidAlias = keyColumns.length === 1 && ROWID_ALIAS_TYPE.test(keyColumns[0]?.type ?? "");
     const columns = rows.map((row, index): ColumnMeta => ({

@@ -131,7 +131,11 @@ export const APPLICATION_MENU: readonly MenuEntry[] = [
   {
     kind: "submenu",
     label: "Help",
-    items: [{ kind: "action", label: "Find Action…", actionId: "palette.findAction" }],
+    items: [
+      { kind: "action", label: "Find Action…", actionId: "palette.findAction" },
+      { kind: "separator", only: "notMac" },
+      { kind: "action", label: "About table-craft", actionId: "app.about", only: "notMac" },
+    ],
   },
 ];
 

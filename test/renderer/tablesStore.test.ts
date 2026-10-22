@@ -24,7 +24,12 @@ const IDENTITY: EditableIdentity = { identity: ["id"] };
 interface EngineOptions {
   readonly editable?: EditableIdentity;
   readonly submitFails?: boolean;
+  readonly previewFails?: boolean;
+  /** The first page leaves the cursor open; Fetch All then reads `FETCHED_ALL` rows. */
+  readonly cursorOpen?: boolean;
 }
+
+const FETCHED_ALL = 5;
 
 /** An engine holding two rows of `edit_probe (id, label)`; WHERE `bad` is refused like a database would. */
 function tableEngine(options: EngineOptions = {}) {
@@ -54,8 +59,8 @@ function tableEngine(options: EngineOptions = {}) {
           ],
           typeClasses: ["integer", "text"],
           rowCount: 2,
-          complete: true,
-          cursorOpen: false,
+          complete: options.cursorOpen !== true,
+          cursorOpen: options.cursorOpen === true,
           rowsAffected: null,
           firstWindow: {
             offset: 0,
@@ -95,8 +100,13 @@ function tableEngine(options: EngineOptions = {}) {
           ],
           rowsAffected: 2,
         });
+      case "edits.preview":
+        if (options.previewFails === true) return Promise.reject(new Error("The engine exited."));
+        return Promise.resolve([`UPDATE "public"."edit_probe" SET "label" = 'renamed' WHERE "id" = 1`]);
       case "table.count":
         return Promise.resolve(12_345);
+      case "result.fetchMore":
+        return Promise.resolve({ rowCount: FETCHED_ALL, complete: true, cursorOpen: false });
       default:
         return Promise.resolve(null);
     }
@@ -145,6 +155,15 @@ describe("tables store", () => {
     expect(session().status).toBe("ready");
     expect(session().result?.rowCount).toBe(2);
     expect(session().editable).toEqual(IDENTITY);
+  });
+
+  it("givenOpenCursor_whenFetchAll_thenServicesLoadRowShowsAllRows", async () => {
+    const { store, session, executionsOf } = await openedTable({ cursorOpen: true });
+    const resultId = session().result?.id ?? "";
+
+    await store.getState().fetchMore("t1", resultId, true);
+
+    expect(executionsOf().map((execution) => execution.rowCount)).toEqual([FETCHED_ALL]);
   });
 
   it("givenPageSizeSetting_whenTableOpened_thenQueryCarriesIt", async () => {
@@ -294,8 +313,33 @@ describe("tables store", () => {
     ]);
   });
 
-  it("givenRejectedSubmit_whenSubmitted_thenErrorExecutionAndNoHistory", async () => {
+  it("givenTableSubmitFails_whenRecorded_thenErrorEntryWithScript", async () => {
     const { store, recorded, executionsOf } = await openedTable({ submitFails: true });
+    store.getState().beginEdit("t1", { row: 0, column: 1 });
+    store.getState().changeEdit("t1", "renamed");
+    store.getState().commitEdit("t1");
+
+    await store.getState().submit("t1");
+
+    const script = `UPDATE "public"."edit_probe" SET "label" = 'renamed' WHERE "id" = 1;`;
+    const message = "Statement 1 affected 0 rows instead of exactly one.";
+    expect(recorded).toEqual([
+      {
+        datasourceId: "pg",
+        sql: script,
+        startedAt: 1_000,
+        durationMs: 7,
+        outcome: "error",
+        rowCount: null,
+        message,
+        source: "table",
+      },
+    ]);
+    expect(executionsOf()[0]).toMatchObject({ label: "Submit 1 statement", sql: script, outcome: "error", message });
+  });
+
+  it("givenSubmitAndPreviewFail_whenSubmitted_thenErrorExecutionAndNoHistory", async () => {
+    const { store, recorded, executionsOf } = await openedTable({ submitFails: true, previewFails: true });
     store.getState().beginEdit("t1", { row: 0, column: 1 });
     store.getState().changeEdit("t1", "renamed");
     store.getState().commitEdit("t1");

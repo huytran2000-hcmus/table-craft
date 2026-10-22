@@ -25,6 +25,8 @@ export interface ResultOwner {
   readonly update: (ownerId: string, resultId: string, change: (result: ResultTab) => ResultTab) => void;
   /** A request about `result` failed; `window` when it was a scroll's window load. */
   readonly failed: (ownerId: string, result: ResultTab, error: EngineError, window: boolean) => void;
+  /** Fetching grew the result to `rowCount` rows, so Services can say so. */
+  readonly fetched: (ownerId: string, resultId: string, rowCount: number) => void;
 }
 
 /** Whether Fetch Next Page and Fetch All can run on the tab. */
@@ -98,6 +100,7 @@ export function createResultWindows(owner: ResultOwner) {
     try {
       const state = await client.call("result.fetchMore", { handle: result.handle, all, ...result.paging });
       owner.update(ownerId, resultId, (latest) => withState(latest, state));
+      owner.fetched(ownerId, resultId, state.rowCount);
     } catch (cause) {
       owner.failed(ownerId, result, toError(cause), false);
       owner.update(ownerId, resultId, (latest) => ({ ...latest, cursorOpen: false }));

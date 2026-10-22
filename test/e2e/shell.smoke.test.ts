@@ -9,9 +9,11 @@
 import { afterEach, describe, expect, it } from "vitest";
 import {
   activeEditorTab,
-  evidenceFor,
+  CLOSE_HOOK_TIMEOUT_MS,
+  closeApp,
   datasourceStatus,
   editorTabs,
+  evidenceFor,
   findAction,
   LAUNCH_TIMEOUT_MS,
   launchApp,
@@ -51,9 +53,9 @@ describe.runIf(SMOKE_ENABLED)("shell smoke", () => {
   let running: RunningApp | null = null;
 
   afterEach(async () => {
-    await running?.app.close();
+    await closeApp(running?.app);
     running = null;
-  });
+  }, CLOSE_HOOK_TIMEOUT_MS);
 
   it(
     "givenLaunch_whenShellRenders_thenBothToolWindowsAndOneConsoleShow",
@@ -137,7 +139,7 @@ describe.runIf(SMOKE_ENABLED)("shell smoke", () => {
       expect(resized?.width ?? 0).toBeGreaterThan(before.width + RESIZE_DRAG_PX / 2);
 
       const { userDataDir } = running;
-      await running.app.close();
+      await closeApp(running.app);
       running = await launchApp(undefined, { userDataDir });
       page = running.page;
       await waitUntilReady(page);

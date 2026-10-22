@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { mkdir, readdir, readFile, rename, rm, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import {
   app,
   BrowserWindow,
@@ -24,6 +24,7 @@ import { createDatasourceStore } from "@table-craft/desktop/main/datasources.js"
 import { createHostRegistry, type EngineProcess } from "@table-craft/desktop/main/hosts.js";
 import { registerIpc } from "@table-craft/desktop/main/ipc.js";
 import { installApplicationMenu } from "@table-craft/desktop/main/menu.js";
+import { appPaths } from "@table-craft/desktop/main/paths.js";
 import { listPlugins } from "@table-craft/desktop/main/plugins.js";
 import { createSecretStore, type Cipher } from "@table-craft/desktop/main/secrets.js";
 import { createDatasourceService } from "@table-craft/desktop/main/service.js";
@@ -37,6 +38,7 @@ import { resolveTheme, type Theme } from "@table-craft/desktop/appearance/themes
 import { ENGINE_PORT_MESSAGE } from "@table-craft/desktop/engine/protocol.js";
 import {
   CHANNELS,
+  type AppInfo,
   type DatasourceList,
   type EngineExited,
   type SettingsChanged,
@@ -57,6 +59,12 @@ const MISSING_FILE = "ENOENT";
 const CIPHER_ENCODING = "base64";
 /** Decision 010's place for query history (decision 030). */
 const HISTORY_FILE = "history.sqlite";
+/**
+ * Unpackaged, `app.getVersion()` is Electron's own, because `dist/main` has no package.json; a
+ * packaged build carries the version from git (decision 033).
+ */
+const DEVELOPMENT_VERSION = "0.0.0";
+const MAC_PLATFORM = "darwin";
 
 // Electron reads the name from the package.json beside the entry, and `dist/main` has none; without
 // this, userData and so the user plugin root would be `Electron`.
@@ -65,9 +73,18 @@ app.setPath(USER_DATA, process.env[USER_DATA_ENV] || join(app.getPath(APP_DATA),
 
 const ephemeral = datasourceFromEnvironment(process.env);
 
-function distPath(relative: string): string {
-  return join(import.meta.dirname, relative);
-}
+const paths = appPaths({
+  isPackaged: app.isPackaged,
+  resourcesPath: process.resourcesPath,
+  distDirectory: dirname(import.meta.dirname),
+});
+const appVersion = app.isPackaged ? app.getVersion() : DEVELOPMENT_VERSION;
+const appInfo: AppInfo = {
+  name: APP_NAME,
+  version: appVersion,
+  electron: process.versions.electron,
+  chromium: process.versions.chrome,
+};
 
 const files: DirectoryFileSystem = {
   async readText(path) {
@@ -105,14 +122,13 @@ function broadcast(channel: string, payload: DatasourceList | EngineExited | Set
   for (const window of BrowserWindow.getAllWindows()) window.webContents.send(channel, payload);
 }
 
-const entryFile = distPath("../engine/main.js");
-const pluginRoots = [distPath("../resources/plugins"), join(app.getPath(USER_DATA), USER_PLUGINS_DIR)];
+const pluginRoots = [paths.builtInPlugins, join(app.getPath(USER_DATA), USER_PLUGINS_DIR)];
 
 const hosts = createHostRegistry<WebContents>({
   pluginRoots,
   dependencies: {
     fork: (serviceName): EngineProcess => {
-      const host: UtilityProcess = utilityProcess.fork(entryFile, [], { serviceName, stdio: HOST_STDIO });
+      const host: UtilityProcess = utilityProcess.fork(paths.engineEntry, [], { serviceName, stdio: HOST_STDIO });
       return host;
     },
     connectPort(host, datasourceId, contents) {
@@ -159,8 +175,10 @@ function createWindow(settings: SettingsService): void {
     show: false,
     // The first frame, before the renderer's bundle runs, is already the theme's canvas.
     backgroundColor: applyNativeTheme(settings).colors.canvas,
+    // macOS takes the window's icon from the app bundle, or the dock in development.
+    ...(process.platform === MAC_PLATFORM ? {} : { icon: paths.icon }),
     webPreferences: {
-      preload: distPath("../preload/preload.cjs"),
+      preload: paths.preload,
       contextIsolation: true,
       sandbox: true,
       nodeIntegration: false,
@@ -168,7 +186,7 @@ function createWindow(settings: SettingsService): void {
   });
   window.once("ready-to-show", () => window.show());
   closeGuard.guard(window);
-  void window.loadFile(distPath("../renderer/index.html"));
+  void window.loadFile(paths.rendererIndex);
 }
 
 async function saveFile(contents: WebContents, title: string, defaultName: string): Promise<string | null> {
@@ -186,6 +204,8 @@ async function chooseFile(contents: WebContents, title: string): Promise<string 
 }
 
 void app.whenReady().then(async () => {
+  app.setAboutPanelOptions({ applicationName: APP_NAME, applicationVersion: appVersion });
+  if (process.platform === MAC_PLATFORM && !app.isPackaged) app.dock?.setIcon(paths.icon);
   const directory = app.getPath(USER_DATA);
   const consoles = createConsoleFiles({ directory, files });
   await mkdir(directory, { recursive: true });
@@ -235,6 +255,7 @@ void app.whenReady().then(async () => {
       const window = BrowserWindow.fromWebContents(sender);
       if (window !== null) closeGuard.answer(window, proceed);
     },
+    appInfo: () => appInfo,
     log: (message, cause) => console.error(`table-craft: ${message}`, cause),
   });
   installApplicationMenu(() => BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0] ?? null);
@@ -245,7 +266,7 @@ void app.whenReady().then(async () => {
 });
 
 app.on("window-all-closed", () => {
-  if (process.platform !== "darwin") app.quit();
+  if (process.platform !== MAC_PLATFORM) app.quit();
 });
 
 app.on("before-quit", () => closeGuard.beforeQuit());

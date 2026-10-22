@@ -70,6 +70,7 @@ const bridge: TableCraftBridge = {
   writeSettings: (settings) => invoke(INVOKE_CHANNELS.writeSettings, settings),
   reloadThemes: () => invoke(INVOKE_CHANNELS.reloadThemes),
   openThemesFolder: () => invoke(INVOKE_CHANNELS.openThemesFolder),
+  appInfo: () => invoke(INVOKE_CHANNELS.appInfo),
   onSettingsChanged: (listener) => subscribe<SettingsChanged>(CHANNELS.settingsChanged, listener),
 };
 
