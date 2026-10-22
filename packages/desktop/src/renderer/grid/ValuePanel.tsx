@@ -1,7 +1,8 @@
 import { EditorState } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, type ReactNode } from "react";
 import type { Column, WireValue } from "@table-craft/desktop/engine/protocol.js";
+import { REGION_ATTRIBUTE } from "@table-craft/desktop/renderer/actions/context.js";
 import { EDITOR_THEME } from "@table-craft/desktop/renderer/console/editorTheme.js";
 import { NULL_TEXT, panelValue } from "@table-craft/desktop/renderer/grid/format.js";
 import { prettyJson } from "@table-craft/desktop/renderer/model/prettyJson.js";
@@ -39,6 +40,71 @@ function JsonView({ text }: { readonly text: string }) {
   return <div ref={host} data-testid="value-json" className="min-h-0 flex-1 overflow-hidden" />;
 }
 
+function PanelHeader({ column, children }: { readonly column: Column | null; readonly children?: ReactNode }) {
+  return (
+    <div className="flex h-row shrink-0 items-center gap-gap border-b border-line px-cell text-ui">
+      <span className="truncate text-ink">{column?.name ?? "Value"}</span>
+      {column?.type == null ? null : <span className="truncate text-ink-muted">{column.type}</span>}
+      {children}
+    </div>
+  );
+}
+
+const PANEL_CLASS = "flex w-value-panel min-w-0 shrink-0 flex-col border-l border-line bg-panel font-grid text-grid";
+
+/**
+ * The focused cell's value as an editor, in the table editor (plan 008 decision 10): text as typed,
+ * JSON pretty-printed. Mount it per cell; `onChange` gets each edit, and ⌘↵ (`table.applyValue`)
+ * writes it to the pending changes.
+ */
+export function ValueEditor({
+  column,
+  text,
+  json,
+  applyHint,
+  onChange,
+}: {
+  readonly column: Column | null;
+  readonly text: string;
+  readonly json: boolean;
+  /** The Apply shortcut, shown in the header. */
+  readonly applyHint: string;
+  readonly onChange: (text: string) => void;
+}) {
+  const host = useRef<HTMLDivElement>(null);
+  const changed = useRef(onChange);
+  useEffect(() => {
+    changed.current = onChange;
+  });
+  const initial = useRef(json ? prettyJson(text) : text);
+  useEffect(() => {
+    if (host.current === null) return;
+    const created = new EditorView({
+      parent: host.current,
+      state: EditorState.create({
+        doc: initial.current,
+        extensions: [
+          EDITOR_THEME,
+          EditorView.lineWrapping,
+          EditorView.contentAttributes.of({ "aria-label": `Value of ${column?.name ?? "the cell"}` }),
+          EditorView.updateListener.of((update) => {
+            if (update.docChanged) changed.current(update.state.doc.toString());
+          }),
+        ],
+      }),
+    });
+    return () => created.destroy();
+  }, [column?.name]);
+  return (
+    <aside aria-label="Value" {...{ [REGION_ATTRIBUTE]: "valuePanel" }} className={PANEL_CLASS}>
+      <PanelHeader column={column}>
+        <span className="ml-auto shrink-0 text-ink-muted">{applyHint} applies</span>
+      </PanelHeader>
+      <div ref={host} data-testid="value-editor" className="min-h-0 flex-1 overflow-hidden" />
+    </aside>
+  );
+}
+
 /**
  * The focused cell's whole value beside the rows (plan 007 decision 15). It sits outside the grid's
  * focus region, so ⌘C and ⌘A here copy and select its text, not cells.
@@ -53,14 +119,8 @@ export function ValuePanel({
 }) {
   const shown = value === undefined ? null : panelValue(value);
   return (
-    <aside
-      aria-label="Value"
-      className="flex w-value-panel min-w-0 shrink-0 flex-col border-l border-line bg-panel font-grid text-grid"
-    >
-      <div className="flex h-row shrink-0 items-center gap-gap border-b border-line px-cell text-ui">
-        <span className="truncate text-ink">{column?.name ?? "Value"}</span>
-        {column?.type == null ? null : <span className="truncate text-ink-muted">{column.type}</span>}
-      </div>
+    <aside aria-label="Value" {...{ [REGION_ATTRIBUTE]: "valuePanel" }} className={PANEL_CLASS}>
+      <PanelHeader column={column} />
       {shown === null ? (
         <p className="p-cell text-ink-muted">{column === null ? "Select a cell to see its value." : "Loading…"}</p>
       ) : shown.kind === "null" ? (

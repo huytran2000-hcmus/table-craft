@@ -85,6 +85,13 @@ export interface SqlLanguage {
    * carries only its preview, so a longer one is written clipped with a comment saying so.
    */
   literal(value: WireValue, columnType: string | null): string;
+  /** An `INSERT` into `qualifiedTable` where every column takes its default (decision 026). */
+  emptyInsert(qualifiedTable: string): string;
+  /**
+   * What `UPDATE … SET column = …` writes to give a column its default: `DEFAULT` where the dialect
+   * accepts it, else the catalog's `defaultExpression` (`ColumnMeta.default`), or `NULL` without one.
+   */
+  updateDefault(defaultExpression: string | null): string;
 }
 
 export const TRANSACTION_MODES = ["auto", "manual"] as const;

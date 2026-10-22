@@ -13,6 +13,16 @@ export function quoteIdentifierWith(quote: '"' | "`"): (name: string) => string 
   return (name) => `${quote}${name.replaceAll(quote, quote + quote)}${quote}`;
 }
 
+/** The standard insert of a row made only of defaults, which PostgreSQL and SQLite accept. */
+export function defaultValuesInsert(qualifiedTable: string): string {
+  return `INSERT INTO ${qualifiedTable} DEFAULT VALUES`;
+}
+
+/** `DEFAULT` inside `SET`, which PostgreSQL and MySQL accept. */
+export function defaultKeyword(): string {
+  return "DEFAULT";
+}
+
 const BACKSLASH_ESCAPES: ReadonlyMap<string, string> = new Map([
   ["\\", "\\\\"],
   ["'", "\\'"],

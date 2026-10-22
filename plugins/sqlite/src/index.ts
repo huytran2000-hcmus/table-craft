@@ -20,6 +20,7 @@ import {
 } from "@table-craft/plugin-api";
 import {
   classifyTokens,
+  defaultValuesInsert,
   quoteIdentifierWith,
   sqlLiteral,
   sqlSplitter,
@@ -43,6 +44,9 @@ const language: SqlLanguage = {
   classify: (sql) => classifyTokens(sql, DIALECT),
   quoteIdentifier: quoteIdentifierWith('"'),
   literal: (value) => sqlLiteral(value, LITERALS),
+  emptyInsert: defaultValuesInsert,
+  // SQLite has no `DEFAULT` inside `SET`; `dflt_value` is the declared expression, valid SQL as written.
+  updateDefault: (expression) => expression ?? "NULL",
 };
 
 const BEGIN_SQL = "BEGIN";

@@ -19,7 +19,7 @@ its own MessagePort (decision 002).
 
 A plugin is a directory with `table-craft-plugin.json` and an ESM entry exporting a
 `DatasourcePlugin` (decisions 005 to 008). The contract lives in `@table-craft/plugin-api`.
-`API_VERSION` is `0.6.0`; while it is `0.x` the contract is unstable and every minor is a break.
+`API_VERSION` is `0.7.0`; while it is `0.x` the contract is unstable and every minor is a break.
 
 ### Discovery
 
@@ -111,6 +111,8 @@ interface SqlLanguage {
   classify(sql: string): StatementClass; // { kind, destructive: reason | null }
   quoteIdentifier(name: string): string; // "x" or `x`, the quote doubled inside
   literal(value: WireValue, columnType: string | null): string; // reads back as the same value
+  emptyInsert(qualifiedTable: string): string; // a row of defaults: DEFAULT VALUES or () VALUES ()
+  updateDefault(defaultExpression: string | null): string; // SET col = <this>: DEFAULT, or SQLite's expression
 }
 
 interface ConnectOptions {
@@ -288,6 +290,12 @@ handles belong to the port that created them and are released when it closes.
 | `catalog.namespaces`    | `refresh?`                                               | `Namespace[]`                                                                                                  |
 | `catalog.describe`      | `path`, `refresh?`                                       | `{ catalog, introspectedAt, elapsedMs }`                                                                       |
 | `catalog.qualifiedName` | `path`, `name`                                           | the plugin's quoting, e.g. `"public"."orders"`                                                                 |
+| `table.query`           | `sessionId`, `path`, `relation`, `where`, `orderBy`      | `TableQuery { statement, sql, editable, columns, foreignKeys, referencing }`; see Table data editor            |
+| `table.count`           | `path`, `relation`, `where`                              | the row count, read on a short-lived session of its own                                                        |
+| `table.orderBy`         | `terms: { name, direction }[]`                           | the ORDER BY text in the plugin's quoting, e.g. `"qty" DESC, "label"`                                          |
+| `table.condition`       | `handle`, `rows`, `columns: { column, name }[]`          | a WHERE condition matching those rows' values, written against `name`                                          |
+| `edits.preview`         | `handle`, `edits: RowEdit[]`                             | the statements Submit would run                                                                                |
+| `edits.submit`          | `sessionId`, `handle`, `edits: RowEdit[]`                | `{ statements, rowsAffected }`, or `editRejected` after a rollback                                             |
 
 A statement reads its first page and keeps the cursor open; the session's next statement, a
 commit, rollback or mode switch, `result.release`, `session.close` and the engine's exit close it
@@ -328,6 +336,7 @@ was unreadable. `hint` says what to do next.
 | `cancelled`           | `statement.cancel` stopped the statement                                |
 | `introspectionFailed` | The database refused to describe a namespace; the hint says Synchronize |
 | `timedOut`            | Test Connection got no answer within `PROBE_TIMEOUT_MS`                 |
+| `editRejected`        | Submit rolled back; `statementIndex` names the failing statement        |
 | `invalidRequest`      | The request did not parse, or asks a plugin for a capability it lacks   |
 | `internal`            | Anything else; a bug                                                    |
 
@@ -560,6 +569,68 @@ the `TABLE_CRAFT_DATASOURCE` datasource are not saved.
 The layout remembers the open console tabs (`openConsoles`: datasource id, name, which is active).
 At launch they reopen with their text and their datasource disconnected; the first Run connects, so
 launch makes no connections.
+
+## Table data editor
+
+Plan 008, decision 026. F4 on a table or view in the Database tool window, double-click or Enter on
+its node, Search Everywhere's Tables tab, or `table.open` opens a table tab labelled `orders [pg]`;
+opening a table already open activates its tab. Each table tab has an engine session of its own,
+closed with the tab. The layout remembers open table tabs (`openTables`: datasource id, path,
+relation, which is active); they reopen disconnected and Reload connects.
+
+`table.query` builds `SELECT * FROM <qualifiedName> [WHERE …] [ORDER BY …]` with the two bars'
+text verbatim (trimmed, a trailing `;` dropped) and pages like any statement (decision 025). It
+answers the executed statement, the SQL, the catalog's columns and foreign keys for the relation,
+the foreign keys of described namespaces that reference it, and `editable`:
+
+| `editable`                      | When                                                                                |
+| ------------------------------- | ----------------------------------------------------------------------------------- |
+| `{ identity: ["id"] }`          | The primary key, else the first unique key whose columns are all `NOT NULL`         |
+| `{ readOnly: "<reason>" }`      | A view or materialized view, no such key, a read-only datasource, no `transactions` |
+| `{ readOnly: "…out of date…" }` | The result's columns no longer match the cached catalog; Synchronize and Reload     |
+
+A refused WHERE or ORDER BY shows the database's message under the bars, marks the non-blank bar red
+and keeps the previous rows. Enter in a bar applies both, Esc reverts both to the applied text. A
+header click asks `table.orderBy` for the plugin-quoted clause, writes it into the ORDER BY bar and
+reads again; local sort is refused on a table result. Filter by This Value ANDs a
+`table.condition` (`= literal`, `IN (…)`, `IS NULL`) into the WHERE bar. Count Rows runs
+`SELECT COUNT(*)` with the applied WHERE on a session of its own, so the open cursor survives.
+
+Pending changes live in the renderer (`model/editBuffer.ts`): cell inputs (`text`, `null`,
+`default`) per held row, inserted rows after the held rows, and deleted rows. Submit sends them as
+`RowEdit[]`; the engine generates literal SQL with the plugin's `language` in the order deletes,
+updates, inserts. An UPDATE or DELETE is keyed by the identity columns; an INSERT lists only
+non-default columns, and one with none left uses `language.emptyInsert(table)`. Setting a column to
+default uses `language.updateDefault(columnDefault)` (`DEFAULT`, or SQLite's default expression).
+`edits.submit` closes the table's cursor, runs every statement in one transaction, requires each
+UPDATE and DELETE to affect exactly one row, commits and returns to auto; any failure rolls back and
+answers `editRejected` naming the statement, and the buffer stays. After a commit the editor reads
+the rows again with the same bars. Bytes cells and read-only tables refuse edits.
+
+| Action                  | Chord     | Region             |
+| ----------------------- | --------- | ------------------ |
+| Open Data               | F4        | Database           |
+| Reload                  | ⌘R        | table editor       |
+| Edit Cell               | ↵, F2     | grid               |
+| Set NULL / Set DEFAULT  | ⌥⌘N / ⌥⌘D | grid               |
+| Add Row                 | ⌘N        | table editor, grid |
+| Duplicate Row           | ⌘D        | grid               |
+| Delete Rows             | ⌘⌫        | grid               |
+| Revert Selected         | ⌥⌘Z       | grid               |
+| Preview Pending Changes | ⇧⌘P       | table editor, grid |
+| Submit                  | ⌘↵        | table editor, grid |
+| Apply Value             | ⌘↵        | value panel        |
+| Go to Referenced Row    | ⌘B        | grid               |
+
+Table actions apply only while a table tab is active (`Action.tabKind`); the keymap counts two
+chords as a clash only when their regions and tab kinds overlap, so ⌘↵ runs in a console and
+submits in a table. Inside a text field the field's own editing chords (⌘Z, ⌘A, ⌘C, ⌘X, ⌘V, ⌘⌫)
+stay the field's. Go to Referenced Row opens the foreign key's target filtered to the focused row's
+values; Show Referencing Rows… lists the foreign keys pointing at this table and opens the chosen
+one filtered to the selected row. Reload, a filter or sort change, Rerun, closing the tab,
+disconnecting and quitting with pending changes ask Submit, Discard or Cancel. A connection that
+closes on its own discards pending changes with a notice. The value panel edits text and JSON
+cells; ⌘↵ writes the buffer. There is no manual transaction mode in the editor: `Tx: Auto`.
 
 ## Datasources and secrets
 

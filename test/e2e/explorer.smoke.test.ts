@@ -11,6 +11,7 @@ import postgres from "@table-craft/plugin-postgres";
 import { MYSQL_CONFIG, POSTGRES_CONFIG } from "../support/databases.js";
 import { seededSqliteFile } from "../support/sqliteFixture.js";
 import {
+  activeEditorTab,
   DATABASES_ENABLED,
   EVIDENCE_WINDOW,
   evidenceFor,
@@ -159,7 +160,7 @@ describe.runIf(DATABASES_ENABLED)("database explorer live test", () => {
   }
 
   /** Launches on `datasource` and waits for the tree to open on its current namespace. */
-  async function launchExplored(datasource: Datasource, tables = "tables 3"): Promise<Page> {
+  async function launchExplored(datasource: Datasource, tables = "tables 5"): Promise<Page> {
     const page = await launch(datasource);
     await row(page, tables).waitFor({ timeout: LAUNCH_TIMEOUT_MS });
     return page;
@@ -183,7 +184,7 @@ describe.runIf(DATABASES_ENABLED)("database explorer live test", () => {
     async () => {
       const page = await launchExplored(POSTGRES);
 
-      await expand(page, "tables 3");
+      await expand(page, "tables 5");
       await expand(page, "orders");
       await expand(page, "columns 4");
 
@@ -206,7 +207,7 @@ describe.runIf(DATABASES_ENABLED)("database explorer live test", () => {
     async () => {
       const page = await launchExplored(MYSQL);
 
-      await expand(page, "tables 3");
+      await expand(page, "tables 5");
       await expand(page, "orders");
 
       await expect.poll(() => row(page, "table_craft").getAttribute("aria-expanded")).toBe("true");
@@ -222,7 +223,7 @@ describe.runIf(DATABASES_ENABLED)("database explorer live test", () => {
     async () => {
       const page = await launchExplored(sqlite());
 
-      await expand(page, "tables 3");
+      await expand(page, "tables 5");
       await expand(page, "orders");
 
       await expect.poll(() => row(page, "main").getAttribute("aria-expanded")).toBe("true");
@@ -255,7 +256,7 @@ describe.runIf(DATABASES_ENABLED)("database explorer live test", () => {
     "givenLoadedTree_whenTypingCust_thenSpeedSearchHighlightsAndArrowMovesToTheNextMatch",
     async () => {
       const page = await launchExplored(POSTGRES);
-      await expand(page, "tables 3");
+      await expand(page, "tables 5");
       await expand(page, "views 1");
       await row(page, "public").click();
 
@@ -279,7 +280,7 @@ describe.runIf(DATABASES_ENABLED)("database explorer live test", () => {
   );
 
   it(
-    "givenMysqlTablesLoaded_whenSearchEverywhereTablesTabChoosesOrders_thenTreeRevealsIt",
+    "givenMysqlTablesLoaded_whenSearchEverywhereTablesTabChoosesOrders_thenItsDataOpens",
     async () => {
       const page = await launchExplored(MYSQL);
       await expect.poll(() => row(page, "orders").count()).toBe(0);
@@ -289,12 +290,11 @@ describe.runIf(DATABASES_ENABLED)("database explorer live test", () => {
       await paletteInput(page, "Search Everywhere").fill("ord");
       await expect.poll(() => paletteRows(page).first().textContent()).toContain("mysql › table_craft");
       await captureWindow(page, "search-everywhere-tables");
+      // Plan 008: the Tables tab opens a table's data, as DataGrip's does.
       await page.keyboard.press("Enter");
 
-      await expect.poll(() => row(page, "orders").getAttribute("aria-selected")).toBe("true");
-      await expect
-        .poll(() => page.evaluate("document.activeElement?.getAttribute('aria-label') ?? null"))
-        .toBe("orders");
+      await expect.poll(() => activeEditorTab(page).textContent()).toContain("orders");
+      await expect.poll(() => page.getByTestId("table-editor").count()).toBe(1);
     },
     SCENARIO_TIMEOUT_MS,
   );
@@ -303,7 +303,7 @@ describe.runIf(DATABASES_ENABLED)("database explorer live test", () => {
     "givenTableCreatedOutsideTheApp_whenSynchronized_thenItAppearsAndStatusShowsTheNewSync",
     async () => {
       const page = await launchExplored(POSTGRES);
-      await expand(page, "tables 3");
+      await expand(page, "tables 5");
       const before = await syncStatus(page).textContent();
 
       // Outside the app, because DDL run in a console refreshes the tree by itself (plan 006).
@@ -311,7 +311,7 @@ describe.runIf(DATABASES_ENABLED)("database explorer live test", () => {
       await expect.poll(() => row(page, NEW_TABLE).count()).toBe(0);
       await pressChord(page, "Alt+Y");
 
-      await expect.poll(() => row(page, "tables 4").count()).toBe(1);
+      await expect.poll(() => row(page, "tables 6").count()).toBe(1);
       await expect.poll(() => row(page, NEW_TABLE).count()).toBe(1);
       await expect.poll(() => syncStatus(page).textContent()).toMatch(/^public synchronized \(\d+ ms\) · just now$/);
       expect(before).toMatch(/^public synchronized/);
@@ -348,7 +348,7 @@ describe.runIf(DATABASES_ENABLED)("database explorer live test", () => {
       await expect
         .poll(() => syncStatus(page).textContent())
         .toMatch(new RegExp(`^${RESTRICTED_SCHEMA} failed: permission denied for schema ${RESTRICTED_SCHEMA} Check`));
-      await expect.poll(() => row(page, "tables 3").count()).toBe(1);
+      await expect.poll(() => row(page, "tables 5").count()).toBe(1);
       await captureWindow(page, "introspection-failed");
     },
     SCENARIO_TIMEOUT_MS,
@@ -404,7 +404,7 @@ describe.runIf(DATABASES_ENABLED)("database explorer live test", () => {
       await expect.poll(() => row(page, /^mysql, /).getAttribute("aria-expanded")).toBe("false");
 
       await expand(page, /^mysql, /);
-      await expect.poll(() => row(page, "tables 3").count(), { timeout: LAUNCH_TIMEOUT_MS }).toBe(1);
+      await expect.poll(() => row(page, "tables 5").count(), { timeout: LAUNCH_TIMEOUT_MS }).toBe(1);
       await expect.poll(() => row(page, /^mysql, connected/).count()).toBe(1);
       await captureWindow(page, "reconnect-reload");
     },
@@ -421,7 +421,7 @@ describe.runIf(DATABASES_ENABLED)("database explorer live test", () => {
       ];
       for (const [datasource, qualified] of expected) {
         const page = await launchExplored(datasource);
-        await expand(page, "tables 3");
+        await expand(page, "tables 5");
         await row(page, "orders").click();
 
         await pressChord(page, "Alt+Shift+C");

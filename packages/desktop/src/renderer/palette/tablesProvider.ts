@@ -11,8 +11,8 @@ const PATH_SEPARATOR = " › ";
 export interface TablesSource {
   readonly catalogs: () => Readonly<Record<string, DatasourceCatalog>>;
   readonly datasources: () => readonly DatasourceView[];
-  /** Runs the reveal action; the provider never touches a store itself (decision 015). */
-  readonly reveal: (args: RevealArgs) => void;
+  /** Runs Open Data, the Tables tab's default (plan 008); the provider never touches a store itself (decision 015). */
+  readonly open: (args: RevealArgs) => void;
 }
 
 /**
@@ -36,7 +36,7 @@ export function tablesProvider(source: TablesSource): SearchProvider {
             detail: [datasourceName, ...path].join(PATH_SEPARATOR),
             enabled: true,
             score: matched,
-            run: () => source.reveal({ datasourceId, path, name: relation.name, kind: relation.kind }),
+            run: () => source.open({ datasourceId, path, name: relation.name, kind: relation.kind }),
           },
         ];
       });

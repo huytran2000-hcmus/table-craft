@@ -15,6 +15,9 @@
   --color-grid-stripe: var(--tc-grid-stripe);
   --color-grid-selection: var(--tc-grid-selection);
   --color-grid-null: var(--tc-grid-null);
+  --color-edit-modified: var(--tc-edit-modified);
+  --color-edit-inserted: var(--tc-edit-inserted);
+  --color-edit-deleted: var(--tc-edit-deleted);
   --color-selection: var(--tc-selection);
   --color-search-match: var(--tc-search-match);
   --color-key-icon: var(--tc-key-icon);

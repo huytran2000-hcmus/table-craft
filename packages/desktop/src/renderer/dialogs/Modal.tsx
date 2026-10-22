@@ -2,6 +2,7 @@ import * as Dialog from "@radix-ui/react-dialog";
 import { useState } from "react";
 import { Button, CONTENT_CLASS, OVERLAY_CLASS, TextInput } from "@table-craft/desktop/renderer/dialogs/parts.js";
 import { useModal, type ModalItem, type ModalRequest } from "@table-craft/desktop/renderer/state/modal.js";
+import { PreviewStatements } from "@table-craft/desktop/renderer/table/PreviewDialog.js";
 import { cn } from "@table-craft/desktop/renderer/ui/cn.js";
 
 function Items({ items }: { readonly items: readonly ModalItem[] }) {
@@ -53,6 +54,7 @@ function Body({ request }: { readonly request: ModalRequest }) {
       {(request.kind === "confirm" || request.kind === "choice") && request.items !== undefined ? (
         <Items items={request.items} />
       ) : null}
+      {request.kind === "statements" ? <PreviewStatements statements={request.statements} /> : null}
       <div className="flex justify-end gap-gap">
         {request.kind === "notice" ? null : <Button onClick={() => answer(null)}>Cancel</Button>}
         {request.kind === "choice" ? (
@@ -93,7 +95,10 @@ export function Modal() {
     >
       <Dialog.Portal>
         <Dialog.Overlay className={OVERLAY_CLASS} />
-        <Dialog.Content aria-describedby={undefined} className={cn(CONTENT_CLASS, "w-96 max-w-[90vw]")}>
+        <Dialog.Content
+          aria-describedby={undefined}
+          className={cn(CONTENT_CLASS, pending?.request.kind === "statements" ? "w-[40rem]" : "w-96", "max-w-[90vw]")}
+        >
           {pending === null ? null : <Body request={pending.request} />}
         </Dialog.Content>
       </Dialog.Portal>

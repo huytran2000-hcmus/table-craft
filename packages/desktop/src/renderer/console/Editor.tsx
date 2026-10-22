@@ -65,7 +65,7 @@ const flashField = StateField.define<DecorationSet>({
   provide: (field) => EditorView.decorations.from(field),
 });
 
-function dialectOf(highlight: string | null | undefined): SQLDialect {
+export function dialectOf(highlight: string | null | undefined): SQLDialect {
   return DIALECTS[highlight ?? ""] ?? StandardSQL;
 }
 

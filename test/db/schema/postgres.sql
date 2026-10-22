@@ -44,3 +44,23 @@ INSERT INTO type_probe VALUES
   (1, 42, 9007199254740993, 1234567890123456.7890, 'héllo, 世界 🌍', TRUE,
    '{"a": 1, "b": [true, null]}', '\xdeadbeef', '2024-02-29', '2024-02-29 13:45:30'),
   (2, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL);
+
+-- The data editor's round trip (plan 008): an auto-increment key and a default for every column,
+-- so an insert of nothing but defaults succeeds.
+CREATE TABLE edit_probe (
+  id SERIAL PRIMARY KEY,
+  label TEXT NOT NULL DEFAULT 'new',
+  qty INTEGER DEFAULT 1,
+  note TEXT NULL,
+  doc JSONB NULL
+);
+
+CREATE TABLE no_key_probe (
+  label TEXT
+);
+
+INSERT INTO edit_probe (label, qty, note, doc) VALUES
+  ('first', 1, NULL, '{"tags": ["a"]}'),
+  ('second', 2, 'kept', NULL);
+
+INSERT INTO no_key_probe (label) VALUES ('loose');

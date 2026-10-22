@@ -9,6 +9,23 @@ const namespacePath = z.array(z.string()).min(1);
 const index = z.number().int().nonnegative();
 const extractor = z.enum(EXTRACTOR_KINDS);
 const columns = z.array(index);
+const relation = z.string().min(1);
+const cellInput = z.discriminatedUnion("kind", [
+  z.strictObject({ kind: z.literal("text"), text: z.string() }),
+  z.strictObject({ kind: z.literal("null") }),
+  z.strictObject({ kind: z.literal("default") }),
+]);
+const edits = z.array(
+  z.discriminatedUnion("kind", [
+    z.strictObject({
+      kind: z.literal("update"),
+      row: index,
+      values: z.array(z.strictObject({ column: index, value: cellInput })),
+    }),
+    z.strictObject({ kind: z.literal("insert"), values: z.array(cellInput) }),
+    z.strictObject({ kind: z.literal("delete"), row: index }),
+  ]),
+);
 
 /** The renderer is untrusted input: every request is parsed before it is routed. */
 export const engineRequestSchema = z.discriminatedUnion("type", [
@@ -75,6 +92,30 @@ export const engineRequestSchema = z.discriminatedUnion("type", [
     path: namespacePath,
     name: z.string().min(1),
   }),
+  z.strictObject({
+    id: requestId,
+    type: z.literal("table.query"),
+    sessionId,
+    path: namespacePath,
+    relation,
+    where: z.string(),
+    orderBy: z.string(),
+  }),
+  z.strictObject({ id: requestId, type: z.literal("table.count"), path: namespacePath, relation, where: z.string() }),
+  z.strictObject({
+    id: requestId,
+    type: z.literal("table.condition"),
+    handle,
+    rows: z.array(index).min(1),
+    columns: z.array(z.strictObject({ column: index, name: z.string().min(1) })).min(1),
+  }),
+  z.strictObject({
+    id: requestId,
+    type: z.literal("table.orderBy"),
+    terms: z.array(z.strictObject({ name: z.string().min(1), direction: z.enum(["asc", "desc"]) })),
+  }),
+  z.strictObject({ id: requestId, type: z.literal("edits.preview"), handle, edits }),
+  z.strictObject({ id: requestId, type: z.literal("edits.submit"), sessionId, handle, edits }),
 ]) satisfies z.ZodType<EngineRequest>;
 
 const idOnly = z.object({ id: requestId });

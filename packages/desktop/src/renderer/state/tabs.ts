@@ -1,7 +1,7 @@
 import { create } from "zustand";
 
-/** Only consoles for now; the table data editor (plan 008) adds a kind. */
-export type TabKind = "console";
+/** A SQL console, or a table open in the data editor (plan 008). */
+export type TabKind = "console" | "table";
 
 export interface Tab {
   readonly id: string;

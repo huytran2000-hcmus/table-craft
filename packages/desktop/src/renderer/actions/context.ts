@@ -22,11 +22,12 @@ import { useModal } from "@table-craft/desktop/renderer/state/modal.js";
 import { usePalette } from "@table-craft/desktop/renderer/state/palette.js";
 import { useSecretPrompt } from "@table-craft/desktop/renderer/state/secretPrompt.js";
 import { activeTab, useTabs, type Tab } from "@table-craft/desktop/renderer/state/tabs.js";
+import { useTables, type TableSession } from "@table-craft/desktop/renderer/state/tables.js";
 
 /** The regions focus can be in; each is a `data-region` attribute on its container. */
-export type FocusRegion = "editor" | "grid" | "database" | "services" | "other";
+export type FocusRegion = "editor" | "tableEditor" | "grid" | "valuePanel" | "database" | "services" | "other";
 
-const REGIONS: readonly FocusRegion[] = ["editor", "grid", "database", "services"];
+const REGIONS: readonly FocusRegion[] = ["editor", "tableEditor", "grid", "valuePanel", "database", "services"];
 
 export const REGION_ATTRIBUTE = "data-region";
 
@@ -43,7 +44,9 @@ export interface ActionContext {
   readonly activeTab: Tab | null;
   /** The active tab's console, when the active tab is one. */
   readonly console: ConsoleSession | null;
-  /** The active console's shown result tab, when a result rather than Output is showing. */
+  /** The active tab's table, when the active tab shows one in the data editor. */
+  readonly table: TableSession | null;
+  /** The grid's result: the active console's shown result tab, or the active table's rows. */
   readonly result: ResultTab | null;
   readonly datasources: readonly DatasourceView[];
   readonly selection: TreeSelection | null;
@@ -52,7 +55,7 @@ export interface ActionContext {
    * focus, otherwise the active console's datasource, otherwise the tree's selection.
    */
   readonly datasource: DatasourceTarget | null;
-  /** The active console's datasource's capabilities. */
+  /** The active console's or table's datasource's capabilities. */
   readonly capabilities: readonly Capability[];
   readonly focus: FocusRegion;
   readonly toolWindows: Readonly<Record<ToolWindowId, boolean>>;
@@ -100,16 +103,19 @@ export function currentContext(): ActionContext {
   const { consoles } = useConsoles.getState();
   const datasources = useDatasources.getState();
   const console = active?.kind === "console" ? (consoles[active.id] ?? null) : null;
+  const table = active?.kind === "table" ? (useTables.getState().tables[active.id] ?? null) : null;
+  const tabDatasourceId = console?.datasourceId ?? table?.datasourceId;
   const focus = focusedRegion();
   const selected = selectedDatasourceId(datasources.selection);
   const inTree = focus === "database" || (focus === "other" && lastRegion === "database");
-  const targetId = inTree ? selected : (console?.datasourceId ?? selected);
+  const targetId = inTree ? selected : (tabDatasourceId ?? selected);
   const target = datasourceById(datasources, targetId);
   return {
     tabs: strip.tabs,
     activeTab: active,
     console,
-    result: console === null ? null : (activeResultOf(console) ?? null),
+    table,
+    result: console === null ? (table?.result ?? null) : (activeResultOf(console) ?? null),
     datasources: datasources.datasources,
     selection: datasources.selection,
     datasource:
@@ -121,9 +127,9 @@ export function currentContext(): ActionContext {
             capabilities: capabilitiesOf(datasources.plugins, target.pluginId),
           },
     capabilities:
-      console === null
+      tabDatasourceId === undefined
         ? []
-        : capabilitiesOf(datasources.plugins, datasourceById(datasources, console.datasourceId)?.pluginId ?? ""),
+        : capabilitiesOf(datasources.plugins, datasourceById(datasources, tabDatasourceId)?.pluginId ?? ""),
     focus,
     toolWindows: useLayout.getState().layout.visible,
     paletteOpen: modalOpen(),

@@ -1,64 +1,41 @@
 import { create } from "zustand";
 import {
-  RESULT_WINDOW_ROWS,
   type ClassifiedStatement,
   type Column,
   type EngineError,
-  type ExecutedStatement,
   type ExtractorKind,
-  type ResultState,
-  type Row,
   type RowRange,
   type SortKey,
   type TransactionMode,
   type TransactionState,
-  type TypeClass,
 } from "@table-craft/desktop/engine/protocol.js";
-import { EngineRequestError, type EngineClient } from "@table-craft/desktop/renderer/engine/client.js";
-import { columnChars, widerChars } from "@table-craft/desktop/renderer/grid/widths.js";
-import { carriedLayout, initialLayout, type ColumnLayout } from "@table-craft/desktop/renderer/model/columnLayout.js";
+import type { EngineClient } from "@table-craft/desktop/renderer/engine/client.js";
+import { carriedLayout, type ColumnLayout } from "@table-craft/desktop/renderer/model/columnLayout.js";
 import { executedText, exportedText, firstLine } from "@table-craft/desktop/renderer/model/format.js";
 import { clampSelection, type GridSelection } from "@table-craft/desktop/renderer/model/gridSelection.js";
 import { statementsToRun, type RunScope, type TextSpan } from "@table-craft/desktop/renderer/model/statementAt.js";
 import { useCatalog } from "@table-craft/desktop/renderer/state/catalog.js";
 import { useDatasources } from "@table-craft/desktop/renderer/state/datasources.js";
 import { useModal } from "@table-craft/desktop/renderer/state/modal.js";
+import { resultTabOf, type ResultTab } from "@table-craft/desktop/renderer/state/resultTab.js";
+import { createResultWindows, toError } from "@table-craft/desktop/renderer/state/resultWindows.js";
+
+export {
+  MAX_LOADED_WINDOWS,
+  resultTabOf,
+  rowAt,
+  windowOffsetOf,
+  withWindow,
+  type ResultFetch,
+  type ResultTab,
+} from "@table-craft/desktop/renderer/state/resultTab.js";
+export { canFetch, toError } from "@table-craft/desktop/renderer/state/resultWindows.js";
 
 /**
  * One console's session. `failed` when it could not open and `disconnected` when its engine went
  * away or it was restored at launch; Run opens a new session from either.
  */
 export type ConsoleStatus = "connecting" | "ready" | "running" | "failed" | "disconnected";
-
-/** What the grid is fetching for a result: a page, everything to the cap, or the rest into a file. */
-export type ResultFetch = "page" | "all" | "export";
-
-/**
- * A result tab: one row-returning statement's rows, held in the engine behind `handle`. Its
- * layout, sort and selection live here and die with the tab (plan 007 decision 8).
- */
-export interface ResultTab extends ResultState {
-  readonly id: string;
-  /** `Result 1`, `Result 2`…, the first number no pinned tab holds. */
-  readonly title: string;
-  readonly sql: string;
-  readonly handle: string;
-  readonly columns: readonly Column[];
-  readonly typeClasses: readonly TypeClass[];
-  readonly rowsAffected: number | null;
-  /** Loaded windows keyed by their offset, a multiple of `RESULT_WINDOW_ROWS`; at most `MAX_LOADED_WINDOWS`. */
-  readonly windows: Readonly<Record<number, readonly Row[]>>;
-  /** Each column's width in characters from the first page, so scrolling and eviction never reflow it. */
-  readonly autoChars: readonly number[];
-  readonly sort: readonly SortKey[];
-  readonly layout: ColumnLayout;
-  readonly selection: GridSelection | null;
-  readonly fetching: ResultFetch | null;
-  /** Its engine went away: the rows shown are all there will be until a rerun (plan 007 decision 18). */
-  readonly stale: boolean;
-  /** A pinned tab survives the next run; the others are replaced and their handles released. */
-  readonly pinned: boolean;
-}
 
 export type OutputTone = "info" | "success" | "warning" | "error";
 
@@ -167,68 +144,6 @@ export const OUTPUT_TAB = "output";
 export const OUTPUT_LIMIT = 500;
 export const DEFAULT_CONSOLE_NAME = "console";
 const RESULT_TITLE = "Result";
-const UNEXPECTED_HINT = "Restart the app; if it happens again, report it.";
-
-export function toError(cause: unknown): EngineError {
-  if (cause instanceof EngineRequestError) return { code: cause.code, message: cause.message, hint: cause.hint };
-  return { code: "internal", message: cause instanceof Error ? cause.message : String(cause), hint: UNEXPECTED_HINT };
-}
-
-/** The window offset that holds row `index`. */
-export function windowOffsetOf(index: number): number {
-  return Math.floor(index / RESULT_WINDOW_ROWS) * RESULT_WINDOW_ROWS;
-}
-
-export function rowAt(windows: ResultTab["windows"], index: number): Row | undefined {
-  const offset = windowOffsetOf(index);
-  return windows[offset]?.[index - offset];
-}
-
-/** Windows a result tab keeps loaded (plan 007 decision 17); scrolling back refetches the rest. */
-export const MAX_LOADED_WINDOWS = 20;
-
-/** `windows` with `rows` at `offset`, dropping the windows furthest from it past `max`. */
-export function withWindow(
-  windows: ResultTab["windows"],
-  offset: number,
-  rows: readonly Row[],
-  max: number = MAX_LOADED_WINDOWS,
-): ResultTab["windows"] {
-  const next: Record<number, readonly Row[]> = { ...windows, [offset]: rows };
-  const offsets = Object.keys(next).map(Number);
-  if (offsets.length <= max) return next;
-  const furthest = offsets.sort((a, b) => Math.abs(b - offset) - Math.abs(a - offset)).slice(0, offsets.length - max);
-  for (const evicted of furthest) delete next[evicted];
-  return next;
-}
-
-/** A tab for `executed`, the statement `sql` returned. */
-export function resultTabOf(
-  executed: Omit<ExecutedStatement, "transactionOpen">,
-  ids: { readonly id: string; readonly title: string },
-  sql: string,
-): ResultTab {
-  const { firstWindow, ...summary } = executed;
-  return {
-    ...summary,
-    ...ids,
-    sql,
-    windows: { [firstWindow.offset]: firstWindow.rows },
-    autoChars: columnChars(summary.columns, firstWindow.rows),
-    sort: [],
-    layout: initialLayout(summary.columns.length),
-    selection: null,
-    fetching: null,
-    stale: false,
-    pinned: false,
-  };
-}
-
-/** Whether Fetch Next Page and Fetch All can run on the tab. */
-export function canFetch(result: ResultTab): boolean {
-  return result.cursorOpen && !result.stale && result.fetching === null;
-}
-
 /** Whether Run can start from this status; it reconnects from the last two. */
 export function canRun(status: ConsoleStatus): boolean {
   return status === "ready" || status === "disconnected" || status === "failed";
@@ -282,10 +197,6 @@ function statementCount(count: number): string {
 export function createConsolesStore(dependencies: ConsolesDependencies) {
   /** The client each console's session lives on; not state, because nothing renders from it. */
   const clients = new Map<string, EngineClient>();
-  /** Window requests in flight per result tab. */
-  const requested = new Map<string, Set<number>>();
-  /** Bumped when a tab's loaded windows stop matching the engine's order; older answers are dropped. */
-  const generations = new Map<string, number>();
   /** Consoles whose DDL ran inside a transaction not yet ended: Commit makes it visible. */
   const pendingDdl = new Set<string>();
   const clock = dependencies.clock ?? (() => Date.now());
@@ -295,6 +206,17 @@ export function createConsolesStore(dependencies: ConsolesDependencies) {
   let resultIds = 0;
 
   return create<ConsolesState>()((set, get) => {
+    const windows = createResultWindows({
+      client: (id) => clients.get(id),
+      result: (id, resultId) => resultOf(id, resultId),
+      update: (id, resultId, change) => updateResult(id, resultId, change),
+      failed: (id, result, error, window) => {
+        if (window) patch(id, { error });
+        else logError(id, firstLine(result.sql), error);
+      },
+    });
+    const { invalidate: invalidateWindows, forget } = windows;
+
     function patch(id: string, change: Partial<ConsoleSession>): void {
       const current = get().consoles[id];
       if (current === undefined) return;
@@ -358,11 +280,6 @@ export function createConsolesStore(dependencies: ConsolesDependencies) {
       }
     }
 
-    function forget(resultId: string): void {
-      requested.delete(resultId);
-      generations.delete(resultId);
-    }
-
     function resultOf(id: string, resultId: string): ResultTab | undefined {
       return get().consoles[id]?.results.find((result) => result.id === resultId);
     }
@@ -371,23 +288,6 @@ export function createConsolesStore(dependencies: ConsolesDependencies) {
       const current = get().consoles[id];
       if (current === undefined) return;
       patch(id, { results: current.results.map((result) => (result.id === resultId ? change(result) : result)) });
-    }
-
-    /** Loaded windows no longer match the engine's order: drop them, and any answer still on its way. */
-    function invalidateWindows(resultId: string): void {
-      generations.set(resultId, (generations.get(resultId) ?? 0) + 1);
-      requested.delete(resultId);
-    }
-
-    /** `result` after the engine reported `state`; rows that moved are fetched again as they show. */
-    function withState(result: ResultTab, state: ResultState): ResultTab {
-      if (state.rowCount === result.rowCount) return { ...result, ...state };
-      invalidateWindows(result.id);
-      const windows =
-        result.sort.length > 0
-          ? {}
-          : Object.fromEntries(Object.entries(result.windows).filter(([, rows]) => rows.length === RESULT_WINDOW_ROWS));
-      return { ...result, ...state, windows };
     }
 
     /** The engine closes a session's open cursor when the session runs anything or its transaction ends. */
@@ -613,60 +513,9 @@ export function createConsolesStore(dependencies: ConsolesDependencies) {
         }
       },
 
-      ensureWindow(id, resultId, offset) {
-        const result = resultOf(id, resultId);
-        const client = clients.get(id);
-        if (result === undefined || client === undefined || result.stale || offset in result.windows) return;
-        if (offset >= result.rowCount) return;
-        const inFlight = requested.get(resultId) ?? new Set<number>();
-        requested.set(resultId, inFlight);
-        if (inFlight.has(offset)) return;
-        inFlight.add(offset);
-        const generation = generations.get(resultId) ?? 0;
-        client
-          .call("result.window", { handle: result.handle, offset, limit: RESULT_WINDOW_ROWS })
-          .then((window) => {
-            if ((generations.get(resultId) ?? 0) !== generation) return;
-            updateResult(id, resultId, (latest) => ({
-              ...latest,
-              windows: withWindow(latest.windows, window.offset, window.rows),
-              autoChars: widerChars(latest.autoChars, window.rows),
-            }));
-          })
-          .catch((cause: unknown) => {
-            if ((generations.get(resultId) ?? 0) === generation) patch(id, { error: toError(cause) });
-          })
-          .finally(() => inFlight.delete(offset));
-      },
-
-      async fetchMore(id, resultId, all) {
-        const result = resultOf(id, resultId);
-        const client = clients.get(id);
-        if (result === undefined || client === undefined || !canFetch(result)) return;
-        updateResult(id, resultId, (latest) => ({ ...latest, fetching: all ? "all" : "page" }));
-        try {
-          const state = await client.call("result.fetchMore", { handle: result.handle, all });
-          updateResult(id, resultId, (latest) => withState(latest, state));
-        } catch (cause) {
-          logError(id, firstLine(result.sql), toError(cause));
-          updateResult(id, resultId, (latest) => ({ ...latest, cursorOpen: false }));
-        } finally {
-          updateResult(id, resultId, (latest) => ({ ...latest, fetching: null }));
-        }
-      },
-
-      async stopFetch(id, resultId) {
-        const result = resultOf(id, resultId);
-        const client = clients.get(id);
-        if (result === undefined || client === undefined || (result.fetching !== "page" && result.fetching !== "all")) {
-          return;
-        }
-        try {
-          await client.call("result.stopFetch", { handle: result.handle });
-        } catch (cause) {
-          logError(id, firstLine(result.sql), toError(cause));
-        }
-      },
+      ensureWindow: windows.ensureWindow,
+      fetchMore: windows.fetchMore,
+      stopFetch: windows.stopFetch,
 
       async sort(id, resultId, keys) {
         const result = resultOf(id, resultId);
@@ -767,45 +616,15 @@ export function createConsolesStore(dependencies: ConsolesDependencies) {
         });
       },
 
-      async extract(id, resultId, extractor, rows, columns) {
-        const result = resultOf(id, resultId);
-        const client = clients.get(id);
-        if (result === undefined || client === undefined || result.stale) return null;
-        try {
-          return await client.call("result.extract", {
-            handle: result.handle,
-            extractor,
-            rows: [...rows],
-            columns: [...columns],
-          });
-        } catch (cause) {
-          logError(id, firstLine(result.sql), toError(cause));
-          return null;
-        }
-      },
+      extract: windows.extract,
 
       async exportTo(id, resultId, extractor, path, columns) {
+        const exported = await windows.exportTo(id, resultId, extractor, path, columns);
         const result = resultOf(id, resultId);
-        const client = clients.get(id);
-        if (result === undefined || client === undefined || result.stale || result.fetching !== null) return false;
-        updateResult(id, resultId, (latest) => ({ ...latest, fetching: "export" }));
-        try {
-          const exported = await client.call("result.export", {
-            handle: result.handle,
-            extractor,
-            path,
-            columns: [...columns],
-          });
+        if (exported !== null && result !== undefined) {
           log(id, { sql: firstLine(result.sql), message: exportedText(exported), tone: "success" });
-          // The export drained the cursor into the file.
-          updateResult(id, resultId, (latest) => ({ ...latest, cursorOpen: false }));
-          return true;
-        } catch (cause) {
-          logError(id, firstLine(result.sql), toError(cause));
-          return false;
-        } finally {
-          updateResult(id, resultId, (latest) => ({ ...latest, fetching: null }));
         }
+        return exported !== null;
       },
 
       showResult(id, resultId) {

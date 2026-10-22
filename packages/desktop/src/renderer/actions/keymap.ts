@@ -120,17 +120,37 @@ export interface Clash {
   readonly ids: readonly string[];
 }
 
-/** Chords two or more actions declare; the keymap test fails on any. */
+function regionsOf(action: AnyAction): readonly FocusRegion[] | null {
+  const scope = action.shortcutRegion;
+  if (scope === undefined) return null;
+  return typeof scope === "string" ? [scope] : scope;
+}
+
+/** Whether two actions' shortcuts can both be live at once: their regions and tab kinds overlap. */
+function overlap(a: AnyAction, b: AnyAction): boolean {
+  if (a.tabKind !== undefined && b.tabKind !== undefined && a.tabKind !== b.tabKind) return false;
+  const regionsA = regionsOf(a);
+  const regionsB = regionsOf(b);
+  return regionsA === null || regionsB === null || regionsA.some((region) => regionsB.includes(region));
+}
+
+/**
+ * Chords two or more actions declare where both could fire: in a shared region on a shared tab
+ * kind. The keymap test fails on any.
+ */
 export function findClashes(actions: readonly AnyAction[]): readonly Clash[] {
   const clashes: Clash[] = [];
   for (const platform of ["mac", "other"] as const) {
-    const byChord = new Map<string, string[]>();
+    const byChord = new Map<string, AnyAction[]>();
     for (const action of actions) {
       if (action.shortcut === undefined) continue;
       const key = chordKey(parseChord(action.shortcut, platform));
-      byChord.set(key, [...(byChord.get(key) ?? []), action.id]);
+      byChord.set(key, [...(byChord.get(key) ?? []), action]);
     }
-    for (const [chord, ids] of byChord) if (ids.length > 1) clashes.push({ platform, chord, ids });
+    for (const [chord, sharing] of byChord) {
+      const clashing = sharing.filter((action) => sharing.some((other) => other !== action && overlap(action, other)));
+      if (clashing.length > 1) clashes.push({ platform, chord, ids: clashing.map((action) => action.id) });
+    }
   }
   return clashes;
 }

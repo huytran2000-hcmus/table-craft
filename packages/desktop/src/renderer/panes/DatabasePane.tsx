@@ -4,6 +4,8 @@ import { useEffect, useMemo, useRef, type KeyboardEvent } from "react";
 import { ACTION_IDS } from "@table-craft/desktop/renderer/actions/appActions.js";
 import { currentPlatform, formatChord } from "@table-craft/desktop/renderer/actions/chords.js";
 import { invoke, registry, useActionEnabled } from "@table-craft/desktop/renderer/actions/index.js";
+import { TABLE_ACTION_IDS } from "@table-craft/desktop/renderer/actions/tableActions.js";
+import type { OpenTableArgs } from "@table-craft/desktop/renderer/actions/tableCommands.js";
 import { DEFAULT_APPEARANCE } from "@table-craft/desktop/renderer/appearance/tokens.js";
 import { buildTree } from "@table-craft/desktop/renderer/model/datasourceTree.js";
 import { DRAG_OBJECT_TYPE, draggedObjectOf } from "@table-craft/desktop/renderer/model/dragObject.js";
@@ -77,6 +79,7 @@ const DATASOURCE_MENU = [
 ] as const;
 const FOLDER_MENU = [ACTION_IDS.newDatasource, ACTION_IDS.newFolder] as const;
 const CATALOG_MENU = [
+  TABLE_ACTION_IDS.openData,
   ACTION_IDS.newConsole,
   null,
   ACTION_IDS.synchronize,
@@ -472,8 +475,12 @@ export function DatabasePane() {
   }
 
   function activate(row: ExplorerRow): void {
-    if (row.node.kind === "datasource") invoke(ACTION_IDS.newConsole);
-    else if (row.expandable) toggle(row);
+    const { node } = row;
+    if (node.kind === "datasource") invoke(ACTION_IDS.newConsole);
+    else if (node.kind === "relation") {
+      const args: OpenTableArgs = { datasourceId: node.datasourceId, path: node.path, relation: node.relation.name };
+      invoke(TABLE_ACTION_IDS.openData, args);
+    } else if (row.expandable) toggle(row);
   }
 
   function searchKey(event: KeyboardEvent<HTMLUListElement>): boolean {

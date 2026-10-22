@@ -10,6 +10,7 @@ import {
 import { focusedRegion, modalOpen, trackFocus } from "@table-craft/desktop/renderer/actions/context.js";
 import { invoke, registry } from "@table-craft/desktop/renderer/actions/index.js";
 import { installKeymap } from "@table-craft/desktop/renderer/actions/keymap.js";
+import { rememberOpenTables, restoreTables } from "@table-craft/desktop/renderer/actions/tableCommands.js";
 import { bridge } from "@table-craft/desktop/renderer/bridge.js";
 import { editorReservedChords } from "@table-craft/desktop/renderer/console/editorKeys.js";
 import { DataSourcesDialog } from "@table-craft/desktop/renderer/dialogs/DataSources.js";
@@ -36,12 +37,15 @@ function openEphemeralConsole(): void {
 let stopConsoleSync: (() => void) | null = null;
 function onFirstList(): void {
   void restoreConsoles().then(() => {
+    if (stopConsoleSync === null) restoreTables();
     openEphemeralConsole();
     if (stopConsoleSync !== null) return;
     const forget = rememberOpenConsoles();
+    const forgetTables = rememberOpenTables();
     const stopSaving = autosaveConsoles();
     stopConsoleSync = () => {
       forget();
+      forgetTables();
       stopSaving();
     };
   });

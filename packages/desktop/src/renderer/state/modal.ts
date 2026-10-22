@@ -33,6 +33,14 @@ export type ModalRequest =
     }
   | { readonly kind: "notice"; readonly title: string; readonly message: string; readonly hint: string }
   | {
+      /** SQL shown whole, one statement a block, before it runs: the table editor's Preview. */
+      readonly kind: "statements";
+      readonly title: string;
+      readonly message: string;
+      readonly statements: readonly string[];
+      readonly confirm: string;
+    }
+  | {
       readonly kind: "choice";
       readonly title: string;
       readonly message: string;
@@ -42,7 +50,7 @@ export type ModalRequest =
     };
 
 /**
- * Confirm resolves "" when accepted; text resolves what was typed; choice resolves the chosen id;
+ * Confirm and statements resolve "" when accepted; text resolves what was typed; choice resolves the chosen id;
  * every kind resolves null on cancel.
  */
 export type ModalAnswer = string | null;

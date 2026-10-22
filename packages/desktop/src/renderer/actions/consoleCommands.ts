@@ -10,6 +10,8 @@ import { datasourceById, useDatasources } from "@table-craft/desktop/renderer/st
 import { useLayout } from "@table-craft/desktop/renderer/state/layout.js";
 import { useModal } from "@table-craft/desktop/renderer/state/modal.js";
 import { activeTab, useTabs, type Tab } from "@table-craft/desktop/renderer/state/tabs.js";
+import { pendingTables, tablesOf, useTables } from "@table-craft/desktop/renderer/state/tables.js";
+import { settlePendingEdits } from "@table-craft/desktop/renderer/actions/tableCommands.js";
 
 const CONSOLE_ID_PREFIX = "console-";
 const COMMIT = "commit";
@@ -140,22 +142,32 @@ export async function settleTransactions(consoleIds: readonly string[], verb: st
   return ended.every(Boolean);
 }
 
-/** Closes tabs as `close` picks them, once their consoles' open transactions are settled (decision 15). */
+/**
+ * Closes tabs as `close` picks them, once their consoles' open transactions (decision 15) and their
+ * tables' pending changes (plan 008) are settled.
+ */
 export async function closeTabs(ids: readonly string[], close: () => readonly Tab[]): Promise<void> {
+  if (!(await settlePendingEdits(ids, "close"))) return;
   if (!(await settleTransactions(ids, "close"))) return;
-  for (const tab of close()) if (tab.kind === "console") useConsoles.getState().close(tab.id);
+  for (const tab of close()) {
+    if (tab.kind === "console") useConsoles.getState().close(tab.id);
+    else useTables.getState().close(tab.id);
+  }
 }
 
 export async function disconnectDatasource(datasourceId: string): Promise<void> {
+  if (!(await settlePendingEdits(tablesOf(useTables.getState().tables, datasourceId), "disconnect"))) return;
   if (!(await settleTransactions(consolesOf(useConsoles.getState().consoles, datasourceId), "disconnect"))) return;
   await useDatasources.getState().disconnect(datasourceId);
 }
 
-/** Main holds a close or quit until the window settles its transactions and saves its consoles. */
+/** Main holds a close or quit until the window settles its pending changes and transactions and saves its consoles. */
 export function answerCloseRequests(): () => void {
   return bridge().onCloseRequested(() => {
     void (async () => {
-      const proceed = await settleTransactions(openTransactions(useConsoles.getState().consoles), "quit");
+      const proceed =
+        (await settlePendingEdits(pendingTables(useTables.getState().tables), "quit")) &&
+        (await settleTransactions(openTransactions(useConsoles.getState().consoles), "quit"));
       if (proceed) await autosave.flush();
       await bridge().answerClose(proceed);
     })();

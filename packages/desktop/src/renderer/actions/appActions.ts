@@ -114,6 +114,7 @@ export const APP_ACTIONS: readonly AnyAction[] = [
     category: "Console",
     icon: "run",
     shortcut: "Mod+Enter",
+    tabKind: "console",
     when: canRunConsole,
     run: (context) => runActive(context, "caret"),
   }),

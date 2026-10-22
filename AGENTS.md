@@ -57,9 +57,10 @@ packages/plugin-api/       @table-craft/plugin-api: the plugin contract and noth
                            Depends only on zod
 packages/core/             @table-craft/core: plugin loader, session manager, result-set
                            store with open cursors and local sort (`results/`), the copy
-                           and export extractors (`results/extract/`), edit batches,
-                           history, and the catalog cache (`catalog/`). Knows nothing
-                           about Electron
+                           and export extractors (`results/extract/`), the table
+                           editor's row identity, generated DML and one-transaction
+                           submit (`edits/`), history, and the catalog cache
+                           (`catalog/`). Knows nothing about Electron
 packages/desktop/          @table-craft/desktop, the Electron app
   src/main/                lifecycle, the window, menus, one engine host per datasource,
                            the datasource list and secrets, console files, the invoke
@@ -72,7 +73,9 @@ packages/desktop/          @table-craft/desktop, the Electron app
                            `actions/` is the one command registry and keymap; `shell/`,
                            `panes/`, `palette/` the DataGrip-shaped window; `console/`
                            the SQL console: editor, result tabs, Output, transactions;
-                           `grid/` the result grid, its toolbar and value panel
+                           `grid/` the result grid, its toolbar and value panel;
+                           `table/` the table data editor: WHERE/ORDER BY bars and the
+                           preview; its pending changes are `model/editBuffer.ts`
 plugins/<id>/              built-in plugins (@table-craft/plugin-<id>): postgres, mysql,
                            sqlite. Each depends on plugin-api and its driver alone, and
                            ships a `table-craft-plugin.json` beside `src/`; its

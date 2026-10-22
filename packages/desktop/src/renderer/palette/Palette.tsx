@@ -1,8 +1,9 @@
 import * as Dialog from "@radix-ui/react-dialog";
 import { useMemo, useRef, useState, type KeyboardEvent } from "react";
 import { currentPlatform, formatChord } from "@table-craft/desktop/renderer/actions/chords.js";
-import { ACTION_IDS } from "@table-craft/desktop/renderer/actions/appActions.js";
 import { invoke, registry } from "@table-craft/desktop/renderer/actions/index.js";
+import type { OpenTableArgs } from "@table-craft/desktop/renderer/actions/tableCommands.js";
+import { TABLE_ACTION_IDS } from "@table-craft/desktop/renderer/actions/tableActions.js";
 import {
   paletteResults,
   paletteTabs,
@@ -23,7 +24,10 @@ const PROVIDERS: readonly SearchProvider[] = [
   tablesProvider({
     catalogs: () => useCatalog.getState().catalogs,
     datasources: () => useDatasources.getState().datasources,
-    reveal: (args) => void invoke(ACTION_IDS.reveal, args),
+    open: (args) => {
+      const open: OpenTableArgs = { datasourceId: args.datasourceId, path: args.path, relation: args.name };
+      invoke(TABLE_ACTION_IDS.openTable, open);
+    },
   }),
 ];
 const MODE_TITLE: Readonly<Record<PaletteMode, string>> = {

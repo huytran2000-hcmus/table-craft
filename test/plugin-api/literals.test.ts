@@ -1,4 +1,10 @@
-import { quoteIdentifierWith, sqlLiteral, type SqlLiteralOptions } from "@table-craft/plugin-api/sql";
+import {
+  defaultKeyword,
+  defaultValuesInsert,
+  quoteIdentifierWith,
+  sqlLiteral,
+  type SqlLiteralOptions,
+} from "@table-craft/plugin-api/sql";
 import { describe, expect, it } from "vitest";
 
 const STANDARD: SqlLiteralOptions = { backslashEscapes: false, bytes: (hex) => `'\\x${hex}'::bytea` };
@@ -30,5 +36,10 @@ describe("sql literals", () => {
 
   it("givenBytesLongerThanPreview_whenLiteral_thenClippedWithComment", () => {
     expect(sqlLiteral({ kind: "bytes", preview: "dead", length: 2048 }, MYSQL)).toBe("X'dead' /* 2 of 2048 bytes */");
+  });
+
+  it("givenQualifiedTable_whenDefaultValuesInsert_thenStandardForm", () => {
+    expect(defaultValuesInsert('"public"."t"')).toBe('INSERT INTO "public"."t" DEFAULT VALUES');
+    expect(defaultKeyword()).toBe("DEFAULT");
   });
 });

@@ -248,7 +248,62 @@ describe("grid keymap", () => {
   });
 
   it("givenGridChords_whenListed_thenAllScopedToTheGrid", () => {
-    const gridChords = ALL_ACTIONS.filter((action) => action.shortcutRegion === "grid");
+    const gridChords = ALL_ACTIONS.filter(
+      (action) => action.category === "Result Grid" && action.shortcut !== undefined,
+    );
+    expect(gridChords.every((action) => action.shortcutRegion === "grid")).toBe(true);
     expect(gridChords.map((action) => action.shortcut)).toEqual(["Mod+R", "Mod+C", "Mod+A", "Shift+Enter"]);
+  });
+});
+
+describe("table editor keymap", () => {
+  const tableActions = ALL_ACTIONS.filter((action) => action.category === "Table Editor");
+
+  it("givenTableActions_whenKeymapBuilt_thenNoChordClash", () => {
+    expect(findClashes(tableActions)).toEqual([]);
+    expect(findClashes(ALL_ACTIONS)).toEqual([]);
+    // The WHERE and ORDER BY bars are SQL editors in the table editor's region.
+    expect(findReservedClashes(ALL_ACTIONS, EDITOR_CHORDS, "tableEditor")).toEqual([]);
+  });
+
+  it("givenTableTabActive_whenModEnterInGrid_thenSubmitRunsNotConsoleRun", () => {
+    const ran: string[] = [];
+    const registry = createActionRegistry(() => ({
+      ...IDLE_CONTEXT,
+      activeTab: { id: "table-0", kind: "table", title: "orders" },
+    }));
+    registry.register(
+      ALL_ACTIONS.filter((action) => action.shortcut === "Mod+Enter").map((action) =>
+        defineAction({ ...action, when: undefined, run: () => void ran.push(action.id) }),
+      ),
+    );
+    const dispatch = createKeyDispatcher({
+      registry,
+      platform: "mac",
+      paletteOpen: () => false,
+      focusedRegion: () => "grid",
+    });
+
+    dispatch(keydown({ key: "Enter", code: "Enter", metaKey: true }));
+
+    expect(ran).toEqual(["table.submit"]);
+  });
+
+  it("givenTableShortcuts_whenListed_thenEachBoundToTableTabs", () => {
+    const bound = tableActions.filter((action) => action.shortcut !== undefined);
+    expect(bound.length).toBeGreaterThan(0);
+    expect(bound.every((action) => action.tabKind === "table" && action.shortcutRegion !== undefined)).toBe(true);
+  });
+
+  it("givenModEnter_whenListed_thenRunInConsolesSubmitInTables", () => {
+    const owners = ALL_ACTIONS.filter((action) => action.shortcut === "Mod+Enter").map((action) => [
+      action.id,
+      action.tabKind,
+    ]);
+    expect(owners).toEqual([
+      ["console.run", "console"],
+      ["table.submit", "table"],
+      ["table.applyValue", "table"],
+    ]);
   });
 });

@@ -51,6 +51,11 @@ export class CatalogCache {
     return describing;
   }
 
+  /** Every namespace described so far, without asking the database. */
+  described(): readonly CachedCatalog[] {
+    return [...this.#catalogs.values()];
+  }
+
   async #read(path: readonly string[]): Promise<CachedCatalog> {
     const started = this.#now();
     const catalog = await this.#introspector.describe(path);

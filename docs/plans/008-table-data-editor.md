@@ -1,6 +1,21 @@
 # Plan: Open a table, filter it on the server, edit rows and submit
 
-Status: not started
+Status: done. F4, double-click or Enter on a table or view, or Search Everywhere's Tables tab,
+opens a table tab (`orders [pg]`) on an engine session of its own. `table.query` reads
+`SELECT * FROM … WHERE … ORDER BY …` with the bars' text verbatim, pages like a console result and
+answers whether the rows are editable: by primary key, else the first all-`NOT NULL` unique key,
+otherwise read-only with the reason in a banner (decision 026). A refused clause shows the
+database's message under the bars and keeps the rows; header clicks sort on the server through
+`table.orderBy`. Pending updates, inserts and deletes live in the renderer's `model/editBuffer.ts`,
+coloured by three edit tokens, with inline editing, Set NULL / Set DEFAULT, Add / Duplicate /
+Delete Row, Revert and an editable value panel. Preview (⇧⌘P) lists the literal SQL core generates
+through the plugin's `language`; Submit (⌘↵) runs it in one transaction where every UPDATE and
+DELETE must hit exactly one row, rolls back and names the statement otherwise, and reads the rows
+again. ⌘B follows a foreign key, Show Referencing Rows… goes back, Count Rows counts with the
+WHERE bar, and closing, reloading, sorting, disconnecting or quitting with pending changes asks
+Submit / Discard / Cancel. plugin-api is `0.7.0` (`emptyInsert`, `updateDefault`) and the contract
+suite round-trips edits on `edit_probe` on all three databases. Actions now scope to a tab kind,
+and the keymap's clash test is region- and tab-aware (decision 027).
 
 ## The issue
 
@@ -145,28 +160,93 @@ Every phase ends with `bun run typecheck` and `bun run test` green; phases 0 and
 Run with `TABLE_CRAFT_EVIDENCE_DIR=docs/evidence/008 bun run test:smoke:db`, suite
 `test/e2e/tableEditor.smoke.test.ts`, 1200×800.
 
-| #   | Scenario                                                                                   | Database | Result | Evidence                 |
-| --- | ------------------------------------------------------------------------------------------ | -------- | ------ | ------------------------ |
-| 1   | F4 on `orders` opens `orders [pg]` with rows and `Tx: Auto`                                | postgres |        | open-table.png           |
-| 2   | WHERE `total > 50` + ORDER BY `placed_at desc` filter on the server                        | postgres |        | where-order.png          |
-| 3   | Bad WHERE shows the error under the bar, rows kept                                         | mysql    |        | where-error.png          |
-| 4   | Edit a total, insert a row, delete a row: three highlights, `3 pending changes`            | postgres |        | pending-changes.png      |
-| 5   | Preview lists DELETE, UPDATE, INSERT with literals; Submit re-queries and highlights clear | postgres |        | preview-submit.png       |
-| 6   | Set NULL and Set Default on `edit_probe`; empty insert works                               | mysql    |        | null-default.png         |
-| 7   | Concurrent delete from a console → Submit rolls back and names the statement               | postgres |        | rejected-rollback.png    |
-| 8   | Duplicate row gets default id; submit creates it                                           | sqlite   |        | duplicate-row.png        |
-| 9   | `no_key_probe` and a view open read-only with the reason                                   | postgres |        | read-only-table.png      |
-| 10  | Read-only datasource: editor read-only                                                     | sqlite   |        | read-only-datasource.png |
-| 11  | ⌘B on `orders.customer_id` opens `customers` filtered to that id                           | postgres |        | fk-go-to.png             |
-| 12  | Show Referencing Rows from a customer opens its orders                                     | mysql    |        | fk-referencing.png       |
-| 13  | Close tab with pending changes asks Submit / Discard / Cancel                              | postgres |        | close-pending.png        |
-| 14  | Edit JSON in the value panel and submit                                                    | postgres |        | value-panel-edit.png     |
+| #   | Scenario                                                                                   | Database | Result                                                                                                                                                                         | Evidence                 |
+| --- | ------------------------------------------------------------------------------------------ | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------ |
+| 1   | F4 on `orders` opens `orders [pg]` with rows and `Tx: Auto`                                | postgres | Pass. Tab `orders [pg]`, ids 1, 2, 3, `Tx: Auto` in the toolbar, no read-only banner                                                                                           | open-table.png           |
+| 2   | WHERE `total > 50` + ORDER BY `placed_at desc` filter on the server                        | postgres | Pass, with `total > 10` (only one row passes `> 50`, so the order would not show): ids 3, 1                                                                                    | where-order.png          |
+| 3   | Bad WHERE shows the error under the bar, rows kept                                         | mysql    | Pass. `no_such_column > 1`: MySQL's `Unknown column` under the bars, WHERE bar red, ORDER BY not, rows kept                                                                    | where-error.png          |
+| 4   | Edit a total, insert a row, delete a row: three highlights, `3 pending changes`            | postgres | Pass. Modified total, deleted row struck through, inserted row 4; footer `3 pending changes`                                                                                   | pending-changes.png      |
+| 5   | Preview lists DELETE, UPDATE, INSERT with literals; Submit re-queries and highlights clear | postgres | Pass. `DELETE … WHERE "id" = 2`, `UPDATE … SET "total" = '25.00' WHERE "id" = 1`, `INSERT …`; Submit → `Submitted 3 statements`, ids 1, 3, 4, no highlights                    | preview-submit.png       |
+| 6   | Set NULL and Set Default on `edit_probe`; empty insert works                               | mysql    | Pass. qty `<null>`, label `<default>`, plus an all-default Add Row (empty insert); after Submit labels `first`, `new`, `new`, qty `<null>`, 2, 1                               | null-default.png         |
+| 7   | Concurrent delete from a console → Submit rolls back and names the statement               | postgres | Pass. Console deletes row 3 → Submit answers `Statement 2 affected 0 rows…`, rolled back, `2 pending changes` kept; Rerun → Discard restores                                   | rejected-rollback.png    |
+| 8   | Duplicate row gets default id; submit creates it                                           | sqlite   | Pass. ⌘D copies row 1 with id `<default>`; Submit creates id 3                                                                                                                 | duplicate-row.png        |
+| 9   | `no_key_probe` and a view open read-only with the reason                                   | postgres | Pass. `customer_totals`: `Read-only: Views are read-only.`; `no_key_probe`: `No primary key or non-null unique key identifies a row.`, Enter opens no editor, Add Row disabled | read-only-table.png      |
+| 10  | Read-only datasource: editor read-only                                                     | sqlite   | Pass. Saved read-only SQLite: `Read-only: The datasource is read-only.`, double-click opens no editor                                                                          | read-only-datasource.png |
+| 11  | ⌘B on `orders.customer_id` opens `customers` filtered to that id                           | postgres | Pass. ⌘B on order 3's `customer_id` → `customers [pg]`, WHERE `"id" = 2`, Grace Hopper                                                                                         | fk-go-to.png             |
+| 12  | Show Referencing Rows from a customer opens its orders                                     | mysql    | Pass. Customer 1 → menu Show Referencing Rows… → `orders (customer_id)` → `orders [mysql]`, WHERE `` `customer_id` = 1 ``, ids 1, 2                                            | fk-referencing.png       |
+| 13  | Close tab with pending changes asks Submit / Discard / Cancel                              | postgres | Pass. ⌘W asks Pending changes with Submit / Discard / Cancel; Cancel keeps the tab, Discard closes it                                                                          | close-pending.png        |
+| 14  | Edit JSON in the value panel and submit                                                    | postgres | Pass. `doc` edited in the value panel, ⌘↵ → `1 pending change`; Submit → `{"kept": true, "tags": ["a", "b"]}`                                                                  | value-panel-edit.png     |
 
 Bugs found while testing get a regression test and a row in Deviations.
 
 ---
 
 ## Deviations taken while implementing
+
+**1. `language.updateDefault(defaultExpression)` joins `emptyInsert`.** SQLite has no
+`SET col = DEFAULT`, so Set DEFAULT on an existing row cannot be one keyword everywhere. PostgreSQL
+and MySQL answer `DEFAULT`; SQLite answers the column's declared default expression, or `NULL`.
+
+**2. `edit_probe.label` has `DEFAULT 'new'`, and `edit_probe` has a `doc` JSON column.** A
+`NOT NULL` column without a default makes the empty insert fail on every database, and live test 14
+needs a JSON cell in a table with a key. `no_key_probe` is as planned.
+
+**3. Two older smoke assertions changed.** The fixture gained two tables, so the explorer and
+console suites' `tables 3` / `tables 4` labels read `tables 5` / `tables 6`. Search Everywhere's
+Tables scenario now expects the table's data to open on Enter instead of the tree reveal.
+
+**4. `table.count` reads on a session of its own.** Running `COUNT(*)` on the editor's session would
+close its open cursor (decision 025) and with it Fetch Next Page. A short-lived session leaves the
+grid alone.
+
+**5. `table.condition` and `table.orderBy` join the protocol.** Filter by This Value, ⌘B, Show
+Referencing Rows… and header sorting need literals and quoted identifiers, which belong to the
+plugin (decision 008). The engine writes the condition from the held rows' values (by result
+column, written against the target column's name) and the ORDER BY from `{name, direction}` terms.
+
+**6. `TableQuery` carries `foreignKeys` and `referencing`.** The renderer cannot ask the catalog for
+"foreign keys pointing at this table", so the engine answers them with the query from every
+described namespace (`CatalogCache.described()`).
+
+**7. A stale catalog makes the editor read-only.** When the result's columns do not match the cached
+relation (altered since the last describe), identity cannot be trusted; the banner says to
+Synchronize and Reload.
+
+**8. Region- and tab-kind-aware keymap: decision 027.** DataGrip's ⌘↵, ⌘N and ⌘D mean different
+things in a console, a table editor and the tree. Actions gain `tabKind`; the focus regions gain
+`tableEditor` and `valuePanel`; `findClashes` reports only overlapping bindings; text fields keep
+their own ⌘Z/⌘A/⌘C/⌘X/⌘V/⌘⌫.
+
+**9. The grid and its windows are shared, not copied.** `ResultGrid` takes a `GridHost`
+(`ensureWindow`, `select`, `setLayout`) and an optional edit layer; the window/fetch/extract logic
+moved from `state/consoles.ts` into `state/resultWindows.ts` and `state/resultTab.ts`, used by both
+the consoles and the new tables store. Grid actions dispatch to whichever owns the active tab.
+
+**10. The preview is a modal kind, not a dialog component of its own.** `state/modal.ts` gains a
+`statements` request; `table/PreviewDialog.tsx` renders its numbered list inside the shared modal,
+so focus, Esc and the answer flow stay the modal's.
+
+**11. Refused edits are silent; the banner explains.** Plan decision 9 asked for a tooltip when a
+bytes cell or a read-only table refuses an edit. The read-only banner already states the reason
+and Edit Cell is disabled there; a bytes cell simply opens no editor, as its value panel shows only
+a hex preview.
+
+**12. A lost connection discards pending changes.** When the engine exits or the datasource
+disconnects underneath the editor, there is no session to submit on; the buffer is dropped with the
+notice `The connection closed; N pending changes were discarded.` A user-initiated disconnect asks
+first.
+
+**13. Live test 2 filters `total > 10`.** Only one fixture order passes `total > 50`, so the ORDER BY
+would show nothing; `> 10` keeps two rows in `placed_at desc` order. Editing scenarios pin
+`ORDER BY id`, since PostgreSQL returns an updated row last without one.
+
+**14. Bugs found while testing.** (a) A new table session started as `connecting`, which the read
+path refuses, so the first query never ran; it starts `disconnected` (`tablesStore.test.ts` opens
+and reads). (b) A refused query turned both bars red even when ORDER BY was empty; `refusedBars`
+marks only non-blank bars (store test and the `where-error` scenario assert it). (c) Submit used
+the Export icon; it is `CheckCircle`. (d) An edit colour could paint over the selection, depending
+on CSS order; the selection now replaces the edit background, and a deleted row keeps its
+strike-through.
 
 ---
 

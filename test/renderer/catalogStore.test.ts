@@ -173,18 +173,18 @@ describe("catalog store", () => {
   });
 
   it("givenLoadedCatalogs_whenTablesProviderSearched_thenReturnsRelationsWithPath", () => {
-    const reveal = vi.fn();
+    const open = vi.fn();
     const provider = tablesProvider({
       catalogs: () => ({ pg: LOADED_PG }),
       datasources: () => [PG_VIEW],
-      reveal,
+      open,
     });
 
     const items = provider.search("ord");
     items[0]?.run();
 
     expect(items.map((item) => [item.title, item.detail])).toEqual([["orders", "pg › table_craft › public"]]);
-    expect(reveal).toHaveBeenCalledWith({ datasourceId: "pg", path: PUBLIC_PATH, name: "orders", kind: "table" });
+    expect(open).toHaveBeenCalledWith({ datasourceId: "pg", path: PUBLIC_PATH, name: "orders", kind: "table" });
   });
 
   it("givenDescribedCatalog_whenStatusShown_thenItSaysWhenAndHowLong", () => {

@@ -1,5 +1,25 @@
 export { CatalogCache, type CachedCatalog } from "./catalog/cache.js";
-export { CoreError, type CoreErrorCode } from "./errors.js";
+export { CoreError, EditRejectedError, type CoreErrorCode } from "./errors.js";
+export {
+  READ_ONLY_REASONS,
+  editableIdentity,
+  generateEdits,
+  matchCondition,
+  orderClause,
+  submitEdits,
+  tableCount,
+  tableSelect,
+  type CellInput,
+  type ConditionColumn,
+  type EditColumn,
+  type EditTable,
+  type EditableIdentity,
+  type GenerateEditsOptions,
+  type OrderTerm,
+  type RowEdit,
+  type SubmittedEdits,
+  type TableClauses,
+} from "./edits/index.js";
 export {
   discoverPlugins,
   loadPlugins,

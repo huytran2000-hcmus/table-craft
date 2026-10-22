@@ -20,6 +20,8 @@ import {
 } from "@table-craft/plugin-api";
 import {
   classifyTokens,
+  defaultKeyword,
+  defaultValuesInsert,
   quoteIdentifierWith,
   sqlLiteral,
   sqlSplitter,
@@ -42,6 +44,8 @@ const language: SqlLanguage = {
   classify: (sql) => classifyTokens(sql, DIALECT),
   quoteIdentifier: quoteIdentifierWith('"'),
   literal: (value) => sqlLiteral(value, LITERALS),
+  emptyInsert: defaultValuesInsert,
+  updateDefault: defaultKeyword,
 };
 
 const BEGIN_SQL = "BEGIN";

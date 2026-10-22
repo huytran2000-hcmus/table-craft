@@ -1,6 +1,8 @@
 import type { WireValue } from "@table-craft/desktop/engine/protocol.js";
 
 export const NULL_TEXT = "<null>";
+/** A table editor cell that will take its column's default when submitted. */
+export const DEFAULT_TEXT = "<default>";
 const HEX_PREFIX = "0x";
 const ELLIPSIS = "…";
 const HEX_DIGITS_PER_BYTE = 2;

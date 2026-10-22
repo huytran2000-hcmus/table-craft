@@ -1,8 +1,10 @@
 import type { Chord } from "@table-craft/desktop/renderer/actions/chords.js";
 import type { ActionContext, FocusRegion } from "@table-craft/desktop/renderer/actions/context.js";
+import type { TabKind } from "@table-craft/desktop/renderer/state/tabs.js";
 
 /** Every command the app has is one of these (decision 015): menus, palette, keymap and buttons only `invoke`. */
-export type ActionCategory = "Console" | "Result Grid" | "Database" | "Editor Tabs" | "Tool Windows" | "Navigation";
+export type ActionCategory =
+  "Console" | "Result Grid" | "Table Editor" | "Database" | "Editor Tabs" | "Tool Windows" | "Navigation";
 
 /** Names, not components, so the registry stays free of React; `ui/icons.ts` maps them. */
 export type ActionIcon =
@@ -34,7 +36,15 @@ export type ActionIcon =
   | "valuePanel"
   | "sortAscending"
   | "sortDescending"
-  | "hide";
+  | "hide"
+  | "revert"
+  | "preview"
+  | "submit"
+  | "count"
+  | "filter"
+  | "goTo"
+  | "referencing"
+  | "table";
 
 export interface Action<A = void> {
   readonly id: string;
@@ -44,6 +54,11 @@ export interface Action<A = void> {
   readonly shortcut?: Chord;
   /** The shortcut works only while focus is in these regions; menus, buttons and the palette still run it. */
   readonly shortcutRegion?: FocusRegion | readonly FocusRegion[];
+  /**
+   * The action runs only while the active tab is of this kind, so one chord can mean Run in a
+   * console and Submit in a table tab (plan 008).
+   */
+  readonly tabKind?: TabKind;
   /** Whether the action can run now; absent means always. */
   readonly when?: (context: ActionContext) => boolean;
   readonly run: (context: ActionContext, args: A) => void | Promise<void>;
@@ -77,6 +92,7 @@ export function createActionRegistry(
   const listeners = new Set<(id: string) => void>();
 
   function enabled(action: AnyAction, context: ActionContext): boolean {
+    if (action.tabKind !== undefined && context.activeTab?.kind !== action.tabKind) return false;
     return action.when?.(context) ?? true;
   }
 

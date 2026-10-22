@@ -111,8 +111,19 @@ export const FIXTURE_RELATIONS = [
   { name: "customer_totals", kind: "view" },
   { name: "customers", kind: "table" },
   { name: "orders", kind: "table" },
+  { name: "edit_probe", kind: "table" },
+  { name: "no_key_probe", kind: "table" },
   { name: TYPE_PROBE_TABLE, kind: "table" },
 ] as const;
+
+/** The data editor's table (decision 026): a serial key and a default for every other column. */
+export const EDIT_PROBE_TABLE = "edit_probe";
+const EDIT_PROBE_SELECT = `SELECT id, label, qty, note FROM ${EDIT_PROBE_TABLE} ORDER BY id`;
+const EDIT_PROBE_KEY_TYPE = "integer";
+const EDIT_PROBE_TEXT_TYPE = "text";
+const EDIT_PROBE_DEFAULT_QTY = 1;
+const EDIT_PROBE_DEFAULT_LABEL = "new";
+const MISSING_ROW_ID = -1;
 
 const MISSING_NAMESPACE = "table_craft_no_such_namespace";
 
@@ -140,6 +151,11 @@ async function collect(rows: AsyncIterable<Row>): Promise<Row[]> {
   const collected: Row[] = [];
   for await (const row of rows) collected.push(row);
   return collected;
+}
+
+function catalogPathOf(fixture: ContractFixture): readonly string[] {
+  if (fixture.catalog === undefined) throw new Error("A plugin that declares schemaTree needs fixture.catalog.");
+  return fixture.catalog.path;
 }
 
 const WRITABLE: ConnectOptions = { readOnly: false };
@@ -523,6 +539,63 @@ export function runPluginContract(plugin: DatasourcePlugin, fixture: ContractFix
           await transactions.rollback();
           expect(transactions.open).toBe(false);
           expect(await collect((await session.execute("SELECT 1 AS one")).rows)).toEqual([[1]]);
+        });
+      });
+    });
+
+    describe.runIf(plugin.capabilities.includes("sql") && plugin.capabilities.includes("transactions"))("edits", () => {
+      it("givenEditProbe_whenEditsRoundTrip_thenRowsMatch", async () => {
+        const dialect = plugin.language;
+        if (dialect === undefined) throw new Error("A plugin that declares sql needs language.");
+        const table = dialect.quoteIdentifier(EDIT_PROBE_TABLE);
+        const name = (column: string): string => dialect.quoteIdentifier(column);
+        const text = (value: string): string => dialect.literal(value, EDIT_PROBE_TEXT_TYPE);
+        const key = (id: Row[number]): string => `${name("id")} = ${dialect.literal(id, EDIT_PROBE_KEY_TYPE)}`;
+        await withSession(plugin, fixture, async (session) => {
+          const transactions = session.transactions;
+          if (transactions === undefined) throw new Error("A transactions session needs transactions.");
+          const read = async (): Promise<Row[]> => collect((await session.execute(EDIT_PROBE_SELECT)).rows);
+          const affected = async (sql: string): Promise<number | null> => {
+            const result = await session.execute(sql);
+            await collect(result.rows);
+            return result.rowsAffected;
+          };
+          const qtyDefault =
+            (await session.introspector?.describe(catalogPathOf(fixture)))?.relations
+              .find((relation) => relation.name === EDIT_PROBE_TABLE)
+              ?.columns.find((column) => column.name === "qty")?.default ?? String(EDIT_PROBE_DEFAULT_QTY);
+          const before = await read();
+          await transactions.setMode("manual");
+          try {
+            expect(await affected(`INSERT INTO ${table} (${name("label")}) VALUES (${text("round trip")})`)).toBe(1);
+            expect(await affected(dialect.emptyInsert(table))).toBe(1);
+            const inserted = (await read()).slice(before.length);
+            expect(inserted.map((row) => row.slice(1))).toEqual([
+              ["round trip", EDIT_PROBE_DEFAULT_QTY, null],
+              [EDIT_PROBE_DEFAULT_LABEL, EDIT_PROBE_DEFAULT_QTY, null],
+            ]);
+            const [kept, dropped] = inserted;
+            const update =
+              `UPDATE ${table} SET ${name("label")} = ${text("it's changed")}, ${name("qty")} = ${text("7")}, ` +
+              `${name("note")} = NULL WHERE ${key(kept?.[0] ?? null)}`;
+            expect(await affected(update)).toBe(1);
+            // Unchanged values must still count the matched row, or Submit would reject a no-op edit.
+            expect(await affected(update)).toBe(1);
+            const reset = `UPDATE ${table} SET ${name("qty")} = ${dialect.updateDefault(qtyDefault)} WHERE ${key(kept?.[0] ?? null)}`;
+            expect(await affected(`UPDATE ${table} SET ${name("qty")} = 2 WHERE ${key(kept?.[0] ?? null)}`)).toBe(1);
+            expect(await affected(reset)).toBe(1);
+            expect(await affected(`DELETE FROM ${table} WHERE ${key(dropped?.[0] ?? null)}`)).toBe(1);
+            expect((await read()).slice(before.length).map((row) => row.slice(1))).toEqual([
+              ["it's changed", EDIT_PROBE_DEFAULT_QTY, null],
+            ]);
+            expect(
+              await affected(`UPDATE ${table} SET ${name("label")} = ${text("x")} WHERE ${key(MISSING_ROW_ID)}`),
+            ).toBe(0);
+          } finally {
+            await transactions.rollback();
+            await transactions.setMode("auto");
+          }
+          expect(await read()).toEqual(before);
         });
       });
     });

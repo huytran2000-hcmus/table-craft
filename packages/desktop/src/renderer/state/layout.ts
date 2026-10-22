@@ -20,6 +20,8 @@ export interface Layout {
   readonly showSystemSchemas: boolean;
   /** The console tabs open at the last change, in tab order, reopened at launch (plan 006). */
   readonly openConsoles: readonly OpenConsole[];
+  /** The table tabs open at the last change, reopened disconnected at launch (plan 008 decision 2). */
+  readonly openTables: readonly OpenTable[];
   /** The grid's extractor, which both Copy and Export use (plan 007 decision 12). */
   readonly extractor: ExtractorKind;
   /** Whether result grids show the value panel beside their rows (plan 007 decision 15). */
@@ -33,12 +35,21 @@ export interface OpenConsole {
   readonly active: boolean;
 }
 
+/** A table tab as the layout remembers it; its filter and edits are not kept. */
+export interface OpenTable {
+  readonly datasourceId: string;
+  readonly path: readonly string[];
+  readonly relation: string;
+  readonly active: boolean;
+}
+
 export const DEFAULT_LAYOUT: Layout = {
   visible: { database: true, services: true },
   sizes: { database: 22, services: 28 },
   hidden: null,
   showSystemSchemas: false,
   openConsoles: [],
+  openTables: [],
   extractor: "csv",
   valuePanel: false,
 };
@@ -64,6 +75,18 @@ function isOpenConsole(value: unknown): value is OpenConsole {
   return typeof datasourceId === "string" && typeof name === "string" && typeof active === "boolean";
 }
 
+function isOpenTable(value: unknown): value is OpenTable {
+  if (typeof value !== "object" || value === null) return false;
+  const { datasourceId, path, relation, active } = value as Record<string, unknown>;
+  return (
+    typeof datasourceId === "string" &&
+    Array.isArray(path) &&
+    path.every((part) => typeof part === "string") &&
+    typeof relation === "string" &&
+    typeof active === "boolean"
+  );
+}
+
 const isExtractor = (value: unknown): value is ExtractorKind =>
   typeof value === "string" && (EXTRACTOR_KINDS as readonly string[]).includes(value);
 
@@ -82,10 +105,8 @@ export function loadLayout(storage: Pick<Storage, "getItem">): Layout {
     return DEFAULT_LAYOUT;
   }
   if (typeof saved !== "object" || saved === null) return DEFAULT_LAYOUT;
-  const { visible, sizes, hidden, showSystemSchemas, openConsoles, extractor, valuePanel } = saved as Record<
-    string,
-    unknown
-  >;
+  const { visible, sizes, hidden, showSystemSchemas, openConsoles, openTables, extractor, valuePanel } =
+    saved as Record<string, unknown>;
   if (!isRecordOf(visible, isBoolean) || !isRecordOf(sizes, isSize)) return DEFAULT_LAYOUT;
   return {
     visible,
@@ -93,6 +114,7 @@ export function loadLayout(storage: Pick<Storage, "getItem">): Layout {
     hidden: isRecordOf(hidden, isBoolean) ? hidden : null,
     showSystemSchemas: showSystemSchemas === true,
     openConsoles: openConsolesOf(openConsoles),
+    openTables: Array.isArray(openTables) ? openTables.filter(isOpenTable) : [],
     extractor: isExtractor(extractor) ? extractor : DEFAULT_LAYOUT.extractor,
     valuePanel: valuePanel === true,
   };
@@ -127,6 +149,7 @@ export interface LayoutState {
   readonly resize: (id: ToolWindowId, percent: number) => void;
   readonly toggleSystemSchemas: () => void;
   readonly setOpenConsoles: (openConsoles: readonly OpenConsole[]) => void;
+  readonly setOpenTables: (openTables: readonly OpenTable[]) => void;
   readonly setExtractor: (extractor: ExtractorKind) => void;
   readonly toggleValuePanel: () => void;
 }
@@ -148,6 +171,10 @@ export function createLayoutStore(storage: LayoutStorage) {
       setOpenConsoles(openConsoles) {
         if (JSON.stringify(openConsoles) === JSON.stringify(get().layout.openConsoles)) return;
         update({ ...get().layout, openConsoles });
+      },
+      setOpenTables(openTables) {
+        if (JSON.stringify(openTables) === JSON.stringify(get().layout.openTables)) return;
+        update({ ...get().layout, openTables });
       },
       setExtractor(extractor) {
         if (extractor !== get().layout.extractor) update({ ...get().layout, extractor });

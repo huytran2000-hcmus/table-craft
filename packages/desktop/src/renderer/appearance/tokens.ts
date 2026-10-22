@@ -19,6 +19,12 @@ export interface ColorTokens {
   readonly gridSelection: string;
   /** A NULL cell's `<null>`, set in italics so it never reads as the string (plan 007 decision 16). */
   readonly gridNull: string;
+  /** Behind a table editor cell whose pending value differs from the database's (plan 008 decision 10). */
+  readonly editModified: string;
+  /** Behind a row added in the table editor and not yet submitted. */
+  readonly editInserted: string;
+  /** Behind a row marked for deletion, whose text is also struck through. */
+  readonly editDeleted: string;
   /** The pressed stripe button and the hovered row; one step above `panel`. */
   readonly selection: string;
   /** Behind the characters speed search matched in a tree row. */
@@ -104,6 +110,9 @@ export const DARK_COLORS: ColorTokens = {
   gridStripe: "#26282b",
   gridSelection: "#214283",
   gridNull: "#7c7f87",
+  editModified: "#2f4a6b",
+  editInserted: "#2f4d34",
+  editDeleted: "#4d2f33",
   selection: "#2e436e",
   searchMatch: "#6b5a1e",
   keyIcon: "#d9a343",

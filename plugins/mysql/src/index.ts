@@ -21,6 +21,7 @@ import {
 } from "@table-craft/plugin-api";
 import {
   classifyTokens,
+  defaultKeyword,
   quoteIdentifierWith,
   sqlLiteral,
   sqlSplitter,
@@ -48,6 +49,8 @@ const language: SqlLanguage = {
   classify: (sql) => classifyTokens(sql, DIALECT),
   quoteIdentifier: quoteIdentifierWith("`"),
   literal: (value) => sqlLiteral(value, LITERALS),
+  emptyInsert: (table) => `INSERT INTO ${table} () VALUES ()`,
+  updateDefault: defaultKeyword,
 };
 
 /** Manual mode is autocommit off: the server opens a transaction with the next statement. */

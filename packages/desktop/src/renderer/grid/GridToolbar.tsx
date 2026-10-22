@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import { EXTRACTOR_KINDS, RESULT_FETCH_ALL_CAP, type ExtractorKind } from "@table-craft/desktop/engine/protocol.js";
 import {
   copyBlockedReason,
@@ -7,7 +8,7 @@ import {
 import { invoke } from "@table-craft/desktop/renderer/actions/index.js";
 import { ActionButton } from "@table-craft/desktop/renderer/console/ActionButton.js";
 import { resultStateText } from "@table-craft/desktop/renderer/model/format.js";
-import type { ResultTab } from "@table-craft/desktop/renderer/state/consoles.js";
+import type { ResultTab } from "@table-craft/desktop/renderer/state/resultTab.js";
 import { useLayout } from "@table-craft/desktop/renderer/state/layout.js";
 import { SpinnerIcon } from "@table-craft/desktop/renderer/ui/icons.js";
 
@@ -21,8 +22,19 @@ function isExtractor(value: string): value is ExtractorKind {
   return (EXTRACTOR_KINDS as readonly string[]).includes(value);
 }
 
-/** Above the rows, in DataGrip's order: fetch and rerun, the row count, then extract and view. */
-export function GridToolbar({ result }: { readonly result: ResultTab }) {
+/**
+ * Above the rows, in DataGrip's order: fetch and rerun, the owner's buttons, the row count, then
+ * extract and view. `serverSorted` results order in the database, so their count never says sorted.
+ */
+export function GridToolbar({
+  result,
+  serverSorted = false,
+  children,
+}: {
+  readonly result: ResultTab;
+  readonly serverSorted?: boolean;
+  readonly children?: ReactNode;
+}) {
   const extractor = useLayout((state) => state.layout.extractor);
   const valuePanel = useLayout((state) => state.layout.valuePanel);
   const fetching = result.fetching === "page" || result.fetching === "all";
@@ -36,12 +48,13 @@ export function GridToolbar({ result }: { readonly result: ResultTab }) {
       <ActionButton actionId={GRID_ACTION_IDS.fetchAll} compact />
       <ActionButton actionId={GRID_ACTION_IDS.rerun} compact />
       {fetching ? <ActionButton actionId={GRID_ACTION_IDS.cancelFetch} compact /> : null}
+      {children}
       <span data-testid="result-state" className="ml-gap truncate text-ink-muted">
         {resultStateText({
           rowCount: result.rowCount,
           complete: result.complete,
           cursorOpen: result.cursorOpen,
-          sorted: result.sort.length > 0,
+          sorted: !serverSorted && result.sort.length > 0,
           fetchAllCap: RESULT_FETCH_ALL_CAP,
         })}
       </span>

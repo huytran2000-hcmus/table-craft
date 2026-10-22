@@ -128,6 +128,31 @@ The toolbar is `h-row` on `bg-panel`: icon-only buttons (`ArrowDown` Fetch Next 
 open. A disabled button explains itself in its tooltip. The closed-connection banner is an `h-row`
 strip in `bg-panel`, `text-ink-muted` italics, above the rows.
 
+## Table data editor
+
+Plan 008. A table tab reuses the result grid and the console's tint border; its tab carries the
+`Table` icon. Pending changes colour the row background through three tokens:
+
+| Token (`appearance/tokens.ts`) | CSS variable         | Tailwind           | Dark / comfortable | Used by                                       |
+| ------------------------------ | -------------------- | ------------------ | ------------------ | --------------------------------------------- |
+| `colors.editModified`          | `--tc-edit-modified` | `bg-edit-modified` | `#2f4a6b`          | A changed cell in a held row                  |
+| `colors.editInserted`          | `--tc-edit-inserted` | `bg-edit-inserted` | `#2f4d34`          | Every cell of a row to insert                 |
+| `colors.editDeleted`           | `--tc-edit-deleted`  | `bg-edit-deleted`  | `#4d2f33`          | Every cell of a row to delete, `line-through` |
+
+Selection (`bg-grid-selection`) wins over the edit colours. A pending `NULL` reads `<null>` and a
+pending default `<default>`, both italic `text-grid-null`. The inline cell editor is an `<input>`
+filling the cell with the `outline-accent` inset.
+
+Above the grid sit the WHERE and ORDER BY bars: single-line CodeMirror fields on `bg-canvas` with a
+`border-line` frame that turns `border-danger` on a refused clause, the label in `text-ink-muted`,
+and the datasource name · plugin name on the right. The database's message sits under them in
+`text-danger` with the hint muted. A read-only table shows an `h-row` banner in `bg-panel`,
+`text-ink-muted`, `Read-only: <reason>`. The result toolbar gains icon-only `Plus` Add Row,
+`Copy` Duplicate Row, `Trash` Delete Rows, `ArrowUUpLeft` Revert Selected, `FileSql` Preview,
+`CheckCircle` Submit, the `Tx: Auto` label, and `Sigma` Count Rows. The footer (`h-row`,
+`text-ink-muted`) holds `3 pending changes`, the counted `12,345 rows`, and the last notice. The
+preview is a 40 rem modal listing the numbered statements in `font-editor`.
+
 ## Datasource colours
 
 Plan 004. A datasource stores its colour by name (decision 011); the theme gives the value. The

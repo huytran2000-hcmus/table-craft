@@ -7,6 +7,8 @@ import { formatCount } from "@table-craft/desktop/renderer/model/format.js";
 import { rowCountOf, selectAll, selectedRanges } from "@table-craft/desktop/renderer/model/gridSelection.js";
 import { cycledSort, sortedBy } from "@table-craft/desktop/renderer/model/sortKeys.js";
 import { canFetch, canRun, useConsoles, type ResultTab } from "@table-craft/desktop/renderer/state/consoles.js";
+import { canReload, tableRowCount, useTables } from "@table-craft/desktop/renderer/state/tables.js";
+import { reloadTable, settlePendingEdits } from "@table-craft/desktop/renderer/actions/tableCommands.js";
 import { useLayout } from "@table-craft/desktop/renderer/state/layout.js";
 import { useModal } from "@table-craft/desktop/renderer/state/modal.js";
 
@@ -61,14 +63,38 @@ export interface ExtractorArgs {
   readonly extractor: ExtractorKind;
 }
 
+/** What the grid's actions ask of the store holding the shown result; consoles and tables share it. */
+type ResultHost = Pick<
+  ReturnType<typeof useConsoles.getState>,
+  "fetchMore" | "stopFetch" | "sort" | "setLayout" | "select" | "extract" | "exportTo"
+>;
+
 interface ShownResult {
-  readonly consoleId: string;
+  /** The console or table tab showing the result. */
+  readonly ownerId: string;
   readonly result: ResultTab;
+  readonly host: ResultHost;
+  /** Rows the grid draws, the table editor's added ones included. */
+  readonly rows: number;
 }
 
 function shown(context: ActionContext): ShownResult | null {
-  if (context.console === null || context.activeTab === null || context.result === null) return null;
-  return { consoleId: context.activeTab.id, result: context.result };
+  if (context.activeTab === null || context.result === null) return null;
+  const ownerId = context.activeTab.id;
+  if (context.console !== null) {
+    return { ownerId, result: context.result, host: useConsoles.getState(), rows: context.result.rowCount };
+  }
+  if (context.table !== null) {
+    return { ownerId, result: context.result, host: useTables.getState(), rows: tableRowCount(context.table) };
+  }
+  return null;
+}
+
+/** Whether Rerun can start: a console's Run or a table's Reload. */
+function canRerun(context: ActionContext): boolean {
+  if (shown(context) === null) return false;
+  if (context.console !== null) return canRun(context.console.status);
+  return context.table !== null && canReload(context.table.status);
 }
 
 function live(context: ActionContext): ShownResult | null {
@@ -113,7 +139,7 @@ export const GRID_ACTIONS: readonly AnyAction[] = [
     },
     run: async (context) => {
       const target = live(context);
-      if (target !== null) await useConsoles.getState().fetchMore(target.consoleId, target.result.id, false);
+      if (target !== null) await target.host.fetchMore(target.ownerId, target.result.id, false);
     },
   }),
   defineAction({
@@ -127,7 +153,7 @@ export const GRID_ACTIONS: readonly AnyAction[] = [
     },
     run: async (context) => {
       const target = live(context);
-      if (target !== null) await useConsoles.getState().fetchMore(target.consoleId, target.result.id, true);
+      if (target !== null) await target.host.fetchMore(target.ownerId, target.result.id, true);
     },
   }),
   defineAction({
@@ -141,7 +167,7 @@ export const GRID_ACTIONS: readonly AnyAction[] = [
     },
     run: async (context) => {
       const target = live(context);
-      if (target !== null) await useConsoles.getState().stopFetch(target.consoleId, target.result.id);
+      if (target !== null) await target.host.stopFetch(target.ownerId, target.result.id);
     },
   }),
   defineAction({
@@ -151,10 +177,12 @@ export const GRID_ACTIONS: readonly AnyAction[] = [
     icon: "rerun",
     shortcut: "Mod+R",
     shortcutRegion: "grid",
-    when: (context) => shown(context) !== null && context.console !== null && canRun(context.console.status),
+    when: canRerun,
     run: async (context) => {
       const target = shown(context);
-      if (target !== null) await useConsoles.getState().rerun(target.consoleId, target.result.id);
+      if (target === null) return;
+      if (context.table !== null) await reloadTable(target.ownerId);
+      else await useConsoles.getState().rerun(target.ownerId, target.result.id);
     },
   }),
   defineAction({
@@ -170,8 +198,15 @@ export const GRID_ACTIONS: readonly AnyAction[] = [
       const selection = target?.result.selection ?? null;
       if (target === null || selection === null) return;
       const { rows, columns } = selectedRanges(selection, visibleColumns(target.result.layout));
+      // Rows added in the table editor are not in the engine yet; Copy takes the held ones.
+      const held = rows.flatMap((range) =>
+        range.from >= target.result.rowCount
+          ? []
+          : [{ from: range.from, to: Math.min(range.to, target.result.rowCount) }],
+      );
+      if (held.length === 0) return;
       const { extractor } = useLayout.getState().layout;
-      const text = await useConsoles.getState().extract(target.consoleId, target.result.id, extractor, rows, columns);
+      const text = await target.host.extract(target.ownerId, target.result.id, extractor, held, columns);
       if (text !== null) await writeClipboard(text);
     },
   }),
@@ -181,13 +216,13 @@ export const GRID_ACTIONS: readonly AnyAction[] = [
     category: "Result Grid",
     shortcut: "Mod+A",
     shortcutRegion: "grid",
-    when: (context) => shown(context) !== null && (context.result?.rowCount ?? 0) > 0,
+    when: (context) => (shown(context)?.rows ?? 0) > 0,
     run: (context) => {
       const target = shown(context);
       if (target === null) return;
       const { result } = target;
-      const bounds = { rows: result.rowCount, columns: visibleColumns(result.layout).length };
-      useConsoles.getState().select(target.consoleId, result.id, selectAll(bounds));
+      const bounds = { rows: target.rows, columns: visibleColumns(result.layout).length };
+      target.host.select(target.ownerId, result.id, selectAll(bounds));
     },
   }),
   defineAction({
@@ -210,7 +245,7 @@ export const GRID_ACTIONS: readonly AnyAction[] = [
       }
       if (chosen.value === null) return;
       const columns = visibleColumns(target.result.layout);
-      await useConsoles.getState().exportTo(target.consoleId, target.result.id, extractor, chosen.value, columns);
+      await target.host.exportTo(target.ownerId, target.result.id, extractor, chosen.value, columns);
     },
   }),
   defineAction({
@@ -245,7 +280,8 @@ export const GRID_ACTIONS: readonly AnyAction[] = [
         args?.direction === undefined
           ? cycledSort(target.result.sort, column, args?.add === true)
           : sortedBy(column, args.direction);
-      await useConsoles.getState().sort(target.consoleId, target.result.id, keys);
+      if (context.table !== null && !(await settlePendingEdits([target.ownerId], "sort"))) return;
+      await target.host.sort(target.ownerId, target.result.id, keys);
     },
   }),
   defineAction({
@@ -255,7 +291,9 @@ export const GRID_ACTIONS: readonly AnyAction[] = [
     when: (context) => (live(context)?.result.sort.length ?? 0) > 0,
     run: async (context) => {
       const target = live(context);
-      if (target !== null) await useConsoles.getState().sort(target.consoleId, target.result.id, []);
+      if (target === null) return;
+      if (context.table !== null && !(await settlePendingEdits([target.ownerId], "sort"))) return;
+      await target.host.sort(target.ownerId, target.result.id, []);
     },
   }),
   defineAction<ColumnArgs | undefined>({
@@ -269,7 +307,7 @@ export const GRID_ACTIONS: readonly AnyAction[] = [
       const column = target === null ? null : columnOf(target.result, args);
       if (target === null || column === null) return;
       const layout = hiddenColumn(target.result.layout, column);
-      useConsoles.getState().setLayout(target.consoleId, target.result.id, layout);
+      target.host.setLayout(target.ownerId, target.result.id, layout);
     },
   }),
   defineAction({
@@ -280,7 +318,7 @@ export const GRID_ACTIONS: readonly AnyAction[] = [
     run: (context) => {
       const target = shown(context);
       if (target === null) return;
-      useConsoles.getState().setLayout(target.consoleId, target.result.id, allShown(target.result.layout));
+      target.host.setLayout(target.ownerId, target.result.id, allShown(target.result.layout));
     },
   }),
   defineAction<ColumnArgs | undefined>({

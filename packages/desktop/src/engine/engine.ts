@@ -3,35 +3,52 @@ import { isAbsolute } from "node:path";
 import {
   CatalogCache,
   CoreError,
+  EditRejectedError,
+  editableIdentity,
+  generateEdits,
   loadedPlugin,
+  matchCondition,
   openSession,
+  orderClause,
   project,
   ResultStore,
   rowWriter,
+  submitEdits,
+  tableCount,
+  tableSelect,
+  type EditTable,
   type ExtractorKind,
   type PluginLoadResult,
   type ResultState,
+  type RowEdit,
 } from "@table-craft/core";
 import {
   isPluginError,
   type Capability,
   type Column,
+  type ColumnMeta,
+  type Relation,
   type Row,
   type Session,
   type SqlLanguage,
   type Transactions,
+  type WireValue,
 } from "@table-craft/plugin-api";
 import type {
   ClassifiedStatement,
+  ConditionColumn,
   DatasourceConfig,
   EngineError,
   EngineMethod,
   EngineResponse,
+  ExecutedStatement,
   ExportedResult,
   ProbeResult,
+  ReferencingKey,
   RequestOf,
   ResultOf,
   RowRange,
+  TableQuery,
   TransactionState,
 } from "@table-craft/desktop/engine/protocol.js";
 import { engineRequestSchema, readRequestId } from "@table-craft/desktop/engine/requests.js";
@@ -64,6 +81,9 @@ class EngineFailure extends Error {
 
 function toEngineError(cause: unknown): EngineError {
   if (cause instanceof EngineFailure) return cause.error;
+  if (cause instanceof EditRejectedError) {
+    return { code: cause.code, message: cause.message, hint: cause.hint, statementIndex: cause.statementIndex };
+  }
   if (cause instanceof CoreError) return { code: cause.code, message: cause.message, hint: cause.hint };
   const message = cause instanceof Error ? cause.message : String(cause);
   return { code: "internal", message, hint: BUG_HINT };
@@ -178,6 +198,36 @@ function rowsIn(rows: readonly Row[], ranges: readonly RowRange[]): Row[] {
   return ranges.flatMap((range) => rows.slice(range.from, Math.max(range.from, range.to)));
 }
 const OPEN_TRANSACTION_HINT = "Commit or roll back the open transaction first.";
+const SYNCHRONIZE_HINT = "Choose Synchronize (⌥⌘Y), then open the table again.";
+const STALE_CATALOG_REASON = "The table's columns differ from the cached catalog; synchronize to edit it.";
+const SERVER_SORT_HINT = "Sort a table editor on the server: click the column header or edit ORDER BY.";
+
+/** What the engine remembers about a `table.query` result so edits and conditions can be written. */
+interface TableResult extends EditTable {
+  /** Why the table cannot be edited, or null when it can (decision 026). */
+  readonly readOnly: string | null;
+}
+
+/** A result column the catalog does not know, described from what the driver reported. */
+function reportedColumn(column: Column, index: number): ColumnMeta {
+  return {
+    name: column.name,
+    position: index + 1,
+    type: column.type ?? "",
+    nullable: true,
+    default: null,
+    comment: null,
+    autoIncrement: false,
+  };
+}
+
+/** COUNT(*) comes back as a number, a decimal string or a bigint, by driver. */
+function countOf(value: WireValue | undefined): number {
+  if (typeof value === "number") return value;
+  if (typeof value === "string") return Number(value);
+  if (typeof value === "object" && value !== null && value.kind === "bigint") return Number(value.value);
+  throw new EngineFailure({ code: "internal", message: "COUNT(*) returned no number.", hint: BUG_HINT });
+}
 
 export function createEngine(options: EngineOptions, now: () => number = Date.now): Engine {
   function sqlLanguage(): SqlLanguage {
@@ -236,17 +286,73 @@ export function createEngine(options: EngineOptions, now: () => number = Date.no
     }
   }
 
+  /** `name` in `path` from the catalog cache, described afresh once when the cache lacks it. */
+  function relationOf(path: readonly string[], name: string): Promise<{ relation: Relation; qualified: string }> {
+    return introspect(async ({ cache, session }) => {
+      const find = (described: { readonly catalog: { readonly relations: readonly Relation[] } }) =>
+        described.catalog.relations.find((relation) => relation.name === name);
+      const relation = find(await cache.describe(path)) ?? find(await cache.describe(path, true));
+      if (relation === undefined) {
+        throw new EngineFailure({
+          code: "invalidRequest",
+          message: `There is no table ${name} in ${path.join(".")}.`,
+          hint: SYNCHRONIZE_HINT,
+        });
+      }
+      return { relation, qualified: session.introspector?.qualifiedName(path, name) ?? name };
+    });
+  }
+
+  /** Foreign keys in every described namespace that target `path`.`name`. */
+  function referencingKeys(path: readonly string[], name: string): Promise<ReferencingKey[]> {
+    const target = JSON.stringify(path);
+    return introspect(({ cache }) =>
+      cache
+        .described()
+        .flatMap(({ catalog: described }) =>
+          described.relations.flatMap((relation) =>
+            relation.foreignKeys
+              .filter((key) => key.target.relation === name && JSON.stringify(key.target.path) === target)
+              .map((foreignKey) => ({ path: described.path, relation: relation.name, foreignKey })),
+          ),
+        ),
+    );
+  }
+
+  /** Count Rows on a session of its own: the editor's session would close its open cursor. */
+  async function countRows(path: readonly string[], name: string, where: string): Promise<number> {
+    const { qualified } = await relationOf(path, name);
+    const session = await connectDatasource(options);
+    try {
+      const result = await session.execute(tableCount(qualified, where));
+      let first: Row | undefined;
+      for await (const row of result.rows) first ??= row;
+      return countOf(first?.[0]);
+    } catch (cause) {
+      throw cause instanceof EngineFailure ? cause : statementFailed(cause, options.datasource.readOnly);
+    } finally {
+      await session.close().catch(() => undefined);
+    }
+  }
+
   function connect(): EngineConnection {
     const sessions = new Map<string, OpenSession>();
     /** Each live result handle, mapped to the session that produced it. */
     const handles = new Map<string, string>();
     /** The one result per session whose cursor is still open (decision 025). */
     const cursors = new Map<string, string>();
+    /** The handles `table.query` produced, with what editing them needs. */
+    const tables = new Map<string, TableResult>();
+
+    function forget(handle: string): void {
+      handles.delete(handle);
+      tables.delete(handle);
+    }
 
     async function releaseHandlesOf(sessionId: string): Promise<void> {
       cursors.delete(sessionId);
       const owned = [...handles].filter(([, owner]) => owner === sessionId).map(([handle]) => handle);
-      for (const handle of owned) handles.delete(handle);
+      for (const handle of owned) forget(handle);
       await Promise.all(owned.map((handle) => results.release(handle)));
     }
 
@@ -343,6 +449,121 @@ export function createEngine(options: EngineOptions, now: () => number = Date.no
       return handle;
     }
 
+    async function runStatement(sessionId: string, sql: string): Promise<ExecutedStatement> {
+      const open = sessionFor(sessionId);
+      open.running += 1;
+      try {
+        // Awaited only when there is one: a needless await would let a cancel overtake the execute.
+        if (cursors.has(sessionId)) await closeCursorOf(sessionId);
+        const summary = await open.session
+          .execute(sql)
+          .then((result) => results.put(result))
+          .catch((cause: unknown) => {
+            throw statementFailed(cause, options.datasource.readOnly);
+          });
+        if (sessions.get(sessionId) !== open) {
+          // The session closed while the statement ran; nobody is left to release this result.
+          await results.release(summary.handle);
+          sessionFor(sessionId);
+        }
+        handles.set(summary.handle, sessionId);
+        if (summary.cursorOpen) cursors.set(sessionId, summary.handle);
+        return {
+          ...summary,
+          firstWindow: results.window(summary.handle, 0),
+          transactionOpen: open.session.transactions?.open ?? false,
+        };
+      } finally {
+        open.running -= 1;
+      }
+    }
+
+    async function queryTable(request: RequestOf<"table.query">): Promise<TableQuery> {
+      const open = sessionFor(request.sessionId);
+      const { relation, qualified } = await relationOf(request.path, request.relation);
+      const sql = tableSelect(qualified, request);
+      const statement = await runStatement(request.sessionId, sql);
+      const catalogued = statement.columns.map((column) => relation.columns.find((meta) => meta.name === column.name));
+      const columns = catalogued.map(
+        (meta, index) => meta ?? reportedColumn(statement.columns[index] ?? { name: "", type: null }, index),
+      );
+      const stale = statement.columns.length !== relation.columns.length || catalogued.includes(undefined);
+      const resolved = editableIdentity(relation, options.datasource.readOnly, open.capabilities);
+      const editable = "identity" in resolved && stale ? { readOnly: STALE_CATALOG_REASON } : resolved;
+      tables.set(statement.handle, {
+        table: qualified,
+        columns: columns.map((meta) => ({ name: meta.name, type: meta.type, default: meta.default })),
+        identity:
+          "identity" in editable
+            ? editable.identity.map((name) => columns.findIndex((meta) => meta.name === name))
+            : [],
+        readOnly: "readOnly" in editable ? editable.readOnly : null,
+      });
+      const referencing = await referencingKeys(request.path, request.relation);
+      return { statement, sql, editable, columns, foreignKeys: relation.foreignKeys, referencing };
+    }
+
+    function tableFor(handle: string): TableResult {
+      const table = tables.get(ownedHandle(handle));
+      if (table === undefined) {
+        throw new EngineFailure({
+          code: "invalidRequest",
+          message: "That result did not come from the table editor.",
+          hint: BUG_HINT,
+        });
+      }
+      return table;
+    }
+
+    function editStatements(handle: string, edits: readonly RowEdit[]): string[] {
+      const table = tableFor(handle);
+      if (table.readOnly !== null) {
+        throw new EngineFailure({
+          code: "invalidRequest",
+          message: table.readOnly,
+          hint: "Edit it with statements in a console.",
+        });
+      }
+      const held = results.rows(handle);
+      return generateEdits({ ...table, rows: (row) => held[row], edits, language: sqlLanguage() });
+    }
+
+    async function submit(request: RequestOf<"edits.submit">) {
+      const open = sessionFor(request.sessionId);
+      if (handles.get(request.handle) !== request.sessionId) {
+        throw new EngineFailure({
+          code: "invalidRequest",
+          message: "That table result belongs to another session.",
+          hint: BUG_HINT,
+        });
+      }
+      const statements = editStatements(request.handle, request.edits);
+      await closeCursorOf(request.sessionId);
+      return submitEdits(open.session, statements);
+    }
+
+    function condition(handle: string, rows: readonly number[], columns: readonly ConditionColumn[]): string {
+      const held = results.rows(ownedHandle(handle));
+      const table = tables.get(handle);
+      const reported = results.columns(handle);
+      const typed = columns.map(({ column, name }) => ({
+        name,
+        type: table?.columns[column]?.type ?? reported[column]?.type ?? null,
+      }));
+      const tuples = rows.map((index) => {
+        const row = held[index];
+        if (row === undefined) {
+          throw new EngineFailure({
+            code: "invalidRequest",
+            message: `Row ${String(index + 1)} is not held by this result.`,
+            hint: "Reload the table and choose the cell again.",
+          });
+        }
+        return columns.map(({ column }) => row[column] ?? null);
+      });
+      return matchCondition(sqlLanguage(), typed, tuples);
+    }
+
     async function transact(
       sessionId: string,
       change: (transactions: Transactions) => Promise<void>,
@@ -386,34 +607,7 @@ export function createEngine(options: EngineOptions, now: () => number = Date.no
         await open.session.close();
         return null;
       },
-      "statement.execute": async ({ sessionId, sql }) => {
-        const open = sessionFor(sessionId);
-        open.running += 1;
-        try {
-          // Awaited only when there is one: a needless await would let a cancel overtake the execute.
-          if (cursors.has(sessionId)) await closeCursorOf(sessionId);
-          const summary = await open.session
-            .execute(sql)
-            .then((result) => results.put(result))
-            .catch((cause: unknown) => {
-              throw statementFailed(cause, options.datasource.readOnly);
-            });
-          if (sessions.get(sessionId) !== open) {
-            // The session closed while the statement ran; nobody is left to release this result.
-            await results.release(summary.handle);
-            sessionFor(sessionId);
-          }
-          handles.set(summary.handle, sessionId);
-          if (summary.cursorOpen) cursors.set(sessionId, summary.handle);
-          return {
-            ...summary,
-            firstWindow: results.window(summary.handle, 0),
-            transactionOpen: open.session.transactions?.open ?? false,
-          };
-        } finally {
-          open.running -= 1;
-        }
-      },
+      "statement.execute": ({ sessionId, sql }) => runStatement(sessionId, sql),
       "statement.cancel": async ({ sessionId }) => {
         const open = sessionFor(sessionId);
         if (!open.capabilities.includes("cancel") || open.session.cancel === undefined) {
@@ -438,7 +632,7 @@ export function createEngine(options: EngineOptions, now: () => number = Date.no
       "result.release": async ({ handle }) => {
         const owner = handles.get(handle);
         if (owner === undefined) return null;
-        handles.delete(handle);
+        forget(handle);
         if (cursors.get(owner) === handle) cursors.delete(owner);
         await results.release(handle);
         return null;
@@ -450,7 +644,16 @@ export function createEngine(options: EngineOptions, now: () => number = Date.no
         return track(handle, state);
       },
       "result.stopFetch": async ({ handle }) => track(handle, await results.stopFetch(ownedHandle(handle))),
-      "result.sort": ({ handle, keys }) => Promise.resolve(results.sort(ownedHandle(handle), keys)),
+      "result.sort": ({ handle, keys }) => {
+        if (tables.has(ownedHandle(handle))) {
+          throw new EngineFailure({
+            code: "invalidRequest",
+            message: "A table editor's rows are sorted by the database, not locally (decision 026).",
+            hint: SERVER_SORT_HINT,
+          });
+        }
+        return Promise.resolve(results.sort(handle, keys));
+      },
       "result.extract": ({ handle, extractor, rows, columns }) => {
         const chosen = chosenColumns(ownedHandle(handle), columns);
         const writer = rowWriter(extractor, chosen, { dialect: sqlLanguage() });
@@ -464,6 +667,12 @@ export function createEngine(options: EngineOptions, now: () => number = Date.no
       "catalog.describe": ({ path, refresh }) => introspect(({ cache }) => cache.describe(path, refresh)),
       "catalog.qualifiedName": ({ path, name }) =>
         introspect(({ session }) => session.introspector?.qualifiedName(path, name) ?? name),
+      "table.query": (request) => queryTable(request),
+      "table.count": ({ path, relation, where }) => countRows(path, relation, where),
+      "table.condition": ({ handle, rows, columns }) => Promise.resolve(condition(handle, rows, columns)),
+      "table.orderBy": ({ terms }) => Promise.resolve(orderClause(sqlLanguage(), terms)),
+      "edits.preview": ({ handle, edits }) => Promise.resolve(editStatements(handle, edits)),
+      "edits.submit": (request) => submit(request),
     };
 
     async function route<M extends EngineMethod>(request: RequestOf<M>): Promise<EngineResponse> {
@@ -495,6 +704,7 @@ export function createEngine(options: EngineOptions, now: () => number = Date.no
       async close() {
         const held = [...handles.keys()];
         handles.clear();
+        tables.clear();
         cursors.clear();
         await Promise.all(held.map((handle) => results.release(handle)));
         const open = [...sessions.values()];

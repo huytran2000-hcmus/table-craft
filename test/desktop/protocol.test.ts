@@ -5,11 +5,16 @@ import {
   RESULT_PAGE_ROWS,
   RESULT_WINDOW_ROWS,
   type CachedCatalog,
+  type CellInput,
   type CoreErrorCode,
+  type EditableIdentity,
   type ExtractorKind,
+  type OrderTerm,
   type ResultState,
   type ResultSummary,
+  type RowEdit,
   type SortKey,
+  type SubmittedEdits,
   type TypeClass,
 } from "@table-craft/core";
 import {
@@ -17,6 +22,7 @@ import {
   MANIFEST_FILE,
   type Capability,
   type Column,
+  type ColumnMeta,
   type Namespace,
   type NamespaceCatalog,
   type PluginErrorCode,
@@ -72,6 +78,15 @@ describe("engine protocol", () => {
     expectTypeOf<StatementSpan & StatementClass>().toExtend<protocol.ClassifiedStatement>();
     expectTypeOf<keyof protocol.ClassifiedStatement>().toEqualTypeOf<keyof (StatementSpan & StatementClass)>();
     expectTypeOf<protocol.TransactionMode>().toEqualTypeOf<TransactionMode>();
+  });
+
+  it("givenEditTypes_whenComparedWithCore_thenIdentical", () => {
+    expectTypeOf<protocol.CellInput>().toEqualTypeOf<CellInput>();
+    expectTypeOf<protocol.RowEdit>().toEqualTypeOf<RowEdit>();
+    expectTypeOf<protocol.EditableIdentity>().toEqualTypeOf<EditableIdentity>();
+    expectTypeOf<protocol.SubmittedEdits>().toEqualTypeOf<SubmittedEdits>();
+    expectTypeOf<protocol.OrderTerm>().toEqualTypeOf<OrderTerm>();
+    expectTypeOf<protocol.ColumnMeta>().toEqualTypeOf<ColumnMeta>();
   });
 
   it("givenCoreErrorCodes_whenComparedWithEngineErrorCodes_thenEveryOneIsCovered", () => {

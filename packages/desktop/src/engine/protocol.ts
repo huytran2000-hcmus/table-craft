@@ -244,6 +244,61 @@ export interface ExecutedStatement extends ResultState {
   readonly transactionOpen: boolean;
 }
 
+/** Mirrors `CellInput` in core: text the database casts, `NULL`, or the column's default. */
+export type CellInput =
+  { readonly kind: "text"; readonly text: string } | { readonly kind: "null" } | { readonly kind: "default" };
+
+/** Mirrors `RowEdit` in core; `row` indexes the table result's held rows. */
+export type RowEdit =
+  | {
+      readonly kind: "update";
+      readonly row: number;
+      readonly values: readonly { readonly column: number; readonly value: CellInput }[];
+    }
+  | { readonly kind: "insert"; readonly values: readonly CellInput[] }
+  | { readonly kind: "delete"; readonly row: number };
+
+/** Mirrors `EditableIdentity` in core: the key columns that name a row, or why the table is read-only. */
+export type EditableIdentity = { readonly identity: readonly string[] } | { readonly readOnly: string };
+
+/** What `table.query` answers: the rows, the SQL that read them, and how they may be edited (decision 026). */
+export interface TableQuery {
+  readonly statement: ExecutedStatement;
+  readonly sql: string;
+  readonly editable: EditableIdentity;
+  /** The catalog's view of each result column, in result order. */
+  readonly columns: readonly ColumnMeta[];
+  /** The table's own foreign keys, for go-to-referenced. */
+  readonly foreignKeys: readonly ForeignKey[];
+  /** Foreign keys of described tables that point at this one, for show-referencing. */
+  readonly referencing: readonly ReferencingKey[];
+}
+
+/** A foreign key of the relation at `path`.`relation` that points at another table. */
+export interface ReferencingKey {
+  readonly path: readonly string[];
+  readonly relation: string;
+  readonly foreignKey: ForeignKey;
+}
+
+/** Mirrors `SubmittedEdits` in core. */
+export interface SubmittedEdits {
+  readonly statements: readonly string[];
+  readonly rowsAffected: number;
+}
+
+/** A column a value condition matches on: the result column whose values it reads, written as `name`. */
+export interface ConditionColumn {
+  readonly column: number;
+  readonly name: string;
+}
+
+/** Mirrors `OrderTerm` in core: one ORDER BY term by column name. */
+export interface OrderTerm {
+  readonly name: string;
+  readonly direction: SortDirection;
+}
+
 export interface OpenedSession {
   readonly sessionId: string;
   /** The datasource's plugin, by its manifest name, for display only. */
@@ -316,6 +371,52 @@ export interface EngineCalls {
   };
   /** `name` inside `path`, quoted by the plugin (decision 008). Needs `schemaTree`. */
   "catalog.qualifiedName": { params: { readonly path: readonly string[]; readonly name: string }; result: string };
+  /**
+   * Opens `relation` in the table editor: `SELECT *` with the bars' clauses verbatim, run on the
+   * session, plus its identity from the catalog cache (decision 026). Its result refuses local sort.
+   */
+  "table.query": {
+    params: {
+      readonly sessionId: string;
+      readonly path: readonly string[];
+      readonly relation: string;
+      readonly where: string;
+      readonly orderBy: string;
+    };
+    result: TableQuery;
+  };
+  /** `SELECT COUNT(*)` with the WHERE bar, on the engine's own session so the editor's cursor stays open. */
+  "table.count": {
+    params: { readonly path: readonly string[]; readonly relation: string; readonly where: string };
+    result: number;
+  };
+  /**
+   * A WHERE condition matching the values `rows` hold in `columns`, written with the plugin's literals,
+   * for Filter by This Value and foreign-key navigation.
+   */
+  "table.condition": {
+    params: {
+      readonly handle: string;
+      readonly rows: readonly number[];
+      readonly columns: readonly ConditionColumn[];
+    };
+    result: string;
+  };
+  /** The ORDER BY bar's text for header-click sorting, names quoted by the plugin; empty for no terms. */
+  "table.orderBy": { params: { readonly terms: readonly OrderTerm[] }; result: string };
+  /** The statements `edits.submit` would run, in order, without running them. */
+  "edits.preview": {
+    params: { readonly handle: string; readonly edits: readonly RowEdit[] };
+    result: readonly string[];
+  };
+  /**
+   * Runs the edits in one transaction on the table's session; any statement that fails or touches
+   * other than one row rolls everything back with `editRejected` (decision 026).
+   */
+  "edits.submit": {
+    params: { readonly sessionId: string; readonly handle: string; readonly edits: readonly RowEdit[] };
+    result: SubmittedEdits;
+  };
 }
 
 export type EngineMethod = keyof EngineCalls;
@@ -342,6 +443,7 @@ export type EngineErrorCode =
   | "cancelled"
   | "introspectionFailed"
   | "invalidRequest"
+  | "editRejected"
   | "timedOut"
   | "internal";
 
@@ -350,6 +452,8 @@ export interface EngineError {
   readonly message: string;
   /** What the user can do next. */
   readonly hint: string;
+  /** For `editRejected`: the 0-based index of the statement that failed or touched the wrong rows. */
+  readonly statementIndex?: number;
 }
 
 export interface EngineErrorMessage {

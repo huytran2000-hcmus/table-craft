@@ -96,7 +96,7 @@ export function ResultTabs({ consoleId, session }: { readonly consoleId: string;
         {active === null ? (
           <OutputLog entries={session.output} />
         ) : (
-          <ResultGrid key={active.id} consoleId={consoleId} result={active} />
+          <ResultGrid key={active.id} ownerId={consoleId} result={active} host={useConsoles.getState} />
         )}
       </div>
     </div>

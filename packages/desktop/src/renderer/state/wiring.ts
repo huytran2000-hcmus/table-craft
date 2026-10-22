@@ -6,6 +6,7 @@ import {
   useDatasources,
   type DatasourcesStore,
 } from "@table-craft/desktop/renderer/state/datasources.js";
+import { tablesOf, useTables, type TablesStore } from "@table-craft/desktop/renderer/state/tables.js";
 import { useTabs, type TabsStore } from "@table-craft/desktop/renderer/state/tabs.js";
 
 export interface WiredStores {
@@ -13,15 +14,17 @@ export interface WiredStores {
   readonly consoles: ConsolesStore;
   readonly tabs: TabsStore;
   readonly catalog?: CatalogStore;
+  readonly tables?: TablesStore;
 }
 
 /**
  * What one store's change means for the others: a datasource whose engine went away leaves its
- * consoles disconnected and its catalog forgotten, and a deleted one takes its console tabs with it.
+ * consoles and tables disconnected and its catalog forgotten, and a deleted one takes its tabs with it.
  */
-export function wireStores({ datasources, consoles, tabs, catalog }: WiredStores): () => void {
+export function wireStores({ datasources, consoles, tabs, catalog, tables }: WiredStores): () => void {
   const offDetached = datasources.onDetached((id, error) => {
     consoles.getState().detach(id, error);
+    tables?.getState().detach(id, error);
     catalog?.getState().clear(id);
   });
   const offRemoved = datasources.onRemoved((ids) => {
@@ -29,6 +32,11 @@ export function wireStores({ datasources, consoles, tabs, catalog }: WiredStores
       for (const consoleId of consolesOf(consoles.getState().consoles, id)) {
         tabs.getState().close(consoleId);
         consoles.getState().close(consoleId);
+      }
+      if (tables === undefined) continue;
+      for (const tableId of tablesOf(tables.getState().tables, id)) {
+        tabs.getState().close(tableId);
+        tables.getState().close(tableId);
       }
     }
   });
@@ -64,6 +72,7 @@ export function installDatasourceSync(onFirstList: () => void): () => void {
     consoles: useConsoles,
     tabs: useTabs,
     catalog: useCatalog,
+    tables: useTables,
   });
   const offChanged = bridge().onDatasourcesChanged((list) => useDatasources.getState().applyList(list));
   const offExited = bridge().onEngineExited((exited) => useDatasources.getState().engineExited(exited));
