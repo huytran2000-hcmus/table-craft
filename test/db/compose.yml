@@ -1,5 +1,7 @@
 # The databases `bun run test:db` runs the plugin contract against, seeded from ./schema.
-# Ports sit far from the defaults so a developer's own server keeps 5432 and 3306.
+# Ports sit far from the defaults so a developer's own server keeps 5432 and 3306. Parallel
+# worktrees each set COMPOSE_PROJECT_NAME, TABLE_CRAFT_PG_PORT and TABLE_CRAFT_MYSQL_PORT so one
+# checkout's `up` never recreates the containers another checkout is testing against.
 name: table-craft-test-db
 
 services:
@@ -10,7 +12,7 @@ services:
       POSTGRES_PASSWORD: table_craft
       POSTGRES_DB: table_craft
     ports:
-      - "127.0.0.1:55432:5432"
+      - "127.0.0.1:${TABLE_CRAFT_PG_PORT:-55432}:5432"
     volumes:
       - ./schema/postgres.sql:/docker-entrypoint-initdb.d/schema.sql:ro
     tmpfs:
@@ -31,7 +33,7 @@ services:
       MYSQL_PASSWORD: table_craft
       MYSQL_DATABASE: table_craft
     ports:
-      - "127.0.0.1:53306:3306"
+      - "127.0.0.1:${TABLE_CRAFT_MYSQL_PORT:-53306}:3306"
     volumes:
       - ./schema/mysql.sql:/docker-entrypoint-initdb.d/schema.sql:ro
     tmpfs:

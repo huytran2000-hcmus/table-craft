@@ -15,7 +15,9 @@ Run from the repository root.
 - `bun install`
 - `bun run test` - Vitest, unit tests plus the plugin contract suite against SQLite
 - `bun run test:db` - the contract suite against PostgreSQL (port 55432) and MySQL (port 53306)
-  in `docker compose`, seeded from `test/db/schema/`
+  in `docker compose`, seeded from `test/db/schema/`. A second checkout (a parallel worktree) sets
+  `COMPOSE_PROJECT_NAME`, `TABLE_CRAFT_PG_PORT` and `TABLE_CRAFT_MYSQL_PORT` for every `test:db`,
+  `test:smoke:db` and `docker compose` command so it gets its own containers
 - `bun run test:smoke` - build the app and drive it under Playwright; needs a display
 - `bun run test:smoke:db` - the same against PostgreSQL, MySQL and SQLite; set
   `TABLE_CRAFT_EVIDENCE_DIR=docs/evidence/NNN` to save a window PNG per scenario for plan NNN's
