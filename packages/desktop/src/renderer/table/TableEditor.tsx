@@ -108,6 +108,7 @@ export function TableEditor({ tableId }: { readonly tableId: string }) {
   const color = datasource?.color ?? null;
   const reason = readOnlyReason(session);
   const store = useTables.getState;
+  const scope = { path: session.path, relation: session.relation };
 
   const edits: GridEdits | undefined =
     result === null
@@ -140,6 +141,8 @@ export function TableEditor({ tableId }: { readonly tableId: string }) {
           value={session.draft.where}
           placeholderText={WHERE_PLACEHOLDER}
           highlight={plugin?.highlight}
+          datasourceId={session.datasourceId}
+          scope={scope}
           invalid={refused.where}
           onChange={(where) => store().setDraft(tableId, { where })}
           onApply={() => invoke(TABLE_ACTION_IDS.reload)}
@@ -150,6 +153,8 @@ export function TableEditor({ tableId }: { readonly tableId: string }) {
           value={session.draft.orderBy}
           placeholderText={ORDER_BY_PLACEHOLDER}
           highlight={plugin?.highlight}
+          datasourceId={session.datasourceId}
+          scope={scope}
           invalid={refused.orderBy}
           onChange={(orderBy) => store().setDraft(tableId, { orderBy })}
           onApply={() => invoke(TABLE_ACTION_IDS.reload)}

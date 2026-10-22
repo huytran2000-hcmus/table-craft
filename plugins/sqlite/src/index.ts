@@ -22,6 +22,9 @@ import {
   classifyTokens,
   defaultValuesInsert,
   quoteIdentifierWith,
+  SQL_FUNCTIONS,
+  SQL_KEYWORDS,
+  sqlCompleter,
   sqlLiteral,
   sqlSplitter,
   transactionEffect,
@@ -39,14 +42,24 @@ const DIALECT: SqlDialectOptions = { blockKeywords: ["BEGIN"] };
 
 const LITERALS: SqlLiteralOptions = { backslashEscapes: false, bytes: (hex) => `X'${hex}'` };
 
+const quoteIdentifier = quoteIdentifierWith('"');
+
 const language: SqlLanguage = {
   split: sqlSplitter(DIALECT),
   classify: (sql) => classifyTokens(sql, DIALECT),
-  quoteIdentifier: quoteIdentifierWith('"'),
+  quoteIdentifier,
   literal: (value) => sqlLiteral(value, LITERALS),
   emptyInsert: defaultValuesInsert,
   // SQLite has no `DEFAULT` inside `SET`; `dflt_value` is the declared expression, valid SQL as written.
   updateDefault: (expression) => expression ?? "NULL",
+  ...sqlCompleter({
+    dialect: DIALECT,
+    identifierFolding: "none",
+    plainIdentifier: /^[A-Za-z_][A-Za-z0-9_$]*$/,
+    quoteIdentifier,
+    keywords: [...SQL_KEYWORDS, "GLOB", "PRAGMA"],
+    functions: [...SQL_FUNCTIONS, "date", "datetime", "group_concat", "ifnull", "json_extract"],
+  }),
 };
 
 const BEGIN_SQL = "BEGIN";

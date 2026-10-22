@@ -53,14 +53,16 @@ packages/plugin-api/       @table-craft/plugin-api: the plugin contract and noth
                            Types, Zod schemas, API_VERSION, capability names, and the
                            contract test suite under `testing/`. `sql/` (subpath
                            `@table-craft/plugin-api/sql`) is the shared splitter,
-                           classifier and literal helpers plugins build `language` from.
+                           classifier, literal helpers and `sqlCompleter` (scope analysis,
+                           completion, resolve) plugins build `language` from.
                            Depends only on zod
 packages/core/             @table-craft/core: plugin loader, session manager, result-set
                            store with open cursors and local sort (`results/`), the copy
                            and export extractors (`results/extract/`), the table
                            editor's row identity, generated DML and one-transaction
-                           submit (`edits/`), history, and the catalog cache
-                           (`catalog/`). Knows nothing about Electron
+                           submit (`edits/`), history, and the catalog cache and the
+                           completion catalog over it (`catalog/`). Knows nothing about
+                           Electron
 packages/desktop/          @table-craft/desktop, the Electron app
   src/main/                lifecycle, the window, menus, one engine host per datasource,
                            the datasource list and secrets, console files, the invoke
@@ -72,7 +74,8 @@ packages/desktop/          @table-craft/desktop, the Electron app
   src/renderer/            React 19, Zustand, Tailwind v4, CodeMirror 6; a pure view.
                            `actions/` is the one command registry and keymap; `shell/`,
                            `panes/`, `palette/` the DataGrip-shaped window; `console/`
-                           the SQL console: editor, result tabs, Output, transactions;
+                           the SQL console: editor, its completion source, result tabs,
+                           Output, transactions;
                            `grid/` the result grid, its toolbar and value panel;
                            `table/` the table data editor: WHERE/ORDER BY bars and the
                            preview; its pending changes are `model/editBuffer.ts`

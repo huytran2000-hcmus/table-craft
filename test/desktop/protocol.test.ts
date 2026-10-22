@@ -19,10 +19,15 @@ import {
 } from "@table-craft/core";
 import {
   CAPABILITIES,
+  COMPLETION_KINDS,
   MANIFEST_FILE,
   type Capability,
   type Column,
   type ColumnMeta,
+  type CompletionItem,
+  type CompletionResult,
+  type CompletionScope,
+  type Declaration,
   type Namespace,
   type NamespaceCatalog,
   type PluginErrorCode,
@@ -87,6 +92,14 @@ describe("engine protocol", () => {
     expectTypeOf<protocol.SubmittedEdits>().toEqualTypeOf<SubmittedEdits>();
     expectTypeOf<protocol.OrderTerm>().toEqualTypeOf<OrderTerm>();
     expectTypeOf<protocol.ColumnMeta>().toEqualTypeOf<ColumnMeta>();
+  });
+
+  it("givenCompletionTypes_whenComparedWithPluginApi_thenIdentical", () => {
+    expectTypeOf<protocol.CompletionItem>().toEqualTypeOf<CompletionItem>();
+    expectTypeOf<protocol.CompletionScope>().toEqualTypeOf<CompletionScope>();
+    expectTypeOf<protocol.CompletionResult>().toEqualTypeOf<CompletionResult>();
+    expectTypeOf<protocol.Declaration>().toEqualTypeOf<Declaration>();
+    expect(protocol.COMPLETION_KINDS).toEqual(COMPLETION_KINDS);
   });
 
   it("givenCoreErrorCodes_whenComparedWithEngineErrorCodes_thenEveryOneIsCovered", () => {

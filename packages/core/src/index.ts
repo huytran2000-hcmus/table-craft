@@ -1,4 +1,9 @@
 export { CatalogCache, type CachedCatalog } from "./catalog/cache.js";
+export {
+  COMPLETION_DESCRIBE_DEADLINE_MS,
+  completionCatalog,
+  type CompletionCatalogOptions,
+} from "./catalog/completionCatalog.js";
 export { CoreError, EditRejectedError, type CoreErrorCode } from "./errors.js";
 export {
   READ_ONLY_REASONS,

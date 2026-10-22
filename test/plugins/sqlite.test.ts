@@ -39,7 +39,11 @@ runPluginContract(sqlite, {
       statements: ["CREATE TRIGGER t AFTER INSERT ON orders BEGIN UPDATE customers SET name = name; END", "SELECT 1"],
     },
   ],
-  catalog: { path: ["main"], quoted: { name: 'odd "name"', qualified: '"main"."odd ""name"""' } },
+  catalog: {
+    path: ["main"],
+    quoted: { name: 'odd "name"', qualified: '"main"."odd ""name"""' },
+    lineItems: '"Line Items"',
+  },
 });
 
 describe("sqlite plugin", () => {

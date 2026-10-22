@@ -1,4 +1,4 @@
-import { autocompletion, closeBrackets, closeBracketsKeymap, completionKeymap } from "@codemirror/autocomplete";
+import { closeBrackets, closeBracketsKeymap, completionKeymap } from "@codemirror/autocomplete";
 import { defaultKeymap, history, historyKeymap, indentWithTab } from "@codemirror/commands";
 import { MySQL, PostgreSQL, sql, SQLite, StandardSQL, type SQLDialect } from "@codemirror/lang-sql";
 import { bracketMatching, indentOnInput } from "@codemirror/language";
@@ -21,6 +21,7 @@ import { useEffect, useRef } from "react";
 import { ACTION_IDS } from "@table-craft/desktop/renderer/actions/appActions.js";
 import { currentPlatform, formatChord } from "@table-craft/desktop/renderer/actions/chords.js";
 import { registry } from "@table-craft/desktop/renderer/actions/index.js";
+import { completion, connectedEngine } from "@table-craft/desktop/renderer/console/completionSource.js";
 import { EDITOR_THEME, FLASH_CLASS } from "@table-craft/desktop/renderer/console/editorTheme.js";
 import { useConsoleDatasource } from "@table-craft/desktop/renderer/console/useConsoleDatasource.js";
 import {
@@ -103,11 +104,14 @@ export function Editor({ consoleId }: { readonly consoleId: string }) {
   const highlight = useDatasources((state) => pluginOf(state.plugins, datasource?.pluginId ?? "")?.highlight);
   const text = useConsoles((state) => state.consoles[consoleId]?.sql ?? "");
   const flash = useConsoles((state) => state.consoles[consoleId]?.flash ?? null);
+  const jump = useConsoles((state) => state.consoles[consoleId]?.jump ?? null);
+  const dialectRef = useRef(dialectOf(highlight));
 
   useEffect(() => {
     const host = hostRef.current;
     if (host === null) return;
     const store = useConsoles.getState();
+    const datasourceId = () => useConsoles.getState().consoles[consoleId]?.datasourceId;
     const view = new EditorView({
       parent: host,
       state: EditorState.create({
@@ -124,7 +128,7 @@ export function Editor({ consoleId }: { readonly consoleId: string }) {
           indentOnInput(),
           bracketMatching(),
           closeBrackets(),
-          autocompletion({ icons: false }),
+          completion({ dialect: () => dialectRef.current, engine: connectedEngine(datasourceId) }),
           highlightSelectionMatches(),
           search({ top: false }),
           placeholder(placeholderText()),
@@ -173,6 +177,7 @@ export function Editor({ consoleId }: { readonly consoleId: string }) {
   }, [consoleId]);
 
   useEffect(() => {
+    dialectRef.current = dialectOf(highlight);
     viewRef.current?.dispatch({
       effects: languageRef.current.reconfigure(sql({ dialect: dialectOf(highlight), upperCaseKeywords: true })),
     });
@@ -194,6 +199,14 @@ export function Editor({ consoleId }: { readonly consoleId: string }) {
     }, FLASH_MS);
     return () => clearTimeout(timer);
   }, [flash]);
+
+  useEffect(() => {
+    const view = viewRef.current;
+    if (view === null || jump === null) return;
+    const anchor = Math.min(jump.from, view.state.doc.length);
+    view.dispatch({ selection: { anchor }, scrollIntoView: true });
+    view.focus();
+  }, [jump]);
 
   return <div ref={hostRef} data-testid="sql-editor" className="h-full min-h-0 overflow-hidden" />;
 }

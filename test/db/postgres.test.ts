@@ -23,5 +23,6 @@ runPluginContract(postgres, {
   catalog: {
     path: ["table_craft", "public"],
     quoted: { name: 'odd "name"', qualified: '"public"."odd ""name"""' },
+    lineItems: '"Line Items"',
   },
 });

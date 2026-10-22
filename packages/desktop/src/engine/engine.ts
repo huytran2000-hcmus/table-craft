@@ -2,6 +2,7 @@ import { open as openFile, rename, rm } from "node:fs/promises";
 import { isAbsolute } from "node:path";
 import {
   CatalogCache,
+  completionCatalog,
   CoreError,
   EditRejectedError,
   editableIdentity,
@@ -27,7 +28,12 @@ import {
   type Capability,
   type Column,
   type ColumnMeta,
+  type CompletionCatalog,
+  type CompletionRequest,
+  type CompletionResult,
+  type Declaration,
   type Relation,
+  type ResolveRequest,
   type Row,
   type Session,
   type SqlLanguage,
@@ -199,6 +205,13 @@ function rowsIn(rows: readonly Row[], ranges: readonly RowRange[]): Row[] {
 }
 const OPEN_TRANSACTION_HINT = "Commit or roll back the open transaction first.";
 const SYNCHRONIZE_HINT = "Choose Synchronize (⌥⌘Y), then open the table again.";
+const EMPTY_COMPLETION_CATALOG: CompletionCatalog = {
+  current: null,
+  namespaces: () => Promise.resolve([]),
+  relations: () => Promise.resolve([]),
+  referencing: () => Promise.resolve([]),
+};
+
 const STALE_CATALOG_REASON = "The table's columns differ from the cached catalog; synchronize to edit it.";
 const SERVER_SORT_HINT = "Sort a table editor on the server: click the column header or edit ORDER BY.";
 
@@ -317,6 +330,37 @@ export function createEngine(options: EngineOptions, now: () => number = Date.no
           ),
         ),
     );
+  }
+
+  /**
+   * Completion and navigation read the catalog cache through the introspection session, never a
+   * console's (decision 028). When that session cannot open they answer from no catalog at all.
+   */
+  async function completionCatalogOf(): Promise<CompletionCatalog> {
+    const open = await catalog().catch(() => null);
+    return open === null ? EMPTY_COMPLETION_CATALOG : completionCatalog(open.cache);
+  }
+
+  function checkedOffset(text: string, offset: number): void {
+    if (offset > text.length) {
+      throw new EngineFailure({
+        code: "invalidRequest",
+        message: `The caret offset ${offset} is past the end of the ${text.length}-character text.`,
+        hint: BUG_HINT,
+      });
+    }
+  }
+
+  async function complete(request: CompletionRequest): Promise<CompletionResult> {
+    checkedOffset(request.text, request.offset);
+    const language = sqlLanguage();
+    return language.complete(request, await completionCatalogOf());
+  }
+
+  async function resolve(request: ResolveRequest): Promise<Declaration | null> {
+    checkedOffset(request.text, request.offset);
+    const language = sqlLanguage();
+    return language.resolve(request, await completionCatalogOf());
   }
 
   /** Count Rows on a session of its own: the editor's session would close its open cursor. */
@@ -667,6 +711,9 @@ export function createEngine(options: EngineOptions, now: () => number = Date.no
       "catalog.describe": ({ path, refresh }) => introspect(({ cache }) => cache.describe(path, refresh)),
       "catalog.qualifiedName": ({ path, name }) =>
         introspect(({ session }) => session.introspector?.qualifiedName(path, name) ?? name),
+      "completion.complete": ({ text, offset, scope }) =>
+        complete(scope === undefined ? { text, offset } : { text, offset, scope }),
+      "navigation.resolve": ({ text, offset }) => resolve({ text, offset }),
       "table.query": (request) => queryTable(request),
       "table.count": ({ path, relation, where }) => countRows(path, relation, where),
       "table.condition": ({ handle, rows, columns }) => Promise.resolve(condition(handle, rows, columns)),

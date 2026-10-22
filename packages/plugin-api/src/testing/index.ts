@@ -3,6 +3,7 @@ import {
   CAPABILITIES,
   isPluginError,
   z,
+  type CompletionCatalog,
   type ConnectOptions,
   type DatasourcePlugin,
   type PluginErrorCode,
@@ -49,6 +50,8 @@ export interface ContractFixture {
     readonly path: readonly string[];
     /** An identifier that needs quoting, and what `qualifiedName(path, name)` must return for it. */
     readonly quoted: { readonly name: string; readonly qualified: string };
+    /** `LINE_ITEMS_TABLE` as the dialect writes it in a statement, which completion must insert. */
+    readonly lineItems: string;
   };
 }
 
@@ -106,6 +109,9 @@ export const TYPE_PROBE_COLUMNS = [
   "moment",
 ] as const;
 
+/** A fixture table whose name needs quoting in every dialect, for completion's quoting. */
+export const LINE_ITEMS_TABLE = "Line Items";
+
 /** The relations every fixture database carries, sorted by name as `describe` returns them. */
 export const FIXTURE_RELATIONS = [
   { name: "customer_totals", kind: "view" },
@@ -114,6 +120,7 @@ export const FIXTURE_RELATIONS = [
   { name: "edit_probe", kind: "table" },
   { name: "no_key_probe", kind: "table" },
   { name: TYPE_PROBE_TABLE, kind: "table" },
+  { name: LINE_ITEMS_TABLE, kind: "table" },
 ] as const;
 
 /** The data editor's table (decision 026): a serial key and a default for every other column. */
@@ -163,6 +170,35 @@ const READ_ONLY: ConnectOptions = { readOnly: true };
 
 async function connect(plugin: DatasourcePlugin, config: unknown, options = WRITABLE): Promise<Session> {
   return plugin.connect(plugin.connectionSchema.parse(config), options);
+}
+
+/** A completion catalog straight over `introspector`, describing each namespace once. */
+async function liveCompletionCatalog(introspector: Introspector): Promise<CompletionCatalog> {
+  const namespaces = await introspector.namespaces();
+  const described = new Map<string, Promise<NamespaceCatalog>>();
+  const describe = (path: readonly string[]): Promise<NamespaceCatalog> => {
+    const key = JSON.stringify(path);
+    const known = described.get(key) ?? introspector.describe(path);
+    described.set(key, known);
+    return known;
+  };
+  return {
+    current: namespaces.find((namespace) => namespace.current)?.path ?? null,
+    namespaces: () => Promise.resolve(namespaces),
+    relations: async (path) => (await describe(path)).relations,
+    referencing: async (path, relation) => {
+      const catalogs = await Promise.all([...described.values()]);
+      return catalogs.flatMap((catalog) =>
+        catalog.relations.flatMap((source) =>
+          source.foreignKeys
+            .filter(
+              (key) => key.target.relation === relation && JSON.stringify(key.target.path) === JSON.stringify(path),
+            )
+            .map((foreignKey) => ({ path: catalog.path, relation: source.name, foreignKey })),
+        ),
+      );
+    },
+  };
 }
 
 async function withSession(
@@ -706,6 +742,94 @@ export function runPluginContract(plugin: DatasourcePlugin, fixture: ContractFix
         });
       });
     });
+
+    describe.runIf(plugin.capabilities.includes("sql") && plugin.capabilities.includes("schemaTree"))(
+      "completion",
+      () => {
+        function completionFixture() {
+          const catalog = fixture.catalog;
+          const language = plugin.language;
+          if (catalog === undefined || language === undefined) {
+            throw new Error("A plugin that declares sql and schemaTree needs a language and fixture.catalog.");
+          }
+          return { catalog, language };
+        }
+
+        /** The completer against the live database, read the way the engine's cache reads it. */
+        async function withCompletion(
+          use: (language: SqlLanguage, catalog: CompletionCatalog) => Promise<void>,
+        ): Promise<void> {
+          const { language } = completionFixture();
+          await withSession(plugin, fixture, async (session) => {
+            const introspector = session.introspector;
+            if (introspector === undefined) throw new Error("A schemaTree session needs an introspector.");
+            await use(language, await liveCompletionCatalog(introspector));
+          });
+        }
+
+        function at(text: string, marker: string): { text: string; offset: number } {
+          return { text: text.replace(marker, ""), offset: text.indexOf(marker) };
+        }
+
+        it("givenFromClause_whenCompleting_thenOffersFixtureTablesAndViews", async () => {
+          await withCompletion(async (language, catalog) => {
+            const result = await language.complete(at("SELECT * FROM |", "|"), catalog);
+            const offered = result.items.map(({ label, kind }) => ({ label, kind }));
+            expect(offered).toEqual(
+              expect.arrayContaining([
+                { label: "orders", kind: "table" },
+                { label: "customers", kind: "table" },
+                { label: "customer_totals", kind: "view" },
+              ]),
+            );
+          });
+        });
+
+        it("givenAliasDot_whenCompleting_thenOffersAliasedColumnsWithTypes", async () => {
+          await withCompletion(async (language, catalog) => {
+            const result = await language.complete(at("SELECT o.| FROM orders o", "|"), catalog);
+            const columns = result.items.filter((item) => item.kind === "column");
+            expect(columns.map((item) => item.label)).toEqual(["id", "customer_id", "total", "placed_at"]);
+            for (const column of columns) expect(column.detail).toMatch(/\S/);
+          });
+        });
+
+        it("givenJoinAfterOrders_whenCompleting_thenCustomersJoinFirstWithOnClause", async () => {
+          await withCompletion(async (language, catalog) => {
+            const result = await language.complete(at("SELECT * FROM orders o JOIN |", "|"), catalog);
+            const first = [...result.items].sort((left, right) => right.boost - left.boost)[0];
+            expect(first).toMatchObject({ kind: "join", apply: "customers c ON c.id = o.customer_id" });
+          });
+        });
+
+        it("givenNameNeedingQuotes_whenCompleting_thenApplyIsQuotedByDialect", async () => {
+          const { catalog: expected } = completionFixture();
+          await withCompletion(async (language, catalog) => {
+            const result = await language.complete(at("SELECT * FROM Li|", "|"), catalog);
+            const item = result.items.find((candidate) => candidate.label === LINE_ITEMS_TABLE);
+            expect(item?.apply).toBe(expected.lineItems);
+          });
+        });
+
+        it("givenAliasReference_whenResolving_thenReturnsDeclarationSpan", async () => {
+          await withCompletion(async (language, catalog) => {
+            const text = "SELECT o.id FROM orders o";
+            const declaration = await language.resolve({ text, offset: text.indexOf("o.id") }, catalog);
+            const from = text.indexOf("orders o");
+            expect(declaration).toEqual({ kind: "alias", from, to: from + "orders o".length });
+          });
+        });
+
+        it("givenRelationReference_whenResolving_thenReturnsCurrentPathAndRelation", async () => {
+          const { catalog: expected } = completionFixture();
+          await withCompletion(async (language, catalog) => {
+            const text = "SELECT * FROM customers";
+            const declaration = await language.resolve({ text, offset: text.indexOf("customers") + 2 }, catalog);
+            expect(declaration).toEqual({ kind: "relation", path: expected.path, relation: "customers" });
+          });
+        });
+      },
+    );
 
     describe.runIf(plugin.capabilities.includes("cancel"))("cancel", () => {
       function sleepSql(): string {

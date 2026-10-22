@@ -5,7 +5,17 @@
   "compilerOptions": {
     "baseUrl": "../..",
     "lib": ["ES2022", "DOM", "DOM.Iterable"],
-    "jsx": "react-jsx"
+    "jsx": "react-jsx",
+    // `paths` replaces the root's map rather than merging, so the root's entries are repeated here.
+    "paths": {
+      "@table-craft/plugin-api": ["packages/plugin-api/src/index.ts"],
+      "@table-craft/plugin-api/*": ["packages/plugin-api/src/*"],
+      "@table-craft/core": ["packages/core/src/index.ts"],
+      "@table-craft/core/*": ["packages/core/src/*"],
+      "@table-craft/desktop/*": ["packages/desktop/src/*"],
+      // CodeMirror is the renderer's dependency; its tests use the same copy (vitest.config.ts).
+      "@codemirror/*": ["packages/desktop/node_modules/@codemirror/*"]
+    }
   },
   "include": ["**/*.ts"],
   "exclude": []

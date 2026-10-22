@@ -24,6 +24,7 @@ import {
   defaultKeyword,
   defaultValuesInsert,
   quoteIdentifierWith,
+  sqlCompleter,
   sqlLiteral,
   sqlSplitter,
   classifyTokens,
@@ -37,6 +38,14 @@ const LANGUAGE: SqlLanguage = {
   literal: (value) => sqlLiteral(value, { backslashEscapes: false, bytes: (hex) => `X'${hex}'` }),
   emptyInsert: defaultValuesInsert,
   updateDefault: defaultKeyword,
+  ...sqlCompleter({
+    dialect: {},
+    identifierFolding: "none",
+    plainIdentifier: /^[A-Za-z_][A-Za-z0-9_]*$/,
+    quoteIdentifier: quoteIdentifierWith('"'),
+    keywords: [],
+    functions: [],
+  }),
 };
 
 const TABLE = '"public"."orders"';

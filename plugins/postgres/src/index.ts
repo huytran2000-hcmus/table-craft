@@ -23,6 +23,9 @@ import {
   defaultKeyword,
   defaultValuesInsert,
   quoteIdentifierWith,
+  SQL_FUNCTIONS,
+  SQL_KEYWORDS,
+  sqlCompleter,
   sqlLiteral,
   sqlSplitter,
   transactionEffect,
@@ -39,13 +42,24 @@ const DIALECT: SqlDialectOptions = { dollarQuotes: true, nestedBlockComments: tr
 
 const LITERALS: SqlLiteralOptions = { backslashEscapes: false, bytes: (hex) => `'\\x${hex}'::bytea` };
 
+const quoteIdentifier = quoteIdentifierWith('"');
+
 const language: SqlLanguage = {
   split: sqlSplitter(DIALECT),
   classify: (sql) => classifyTokens(sql, DIALECT),
-  quoteIdentifier: quoteIdentifierWith('"'),
+  quoteIdentifier,
   literal: (value) => sqlLiteral(value, LITERALS),
   emptyInsert: defaultValuesInsert,
   updateDefault: defaultKeyword,
+  ...sqlCompleter({
+    dialect: DIALECT,
+    identifierFolding: "lower",
+    // An upper-case letter would fold away unquoted, so only lower case reads back as written.
+    plainIdentifier: /^[a-z_][a-z0-9_$]*$/,
+    quoteIdentifier,
+    keywords: [...SQL_KEYWORDS, "ILIKE", "LATERAL", "RETURNING"],
+    functions: [...SQL_FUNCTIONS, "array_agg", "now", "string_agg", "to_char"],
+  }),
 };
 
 const BEGIN_SQL = "BEGIN";

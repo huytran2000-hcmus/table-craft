@@ -51,6 +51,11 @@ export class CatalogCache {
     return describing;
   }
 
+  /** What the cache holds for `path`, without asking the database. */
+  cached(path: readonly string[]): CachedCatalog | undefined {
+    return this.#catalogs.get(keyOf(path));
+  }
+
   /** Every namespace described so far, without asking the database. */
   described(): readonly CachedCatalog[] {
     return [...this.#catalogs.values()];

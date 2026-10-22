@@ -447,15 +447,15 @@ describe.runIf(DATABASES_ENABLED)("SQL console live test", () => {
     "givenAutoMode_whenCreateTable_thenTreeShowsItWithoutSynchronize",
     async () => {
       const page = await launch(POSTGRES);
-      await row(page, "tables 5").waitFor({ timeout: LAUNCH_TIMEOUT_MS });
-      await expand(page, "tables 5");
+      await row(page, "tables 6").waitFor({ timeout: LAUNCH_TIMEOUT_MS });
+      await expand(page, "tables 6");
       await sqlEditor(page).click();
 
       await typeScript(page, `CREATE TABLE ${SMOKE_TABLE} (id integer PRIMARY KEY)`);
       await runAll(page);
 
       await expect.poll(() => row(page, SMOKE_TABLE).count(), { timeout: LAUNCH_TIMEOUT_MS }).toBe(1);
-      expect(await row(page, "tables 6").count()).toBe(1);
+      expect(await row(page, "tables 7").count()).toBe(1);
       await captureWindow(page, "ddl-refreshes-tree");
     },
     SCENARIO_TIMEOUT_MS,
@@ -465,8 +465,8 @@ describe.runIf(DATABASES_ENABLED)("SQL console live test", () => {
     "givenOrdersInTree_whenDraggedIntoEditor_thenQualifiedNameInsertedAtDrop",
     async () => {
       const page = await launch(POSTGRES);
-      await row(page, "tables 5").waitFor({ timeout: LAUNCH_TIMEOUT_MS });
-      await expand(page, "tables 5");
+      await row(page, "tables 6").waitFor({ timeout: LAUNCH_TIMEOUT_MS });
+      await expand(page, "tables 6");
       await typeScript(page, "SELECT * FROM ");
 
       await row(page, "orders").dragTo(editorLines(page).first(), { targetPosition: { x: 400, y: 5 } });
@@ -506,7 +506,7 @@ describe.runIf(DATABASES_ENABLED)("SQL console live test", () => {
     "givenTreeAndEditor_whenEscapeAndCollapseAllPressed_thenEachGoesToItsOwner",
     async () => {
       const page = await launch(POSTGRES);
-      await row(page, "tables 5").waitFor({ timeout: LAUNCH_TIMEOUT_MS });
+      await row(page, "tables 6").waitFor({ timeout: LAUNCH_TIMEOUT_MS });
       await row(page, "public").click();
       await page.keyboard.type("ord");
       const speedSearch = explorer(page).getByRole("status", { name: "Speed search" });

@@ -3,7 +3,7 @@ import { ACTION_IDS } from "@table-craft/desktop/renderer/actions/appActions.js"
 import type { ActionContext } from "@table-craft/desktop/renderer/actions/context.js";
 import { defineAction, type AnyAction } from "@table-craft/desktop/renderer/actions/registry.js";
 import { folderPaths } from "@table-craft/desktop/renderer/model/datasourceTree.js";
-import { revealKeys } from "@table-craft/desktop/renderer/model/explorerTree.js";
+import { columnRevealKeys, revealKeys } from "@table-craft/desktop/renderer/model/explorerTree.js";
 import { useCatalog } from "@table-craft/desktop/renderer/state/catalog.js";
 import { useDatasources, type TreeSelection } from "@table-craft/desktop/renderer/state/datasources.js";
 import { useLayout } from "@table-craft/desktop/renderer/state/layout.js";
@@ -14,6 +14,8 @@ export interface RevealArgs {
   readonly path: readonly string[];
   readonly name: string;
   readonly kind: RelationKind;
+  /** A column of the relation to select instead of the relation itself. */
+  readonly column?: string;
 }
 
 const canIntrospect = (context: ActionContext) => context.datasource?.capabilities.includes("schemaTree") === true;
@@ -47,6 +49,32 @@ function isRevealArgs(args: unknown): args is RevealArgs {
 
 async function writeClipboard(text: string): Promise<void> {
   await navigator.clipboard.writeText(text);
+}
+
+/**
+ * Opens the Database pane, expands down to `target` and selects and focuses it; without a target,
+ * selects the context's datasource. Go to Declaration lands here too (plan 009 decision 14).
+ */
+export function revealInDatabase(context: ActionContext, target: RevealArgs | null): void {
+  if (!context.toolWindows.database) useLayout.getState().toggle("database");
+  if (target !== null) {
+    const relation = { name: target.name, kind: target.kind };
+    const keys =
+      target.column === undefined
+        ? revealKeys(target.datasourceId, target.path, relation)
+        : columnRevealKeys(target.datasourceId, target.path, relation, target.column);
+    useCatalog.getState().expandAll(keys.slice(0, -1));
+    useDatasources.getState().select({
+      kind: "catalog",
+      id: target.datasourceId,
+      key: keys[keys.length - 1] ?? "",
+      path: target.path,
+      name: target.name,
+    });
+  } else if (context.datasource !== null) {
+    useDatasources.getState().select({ kind: "datasource", id: context.datasource.view.id });
+  }
+  useCatalog.getState().requestFocus();
 }
 
 export const EXPLORER_ACTIONS: readonly AnyAction[] = [
@@ -104,22 +132,6 @@ export const EXPLORER_ACTIONS: readonly AnyAction[] = [
     title: "Select in Database View",
     category: "Database",
     when: (context) => context.datasource !== null,
-    run: (context, args) => {
-      if (!context.toolWindows.database) useLayout.getState().toggle("database");
-      if (isRevealArgs(args)) {
-        const keys = revealKeys(args.datasourceId, args.path, { name: args.name, kind: args.kind });
-        useCatalog.getState().expandAll(keys.slice(0, -1));
-        useDatasources.getState().select({
-          kind: "catalog",
-          id: args.datasourceId,
-          key: keys[keys.length - 1] ?? "",
-          path: args.path,
-          name: args.name,
-        });
-      } else if (context.datasource !== null) {
-        useDatasources.getState().select({ kind: "datasource", id: context.datasource.view.id });
-      }
-      useCatalog.getState().requestFocus();
-    },
+    run: (context, args) => revealInDatabase(context, isRevealArgs(args) ? args : null),
   }),
 ];

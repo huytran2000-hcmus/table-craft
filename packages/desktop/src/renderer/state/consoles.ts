@@ -81,6 +81,8 @@ export interface ConsoleSession {
   readonly transactionOpen: boolean;
   readonly lastRun: LastRun | null;
   readonly flash: Flash | null;
+  /** Where an action asked the editor to put its caret; `seq` repeats a jump to the same place. */
+  readonly jump: Flash | null;
 }
 
 export interface OpenOptions {
@@ -100,6 +102,8 @@ export interface ConsolesState {
   readonly detach: (datasourceId: string, error: EngineError | null) => void;
   readonly setSql: (id: string, sql: string) => void;
   readonly setSelection: (id: string, selection: TextSpan) => void;
+  /** Puts the editor's caret at `span.from` and flashes `span`, as Go to Declaration lands. */
+  readonly jumpTo: (id: string, span: TextSpan) => void;
   /** Runs what `scope` picks, one statement after another, opening a session first when it has none. */
   readonly run: (id: string, scope: RunScope) => Promise<void>;
   /** Asks the engine to cancel the running statement; `run` then reports it as cancelled. */
@@ -187,6 +191,7 @@ function newConsole(datasourceId: string, name: string, sql: string, connect: bo
     transactionOpen: false,
     lastRun: null,
     flash: null,
+    jump: null,
   };
 }
 
@@ -459,6 +464,16 @@ export function createConsolesStore(dependencies: ConsolesDependencies) {
         if (current === undefined) return;
         if (current.selection.from === selection.from && current.selection.to === selection.to) return;
         patch(id, { selection });
+      },
+
+      jumpTo(id, span) {
+        if (get().consoles[id] === undefined) return;
+        flashes += 1;
+        patch(id, {
+          selection: { from: span.from, to: span.from },
+          jump: { ...span, seq: flashes },
+          flash: { ...span, seq: flashes },
+        });
       },
 
       async run(id, scope) {

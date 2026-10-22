@@ -1,0 +1,357 @@
+import type { CompletionResult, Relation } from "@table-craft/plugin-api";
+import { quoteIdentifierWith, SQL_FUNCTIONS, SQL_KEYWORDS, sqlCompleter } from "@table-craft/plugin-api/sql";
+import { describe, expect, it } from "vitest";
+import { ARCHIVE, fakeCatalog, PUBLIC, relation } from "../support/completionCatalog.js";
+
+const postgres = sqlCompleter({
+  dialect: { dollarQuotes: true },
+  identifierFolding: "lower",
+  plainIdentifier: /^[a-z_][a-z0-9_$]*$/,
+  quoteIdentifier: quoteIdentifierWith('"'),
+  keywords: SQL_KEYWORDS,
+  functions: SQL_FUNCTIONS,
+});
+
+const mysql = sqlCompleter({
+  dialect: { backslashEscapes: true, hashComments: true },
+  identifierFolding: "none",
+  plainIdentifier: /^[A-Za-z_][A-Za-z0-9_$]*$/,
+  quoteIdentifier: quoteIdentifierWith("`"),
+  keywords: SQL_KEYWORDS,
+  functions: SQL_FUNCTIONS,
+});
+
+const CARET = "|";
+const WIDE_TABLES = 500;
+const WIDE_COLUMNS = 30;
+const WIDE_BUDGET_MS = 100;
+
+/** `text` with `|` marking the caret. */
+function at(marked: string): { text: string; offset: number } {
+  const offset = marked.indexOf(CARET);
+  return { text: marked.replace(CARET, ""), offset };
+}
+
+function complete(marked: string, completer = postgres, catalog = fakeCatalog()): Promise<CompletionResult> {
+  return completer.complete(at(marked), catalog);
+}
+
+function labels(result: CompletionResult, kind?: string): string[] {
+  return result.items.filter((item) => kind === undefined || item.kind === kind).map((item) => item.label);
+}
+
+/** The items in the order an empty prefix shows them: by boost, then label. */
+function ranked(result: CompletionResult): string[] {
+  return [...result.items]
+    .sort((left, right) => right.boost - left.boost || left.label.localeCompare(right.label))
+    .map((item) => item.label);
+}
+
+describe("sqlCompleter.complete", () => {
+  it("givenFromClause_whenCompleting_thenOffersRelationsOfCurrentNamespace", async () => {
+    const result = await complete("SELECT * FROM |");
+
+    expect(labels(result, "table")).toEqual(["Line Items", "customers", "orders"]);
+    expect(labels(result, "view")).toEqual(["order_totals"]);
+    expect(labels(result, "namespace")).toEqual(["archive"]);
+    expect(result.items.find((item) => item.label === "orders")?.detail).toBe("public");
+    expect(labels(result, "keyword")).toEqual([]);
+  });
+
+  it("givenTypedPrefix_whenCompleting_thenSpanCoversTheWordBeforeTheCaret", async () => {
+    const result = await complete("SELECT * FROM ord|");
+
+    expect(result).toMatchObject({ from: 14, to: 17, validFor: "^[A-Za-z0-9_$]*$" });
+  });
+
+  it("givenAliasDot_whenCompleting_thenOffersColumnsOfAliasedRelation", async () => {
+    const result = await complete("SELECT o.| FROM orders o");
+
+    expect(labels(result)).toEqual(["id", "customer_id", "total"]);
+    expect(result.items.map((item) => item.detail)).toEqual(["integer", "integer", "numeric(12,2)"]);
+    expect(result).toMatchObject({ from: 9, to: 9 });
+  });
+
+  it("givenRelationNameDot_whenCompleting_thenOffersItsColumns", async () => {
+    const result = await complete("SELECT orders.| FROM orders");
+
+    expect(labels(result)).toEqual(["id", "customer_id", "total"]);
+  });
+
+  it("givenCteDot_whenCompleting_thenOffersCteSelectListColumns", async () => {
+    const result = await complete("WITH t AS (SELECT id, name AS label FROM customers) SELECT t.| FROM t");
+
+    expect(labels(result)).toEqual(["id", "label"]);
+  });
+
+  it("givenCteWithColumnList_whenCompleting_thenOffersListedColumns", async () => {
+    const result = await complete("WITH t (a, b) AS (SELECT id, name FROM customers) SELECT t.|");
+
+    expect(labels(result)).toEqual(["a", "b"]);
+  });
+
+  it("givenCteStar_whenCompleting_thenExpandsItsSource", async () => {
+    const result = await complete("WITH t AS (SELECT * FROM customers) SELECT | FROM t");
+
+    expect(labels(result, "column")).toEqual(["id", "name", "email"]);
+  });
+
+  it("givenDerivedTableAlias_whenCompleting_thenOffersItsColumns", async () => {
+    const result = await complete("SELECT d.| FROM (SELECT o.id, o.total AS amount FROM orders o) d");
+
+    expect(labels(result)).toEqual(["id", "amount"]);
+  });
+
+  it("givenNamespaceDot_whenCompleting_thenOffersItsRelations", async () => {
+    const catalog = fakeCatalog();
+    const result = await complete("SELECT * FROM archive.|", postgres, catalog);
+
+    expect(labels(result)).toEqual(["old_orders"]);
+    expect(catalog.asked).toContainEqual([...ARCHIVE]);
+  });
+
+  it("givenFromClause_whenCompleting_thenOffersCtes", async () => {
+    const result = await complete("WITH recent AS (SELECT 1) SELECT * FROM |");
+
+    expect(labels(result, "cte")).toEqual(["recent"]);
+  });
+
+  it("givenJoinAfterTableWithForeignKey_whenCompleting_thenJoinItemFirstWithOnClause", async () => {
+    const result = await complete("SELECT * FROM orders o JOIN |");
+
+    expect(ranked(result)[0]).toBe("customers c ON c.id = o.customer_id");
+    const join = result.items.find((item) => item.kind === "join");
+    expect(join).toMatchObject({ apply: "customers c ON c.id = o.customer_id", detail: "orders_customer_id_fkey" });
+  });
+
+  it("givenIncomingForeignKey_whenCompletingJoin_thenOffersReferencingTable", async () => {
+    const result = await complete("SELECT * FROM customers c JOIN |");
+
+    expect(labels(result, "join")).toEqual([
+      "orders o ON o.customer_id = c.id",
+      "archive.old_orders oo ON oo.customer_id = c.id",
+    ]);
+  });
+
+  it("givenJoinAliasTaken_whenCompletingJoin_thenAliasGetsADigit", async () => {
+    const result = await complete("SELECT * FROM orders c JOIN |");
+
+    expect(labels(result, "join")).toEqual(["customers c1 ON c1.id = c.customer_id"]);
+  });
+
+  it("givenUnaliasedRelation_whenCompletingJoin_thenOnUsesItsName", async () => {
+    const result = await complete("SELECT * FROM orders JOIN |");
+
+    expect(labels(result, "join")).toEqual(["customers c ON c.id = orders.customer_id"]);
+  });
+
+  it("givenTwoRelationsShareColumnName_whenCompletingSelectList_thenItemsQualifiedByAlias", async () => {
+    const result = await complete("SELECT | FROM orders o JOIN customers c ON c.id = o.customer_id");
+
+    const columns = labels(result, "column");
+    expect(columns).toEqual(expect.arrayContaining(["o.id", "c.id", "customer_id", "total", "name", "email"]));
+    expect(columns).not.toContain("id");
+    expect(result.items.find((item) => item.label === "o.id")?.apply).toBe("o.id");
+    expect(labels(result, "alias")).toEqual(["o", "c"]);
+    expect(labels(result, "function")).toContain("count");
+    expect(labels(result, "keyword")).toContain("WHERE");
+  });
+
+  it("givenWhereClause_whenCompleting_thenColumnsRankAboveKeywords", async () => {
+    const result = await complete("SELECT * FROM orders WHERE |");
+
+    expect(ranked(result).slice(0, 3)).toEqual(["customer_id", "id", "total"]);
+  });
+
+  it("givenNameNeedingQuotes_whenCompleting_thenApplyIsQuoted", async () => {
+    const result = await complete("SELECT * FROM Li|");
+
+    expect(result.items.find((item) => item.label === "Line Items")?.apply).toBe('"Line Items"');
+    expect(result.items.find((item) => item.label === "orders")?.apply).toBe("orders");
+  });
+
+  it("givenNameNeedingQuotesInMysql_whenCompleting_thenApplyUsesBackticks", async () => {
+    const result = await complete("SELECT * FROM Li|", mysql);
+
+    expect(result.items.find((item) => item.label === "Line Items")?.apply).toBe("`Line Items`");
+  });
+
+  it("givenKeywordColumnName_whenCompleting_thenApplyIsQuoted", async () => {
+    const catalog = fakeCatalog(new Map([[JSON.stringify(PUBLIC), [relation("events", [["order", "text"]])]]]));
+    const result = await complete("SELECT | FROM events", postgres, catalog);
+
+    expect(result.items.find((item) => item.label === "order")?.apply).toBe('"order"');
+  });
+
+  it("givenOpenQuote_whenCompleting_thenLabelsAreQuotedAndNotReused", async () => {
+    const result = await complete('SELECT * FROM "Li|');
+
+    expect(labels(result, "table")).toContain('"Line Items"');
+    expect(result.validFor).toBeNull();
+  });
+
+  it("givenInsertColumnList_whenCompleting_thenOffersTargetColumns", async () => {
+    const result = await complete("INSERT INTO orders (|) VALUES (1)");
+
+    expect(labels(result)).toEqual(["id", "customer_id", "total"]);
+  });
+
+  it("givenUpdateSet_whenCompleting_thenOffersTargetColumns", async () => {
+    const result = await complete("UPDATE customers SET | WHERE id = 1");
+
+    expect(labels(result, "column")).toEqual(["id", "name", "email"]);
+  });
+
+  it("givenDeleteWhere_whenCompleting_thenOffersTargetColumns", async () => {
+    const result = await complete("DELETE FROM customers WHERE |");
+
+    expect(labels(result, "column")).toEqual(["id", "name", "email"]);
+  });
+
+  it("givenCommaJoin_whenCompletingSecondRelation_thenOffersRelations", async () => {
+    const result = await complete("SELECT * FROM orders o, |");
+
+    expect(labels(result, "table")).toContain("customers");
+  });
+
+  it("givenCommaJoin_whenCompletingColumns_thenBothRelationsAreInScope", async () => {
+    const result = await complete("SELECT c.| FROM orders o, customers c");
+
+    expect(labels(result)).toEqual(["id", "name", "email"]);
+  });
+
+  it("givenSubqueryInWhere_whenCompletingOuterAlias_thenOffersOuterColumns", async () => {
+    const result = await complete("SELECT * FROM orders o WHERE EXISTS (SELECT 1 FROM customers c WHERE c.id = o.|)");
+
+    expect(labels(result)).toEqual(["id", "customer_id", "total"]);
+  });
+
+  it("givenStatementBeforeSemicolon_whenCompletingNextOne_thenIgnoresIt", async () => {
+    const result = await complete("SELECT * FROM orders o; SELECT o.|");
+
+    expect(labels(result)).toEqual([]);
+  });
+
+  it("givenCaretInString_whenCompleting_thenOffersNothing", async () => {
+    const result = await complete("SELECT * FROM orders WHERE total = 'o|'");
+
+    expect(result.items).toEqual([]);
+  });
+
+  it("givenCaretAfterRelation_whenCompleting_thenOffersKeywords", async () => {
+    const result = await complete("SELECT * FROM orders |");
+
+    expect(labels(result, "keyword")).toContain("WHERE");
+    expect(labels(result, "table")).toEqual([]);
+  });
+
+  it("givenEmptyText_whenCompleting_thenOffersKeywords", async () => {
+    const result = await complete("|");
+
+    expect(labels(result)).toContain("SELECT");
+  });
+
+  it("givenUnresolvableRelation_whenCompleting_thenIgnoresIt", async () => {
+    const result = await complete("SELECT x.| FROM nowhere x");
+
+    expect(result.items).toEqual([]);
+  });
+
+  it("givenScopeParam_whenCompletingWhereBar_thenOffersTableColumns", async () => {
+    const result = await postgres.complete(
+      { text: "cust", offset: 4, scope: { path: PUBLIC, relation: "orders" } },
+      fakeCatalog(),
+    );
+
+    expect(result).toMatchObject({ from: 0, to: 4 });
+    expect(labels(result, "column")).toEqual(["id", "customer_id", "total"]);
+  });
+
+  it("givenScopeOnQuotedRelation_whenCompletingWhereBar_thenOffersItsColumns", async () => {
+    const result = await postgres.complete(
+      { text: "", offset: 0, scope: { path: PUBLIC, relation: "Line Items" } },
+      fakeCatalog(),
+    );
+
+    expect(labels(result, "column")).toEqual(["id", "sku"]);
+  });
+
+  it("givenUpperCaseUnquotedName_whenCompletingPostgres_thenFoldsToLowerCase", async () => {
+    const result = await complete("SELECT O.| FROM ORDERS O");
+
+    expect(labels(result)).toEqual(["id", "customer_id", "total"]);
+  });
+
+  it("givenWideSchema_whenCompletingFrom_thenAnswersUnder100ms", async () => {
+    const wide: Relation[] = Array.from({ length: WIDE_TABLES }, (_, table) =>
+      relation(
+        `table_${String(table)}`,
+        Array.from({ length: WIDE_COLUMNS }, (__, index) => [`column_${String(index)}`, "integer"] as const),
+      ),
+    );
+    const catalog = fakeCatalog(new Map([[JSON.stringify(PUBLIC), wide]]));
+    await complete("SELECT * FROM |", postgres, catalog);
+
+    const started = performance.now();
+    const result = await complete("SELECT * FROM |", postgres, catalog);
+    const elapsed = performance.now() - started;
+
+    expect(labels(result, "table")).toHaveLength(WIDE_TABLES);
+    expect(elapsed).toBeLessThan(WIDE_BUDGET_MS);
+  });
+});
+
+describe("sqlCompleter.resolve", () => {
+  function resolve(marked: string, completer = postgres) {
+    return completer.resolve(at(marked), fakeCatalog());
+  }
+
+  it("givenAliasReference_whenResolving_thenReturnsDeclarationSpan", async () => {
+    const text = "SELECT o.id FROM orders o";
+    const declaration = await resolve("SELECT |o.id FROM orders o");
+
+    expect(declaration).toEqual({ kind: "alias", from: text.indexOf("orders"), to: text.length });
+  });
+
+  it("givenCteReference_whenResolving_thenReturnsCteName", async () => {
+    const declaration = await resolve("WITH recent AS (SELECT 1) SELECT * FROM rec|ent");
+
+    expect(declaration).toEqual({ kind: "cte", from: 5, to: 11 });
+  });
+
+  it("givenRelationReference_whenResolving_thenReturnsPathAndRelation", async () => {
+    const declaration = await resolve("SELECT * FROM cust|omers");
+
+    expect(declaration).toEqual({ kind: "relation", path: PUBLIC, relation: "customers" });
+  });
+
+  it("givenQualifiedRelation_whenResolving_thenReturnsItsNamespace", async () => {
+    const declaration = await resolve("SELECT * FROM archive.old_|orders");
+
+    expect(declaration).toEqual({ kind: "relation", path: ARCHIVE, relation: "old_orders" });
+  });
+
+  it("givenQuotedRelation_whenResolving_thenReturnsCatalogName", async () => {
+    const declaration = await resolve('SELECT * FROM "Line |Items"');
+
+    expect(declaration).toEqual({ kind: "relation", path: PUBLIC, relation: "Line Items" });
+  });
+
+  it("givenQualifiedColumn_whenResolving_thenReturnsColumn", async () => {
+    const declaration = await resolve("SELECT o.tot|al FROM orders o");
+
+    expect(declaration).toEqual({ kind: "column", path: PUBLIC, relation: "orders", column: "total" });
+  });
+
+  it("givenBareColumn_whenResolving_thenReturnsColumnOfInScopeRelation", async () => {
+    const declaration = await resolve("SELECT email| FROM customers");
+
+    expect(declaration).toEqual({ kind: "column", path: PUBLIC, relation: "customers", column: "email" });
+  });
+
+  it("givenUnknownName_whenResolving_thenNull", async () => {
+    expect(await resolve("SELECT * FROM nowh|ere")).toBeNull();
+    expect(await resolve("SELECT 'cust|omers'")).toBeNull();
+    expect(await resolve("SELECT * FROM orders |")).toBeNull();
+  });
+});

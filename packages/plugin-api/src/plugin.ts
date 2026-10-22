@@ -1,5 +1,12 @@
 import type { z } from "zod";
 import type { Introspector } from "./catalog.js";
+import type {
+  CompletionCatalog,
+  CompletionRequest,
+  CompletionResult,
+  Declaration,
+  ResolveRequest,
+} from "./completion.js";
 import type { WireValue } from "./values.js";
 
 /**
@@ -92,6 +99,13 @@ export interface SqlLanguage {
    * accepts it, else the catalog's `defaultExpression` (`ColumnMeta.default`), or `NULL` without one.
    */
   updateDefault(defaultExpression: string | null): string;
+  /**
+   * What fits at the caret, read from `catalog` (decision 028). Never rejects for SQL it cannot
+   * read: it offers less. `sqlCompleter` in `@table-craft/plugin-api/sql` implements it.
+   */
+  complete(request: CompletionRequest, catalog: CompletionCatalog): Promise<CompletionResult>;
+  /** Where the name at the caret was declared; null when it names nothing the scope or catalog knows. */
+  resolve(request: ResolveRequest, catalog: CompletionCatalog): Promise<Declaration | null>;
 }
 
 export const TRANSACTION_MODES = ["auto", "manual"] as const;

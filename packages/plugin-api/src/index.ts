@@ -12,6 +12,18 @@ export {
   type Routine,
   type Sequence,
 } from "./catalog.js";
+export {
+  COMPLETION_KINDS,
+  type CompletionCatalog,
+  type CompletionItem,
+  type CompletionKind,
+  type CompletionRequest,
+  type CompletionResult,
+  type CompletionScope,
+  type Declaration,
+  type IncomingForeignKey,
+  type ResolveRequest,
+} from "./completion.js";
 export { isPluginError, PLUGIN_ERROR_CODES, PluginError, type PluginErrorCode } from "./errors.js";
 export {
   CONNECTION_FIELD_GROUPS,

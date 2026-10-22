@@ -1,4 +1,8 @@
 import {
+  At,
+  BracketsRound,
+  Intersect,
+  TextT,
   ArrowBendDownRight,
   ArrowSquareOut,
   ArrowUUpLeft,
@@ -87,6 +91,10 @@ export {
   Asterisk as NotNullIcon,
   ArrowUp as SortAscendingMark,
   ArrowDown as SortDescendingMark,
+  At as AliasIcon,
+  BracketsRound as CteIcon,
+  Intersect as JoinIcon,
+  TextT as KeywordIcon,
 };
 
 /** The header's type glyph per column class (plan 007 decision 7); temporal reads as a date. */

@@ -1,0 +1,116 @@
+import type { Declaration, RelationKind } from "@table-craft/desktop/engine/protocol.js";
+import type { ActionContext } from "@table-craft/desktop/renderer/actions/context.js";
+import { revealInDatabase } from "@table-craft/desktop/renderer/actions/explorerActions.js";
+import { defineAction, type AnyAction } from "@table-craft/desktop/renderer/actions/registry.js";
+import { openTable } from "@table-craft/desktop/renderer/actions/tableCommands.js";
+import { pathKey } from "@table-craft/desktop/renderer/model/explorerTree.js";
+import { useCatalog } from "@table-craft/desktop/renderer/state/catalog.js";
+import { useConsoles } from "@table-craft/desktop/renderer/state/consoles.js";
+import { useDatasources } from "@table-craft/desktop/renderer/state/datasources.js";
+
+export const NAVIGATION_ACTION_IDS = {
+  goToDeclaration: "editor.goToDeclaration",
+  openData: "editor.openData",
+} as const;
+
+/** A relation Go to Declaration or Open Data lands on. */
+type RelationDeclaration = Extract<Declaration, { kind: "relation" | "column" }>;
+
+interface Caret {
+  readonly consoleId: string;
+  readonly datasourceId: string;
+  readonly text: string;
+  readonly offset: number;
+}
+
+function caretOf(context: ActionContext): Caret | null {
+  if (context.activeTab?.kind !== "console" || context.console === null) return null;
+  return {
+    consoleId: context.activeTab.id,
+    datasourceId: context.console.datasourceId,
+    text: context.console.sql,
+    offset: context.console.selection.from,
+  };
+}
+
+const inConsole = (context: ActionContext) => caretOf(context) !== null && context.capabilities.includes("sql");
+
+/** What the name at `offset` declares, asked of the engine; an explicit command may connect. */
+async function resolve(datasourceId: string, text: string, offset: number): Promise<Declaration | null> {
+  const client = await useDatasources.getState().connect(datasourceId);
+  return client.call("navigation.resolve", { text, offset });
+}
+
+/** The relation an alias stands for: what is declared at the alias declaration's start. */
+async function relationOf(caret: Caret, declaration: Declaration | null): Promise<RelationDeclaration | null> {
+  if (declaration === null) return null;
+  if (!("from" in declaration)) return declaration;
+  if (declaration.kind === "cte") return null;
+  const aliased = await resolve(caret.datasourceId, caret.text, declaration.from);
+  return aliased?.kind === "relation" ? aliased : null;
+}
+
+/**
+ * The relation's kind from the renderer's catalog, listing and describing its namespace first,
+ * as expanding it by hand would, so the reveal has rows to land on.
+ */
+async function relationKind(datasourceId: string, path: readonly string[], name: string): Promise<RelationKind> {
+  const catalog = useCatalog.getState();
+  await catalog.expandDatasource(datasourceId);
+  const namespaces = useCatalog.getState().catalogs[datasourceId]?.namespaces ?? [];
+  for (let length = 1; length <= path.length; length += 1) {
+    const key = pathKey(path.slice(0, length));
+    const namespace = namespaces.find((candidate) => pathKey(candidate.path) === key);
+    if (namespace !== undefined) await useCatalog.getState().expandNamespace(datasourceId, namespace);
+  }
+  const described = useCatalog.getState().catalogs[datasourceId]?.namespaceStates[pathKey(path)]?.described;
+  return described?.catalog.relations.find((relation) => relation.name === name)?.kind ?? "table";
+}
+
+export const NAVIGATION_ACTIONS: readonly AnyAction[] = [
+  defineAction({
+    id: NAVIGATION_ACTION_IDS.goToDeclaration,
+    title: "Go to Declaration",
+    category: "Navigation",
+    icon: "goTo",
+    shortcut: "Mod+B",
+    shortcutRegion: "editor",
+    tabKind: "console",
+    when: inConsole,
+    run: async (context) => {
+      const caret = caretOf(context);
+      if (caret === null) return;
+      const declaration = await resolve(caret.datasourceId, caret.text, caret.offset);
+      if (declaration === null) return;
+      if ("from" in declaration) {
+        useConsoles.getState().jumpTo(caret.consoleId, { from: declaration.from, to: declaration.to });
+        return;
+      }
+      const kind = await relationKind(caret.datasourceId, declaration.path, declaration.relation);
+      revealInDatabase(context, {
+        datasourceId: caret.datasourceId,
+        path: declaration.path,
+        name: declaration.relation,
+        kind,
+        ...(declaration.kind === "column" ? { column: declaration.column } : {}),
+      });
+    },
+  }),
+  defineAction({
+    id: NAVIGATION_ACTION_IDS.openData,
+    title: "Open Data",
+    category: "Navigation",
+    icon: "table",
+    shortcut: "F4",
+    shortcutRegion: "editor",
+    tabKind: "console",
+    when: inConsole,
+    run: async (context) => {
+      const caret = caretOf(context);
+      if (caret === null) return;
+      const target = await relationOf(caret, await resolve(caret.datasourceId, caret.text, caret.offset));
+      if (target === null) return;
+      await openTable({ datasourceId: caret.datasourceId, path: target.path, relation: target.relation });
+    },
+  }),
+];

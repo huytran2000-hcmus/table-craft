@@ -97,8 +97,27 @@ whitespace-nowrap`); a long error gives way instead.
 Below the editor, the result strip holds `Output` and then `Result 1`, `Result 2`…, each with a
 `PushPin` that fills when pinned. The Output log is `font-editor`: the time and the statement's
 first line in `text-ink-muted`, then the message: `text-ink` for results and notes, `text-warning`
-for warnings, `text-danger` for errors, with the hint muted after it. The
-completion popup draws no type icons.
+for warnings, `text-danger` for errors, with the hint muted after it.
+
+The completion popup (plan 009) is a `.cm-tooltip` in `bg-raised` with a `border-line` edge, rows in
+`font-editor` at `text-editor`, the selected row in `colors.selection`, the matched characters in
+`text-accent` without an underline, and the detail (type, namespace, foreign key) right-aligned in
+`text-ink-muted` italic. Each row starts with the Database pane's glyph for its kind at `size-icon`
+(`console/completionGlyphs.tsx`, drawn once per kind as static markup):
+
+| Kind      | Glyph (`ui/icons.ts`)          | Colour           |
+| --------- | ------------------------------ | ---------------- |
+| namespace | `SchemaIcon` (`TreeStructure`) | `text-ink-muted` |
+| table     | `TableIcon`                    | `text-accent`    |
+| view      | `ViewIcon` (`Eye`)             | `text-accent`    |
+| column    | `ColumnIcon` (`Columns`)       | `text-ink-muted` |
+| alias     | `AliasIcon` (`At`)             | `text-ink-muted` |
+| cte       | `CteIcon` (`BracketsRound`)    | `text-accent`    |
+| join      | `JoinIcon` (`Intersect`)       | `text-accent`    |
+| function  | `RoutineIcon` (`Function`)     | `text-ink-muted` |
+| keyword   | `KeywordIcon` (`TextT`)        | `text-ink-muted` |
+
+Go to Declaration on an alias flashes the declaration in `colors.statementFlash`, like a run.
 
 ## Result grid
 

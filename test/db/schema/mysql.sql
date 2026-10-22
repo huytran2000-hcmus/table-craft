@@ -68,3 +68,10 @@ INSERT INTO edit_probe (label, qty, note, doc) VALUES
   ('second', 2, 'kept', NULL);
 
 INSERT INTO no_key_probe (label) VALUES ('loose');
+
+CREATE TABLE `Line Items` (
+  id INT PRIMARY KEY,
+  sku VARCHAR(64) NOT NULL
+);
+
+INSERT INTO `Line Items` (id, sku) VALUES (1, 'SKU-1');

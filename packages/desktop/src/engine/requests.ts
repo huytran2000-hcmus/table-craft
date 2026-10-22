@@ -111,6 +111,14 @@ export const engineRequestSchema = z.discriminatedUnion("type", [
   }),
   z.strictObject({
     id: requestId,
+    type: z.literal("completion.complete"),
+    text: z.string(),
+    offset: index,
+    scope: z.strictObject({ path: namespacePath, relation }).optional(),
+  }),
+  z.strictObject({ id: requestId, type: z.literal("navigation.resolve"), text: z.string(), offset: index }),
+  z.strictObject({
+    id: requestId,
     type: z.literal("table.orderBy"),
     terms: z.array(z.strictObject({ name: z.string().min(1), direction: z.enum(["asc", "desc"]) })),
   }),

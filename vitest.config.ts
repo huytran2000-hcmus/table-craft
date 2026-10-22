@@ -5,18 +5,21 @@ const WORKSPACE_ROOT = import.meta.dirname;
 const TEST_FILES = ["test/**/*.test.ts"];
 const DB_TEST_FILES = ["test/db/**"];
 const TEST_TIMEOUT_MS = 20_000;
+const CODEMIRROR = resolve(WORKSPACE_ROOT, "packages/desktop/node_modules/@codemirror");
 
 /** One Vitest project over `test/`; the packages only carry build config. */
 export default defineConfig({
   resolve: {
-    alias: {
-      "@table-craft/plugin-api": resolve(WORKSPACE_ROOT, "packages/plugin-api/src"),
-      "@table-craft/core": resolve(WORKSPACE_ROOT, "packages/core/src"),
-      "@table-craft/desktop": resolve(WORKSPACE_ROOT, "packages/desktop/src"),
-      "@table-craft/plugin-sqlite": resolve(WORKSPACE_ROOT, "plugins/sqlite/src/index.ts"),
-      "@table-craft/plugin-postgres": resolve(WORKSPACE_ROOT, "plugins/postgres/src/index.ts"),
-      "@table-craft/plugin-mysql": resolve(WORKSPACE_ROOT, "plugins/mysql/src/index.ts"),
-    },
+    alias: [
+      { find: "@table-craft/plugin-api", replacement: resolve(WORKSPACE_ROOT, "packages/plugin-api/src") },
+      { find: "@table-craft/core", replacement: resolve(WORKSPACE_ROOT, "packages/core/src") },
+      { find: "@table-craft/desktop", replacement: resolve(WORKSPACE_ROOT, "packages/desktop/src") },
+      { find: "@table-craft/plugin-sqlite", replacement: resolve(WORKSPACE_ROOT, "plugins/sqlite/src/index.ts") },
+      { find: "@table-craft/plugin-postgres", replacement: resolve(WORKSPACE_ROOT, "plugins/postgres/src/index.ts") },
+      { find: "@table-craft/plugin-mysql", replacement: resolve(WORKSPACE_ROOT, "plugins/mysql/src/index.ts") },
+      // CodeMirror is the renderer's dependency; renderer tests build editor states with the same copy.
+      { find: /^@codemirror\/(.*)$/, replacement: `${CODEMIRROR}/$1` },
+    ],
   },
   test: {
     include: TEST_FILES,

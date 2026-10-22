@@ -64,3 +64,18 @@ INSERT INTO edit_probe (label, qty, note, doc) VALUES
   ('second', 2, 'kept', NULL);
 
 INSERT INTO no_key_probe (label) VALUES ('loose');
+
+CREATE TABLE "Line Items" (
+  id INTEGER PRIMARY KEY,
+  sku TEXT NOT NULL
+);
+
+INSERT INTO "Line Items" (id, sku) VALUES (1, 'SKU-1');
+
+-- A second schema, so completion and the Database pane meet a namespace that is not current.
+CREATE SCHEMA archive;
+
+CREATE TABLE archive.old_orders (
+  id INTEGER PRIMARY KEY,
+  customer_id INTEGER NOT NULL REFERENCES public.customers (id)
+);

@@ -299,6 +299,51 @@ export interface OrderTerm {
   readonly direction: SortDirection;
 }
 
+/** Mirrors `COMPLETION_KINDS` in plugin-api. */
+export const COMPLETION_KINDS = [
+  "namespace",
+  "table",
+  "view",
+  "column",
+  "alias",
+  "cte",
+  "join",
+  "function",
+  "keyword",
+] as const;
+
+export type CompletionKind = (typeof COMPLETION_KINDS)[number];
+
+/** Mirrors `CompletionItem` in plugin-api. */
+export interface CompletionItem {
+  readonly label: string;
+  readonly kind: CompletionKind;
+  readonly detail: string | null;
+  readonly apply: string;
+  readonly boost: number;
+}
+
+/** Mirrors `CompletionScope` in plugin-api: the table a clause body is written against. */
+export interface CompletionScope {
+  readonly path: readonly string[];
+  readonly relation: string;
+}
+
+/** Mirrors `CompletionResult` in plugin-api. */
+export interface CompletionResult {
+  readonly from: number;
+  readonly to: number;
+  readonly items: readonly CompletionItem[];
+  /** A regular expression source the editor may keep filtering with; null to ask on every keystroke. */
+  readonly validFor: string | null;
+}
+
+/** Mirrors `Declaration` in plugin-api. */
+export type Declaration =
+  | { readonly kind: "alias" | "cte"; readonly from: number; readonly to: number }
+  | { readonly kind: "relation"; readonly path: readonly string[]; readonly relation: string }
+  | { readonly kind: "column"; readonly path: readonly string[]; readonly relation: string; readonly column: string };
+
 export interface OpenedSession {
   readonly sessionId: string;
   /** The datasource's plugin, by its manifest name, for display only. */
@@ -402,6 +447,16 @@ export interface EngineCalls {
     };
     result: string;
   };
+  /**
+   * What may be typed at `offset` in `text`, read from the catalog cache and never from a console's
+   * session (decision 028). With `scope`, `text` is a clause body against that table. Needs `sql`.
+   */
+  "completion.complete": {
+    params: { readonly text: string; readonly offset: number; readonly scope?: CompletionScope };
+    result: CompletionResult;
+  };
+  /** Where the name at `offset` was declared; null when it names nothing known. Needs `sql`. */
+  "navigation.resolve": { params: { readonly text: string; readonly offset: number }; result: Declaration | null };
   /** The ORDER BY bar's text for header-click sorting, names quoted by the plugin; empty for no terms. */
   "table.orderBy": { params: { readonly terms: readonly OrderTerm[] }; result: string };
   /** The statements `edits.submit` would run, in order, without running them. */

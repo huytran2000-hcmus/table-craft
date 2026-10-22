@@ -49,7 +49,7 @@ function sqlite(): Datasource {
 const CLOSE_DEADLINE_MS = 10_000;
 /** Closing with pending changes asks first, so the hook may wait out the close deadline. */
 const HOOK_TIMEOUT_MS = CLOSE_DEADLINE_MS * 3;
-const TABLES_GROUP = "tables 5";
+const TABLES_GROUP = "tables 6";
 const VIEWS_GROUP = "views 1";
 
 /** `orders` and `edit_probe` as the fixture seeds them; ids are explicit so sequences do not matter. */

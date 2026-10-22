@@ -220,6 +220,20 @@ export function revealKeys(
   ];
 }
 
+/** The keys to expand so `column` of `relation` shows, ending with the column's own key. */
+export function columnRevealKeys(
+  datasourceId: string,
+  path: readonly string[],
+  relation: Pick<Relation, "name" | "kind">,
+  column: string,
+): readonly string[] {
+  return [
+    ...revealKeys(datasourceId, path, relation),
+    catalogKey(datasourceId, "relationGroup", path, relation.name, "columns"),
+    catalogKey(datasourceId, "column", path, relation.name, column),
+  ];
+}
+
 function isPrefix(prefix: readonly string[], path: readonly string[]): boolean {
   return prefix.length < path.length && prefix.every((part, index) => path[index] === part);
 }

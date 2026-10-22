@@ -19,7 +19,7 @@ its own MessagePort (decision 002).
 
 A plugin is a directory with `table-craft-plugin.json` and an ESM entry exporting a
 `DatasourcePlugin` (decisions 005 to 008). The contract lives in `@table-craft/plugin-api`.
-`API_VERSION` is `0.7.0`; while it is `0.x` the contract is unstable and every minor is a break.
+`API_VERSION` is `0.8.0`; while it is `0.x` the contract is unstable and every minor is a break.
 
 ### Discovery
 
@@ -294,6 +294,8 @@ handles belong to the port that created them and are released when it closes.
 | `table.count`           | `path`, `relation`, `where`                              | the row count, read on a short-lived session of its own                                                        |
 | `table.orderBy`         | `terms: { name, direction }[]`                           | the ORDER BY text in the plugin's quoting, e.g. `"qty" DESC, "label"`                                          |
 | `table.condition`       | `handle`, `rows`, `columns: { column, name }[]`          | a WHERE condition matching those rows' values, written against `name`                                          |
+| `completion.complete`   | `text`, `offset`, `scope?: { path, relation }`           | `{ from, to, items, validFor }`; see Completion and navigation                                                 |
+| `navigation.resolve`    | `text`, `offset`                                         | `Declaration` or `null`; see Completion and navigation                                                         |
 | `edits.preview`         | `handle`, `edits: RowEdit[]`                             | the statements Submit would run                                                                                |
 | `edits.submit`          | `sessionId`, `handle`, `edits: RowEdit[]`                | `{ statements, rowsAffected }`, or `editRejected` after a rollback                                             |
 
@@ -421,7 +423,7 @@ is open the keymap stands aside. Hide All Tool Windows restores what it hid when
 nothing open. Back to Editor applies only with focus in a tool window; `shortcutRegion` may name
 several regions. With focus in the SQL editor the keymap also stands aside for the chords CodeMirror
 owns, `EDITOR_CHORDS` in `renderer/console/editorKeys.ts` (`⌘Z`, `⇧⌘Z`, `⌘A`, `⌘F`, `⌘/`, `⌘D`,
-`Esc`); a unit test fails when an action that can fire in the editor takes one of them.
+`Esc`, `⌃Space`); a unit test fails when an action that can fire in the editor takes one of them.
 
 Find Action (`⇧⌘A`) and Search Everywhere (`⇧⇧`) are one palette. Search Everywhere has scope tabs,
 `All`, `Actions` and `Tables`, fed by `SearchProvider`s (`renderer/palette/providers.ts`); `Tab` moves between
@@ -441,7 +443,7 @@ the renderer on `table-craft:invoke-action`; main never decides whether an actio
 A console is a CodeMirror 6 editor (`renderer/console/Editor.tsx`) above its result tabs. The
 plugin's manifest `highlight` picks the `lang-sql` dialect (`postgresql`, `mysql`, `sqlite`, else
 standard SQL). It has line numbers, bracket matching, line comments (`⌘/`), search (`⌘F`), multiple
-cursors, undo and keyword completion; its colours and font are the editor and syntax tokens, read
+cursors, undo and completion (see Completion and navigation); its colours and font are the editor and syntax tokens, read
 as CSS variables (`renderer/console/editorTheme.ts`). The datasource colour tints the editor's
 border. The editor's accessible name is `SQL console`.
 
@@ -631,6 +633,69 @@ one filtered to the selected row. Reload, a filter or sort change, Rerun, closin
 disconnecting and quitting with pending changes ask Submit, Discard or Cancel. A connection that
 closes on its own discards pending changes with a notice. The value panel edits text and JSON
 cells; ⌘↵ writes the buffer. There is no manual transaction mode in the editor: `Tx: Auto`.
+
+## Completion and navigation
+
+Plan 009, decision 028. Completion and Go to Declaration run in the engine against the catalog
+cache; the renderer sends text and a caret and never parses SQL. `SqlLanguage` has
+`complete(request, catalog)` and `resolve(request, catalog)`; the built-ins spread
+`sqlCompleter(options)` from `@table-craft/plugin-api/sql`, which a third-party plugin may use too:
+
+| Plugin     | `identifierFolding` | `plainIdentifier`           | Quotes         | Extra keywords / functions                                    |
+| ---------- | ------------------- | --------------------------- | -------------- | ------------------------------------------------------------- |
+| PostgreSQL | `lower`             | `^[a-z_][a-z0-9_$]*$`       | `"Line Items"` | `ILIKE`, `LATERAL`, `RETURNING`; `array_agg`, `string_agg`, … |
+| MySQL      | `none`              | `^[A-Za-z_][A-Za-z0-9_$]*$` | `` `x` ``      | `STRAIGHT_JOIN`, `REPLACE`; `group_concat`, `date_format`, …  |
+| SQLite     | `none`              | `^[A-Za-z_][A-Za-z0-9_$]*$` | `"x"`          | `GLOB`, `PRAGMA`; `datetime`, `json_extract`, …               |
+
+`scopeAt` reads the statement around the caret (cut at the lexer's `;` delimiters) into the clause
+the caret is in, any `x.` qualifier before it, and the sources in scope: FROM and JOIN relations with
+their aliases, comma joins, CTEs (columns from their column list, else their select list), derived
+tables with an alias, `UPDATE t`, `INSERT INTO t (…)` and `DELETE FROM t`. A source that cannot be
+resolved is ignored. Unqualified names resolve against the namespace flagged `current`.
+
+| Caret                                                   | Offers                                                                              |
+| ------------------------------------------------------- | ----------------------------------------------------------------------------------- |
+| After FROM, JOIN, UPDATE, INTO                          | CTEs, relations of the current namespace in catalog order, namespaces               |
+| After JOIN                                              | also join items first: `customers c ON c.id = o.customer_id`                        |
+| `x.`                                                    | columns of alias, relation or CTE `x`; relations of namespace `x`                   |
+| Select list, WHERE, ON, GROUP BY, ORDER BY, HAVING, SET | in-scope columns (`o.id` when two sources share `id`), aliases, functions, keywords |
+| `INSERT INTO t (`                                       | the columns of `t`                                                                  |
+| Anywhere else                                           | keywords                                                                            |
+
+A join item follows a foreign key from or to an in-scope relation, outgoing first. Its alias is the
+initials of the relation's words (`Line Items` → `li`), suffixed with a digit when taken or a
+keyword; a target in another namespace is qualified (`archive.old_orders oo ON …`). A name is quoted
+only when it fails `plainIdentifier` or is a keyword; a prefix starting with a quote keeps the
+labels quoted. Items are `{ label, kind, detail, apply, boost }`; `detail` is a column's type or a
+relation's namespace, or the foreign key's name for a join. The engine orders them (join 50, column
+40, CTE 35, table and view 30, alias 20, namespace 10, function 0, keyword −10) and the popup keeps
+that order between equal fuzzy scores. `validFor` is `^[A-Za-z0-9_$]*$` unless the prefix is quoted.
+
+The engine answers from `CatalogCache` through `core/catalog/completionCatalog.ts`. A namespace not
+yet described is described on demand, waiting at most `COMPLETION_DESCRIBE_DEADLINE_MS = 1_500`;
+past that the answer uses what is cached and the describe still lands in the cache. Completion runs
+on the introspection session, never on a console's.
+
+The console asks while connected: `⌃Space` at once, typing after a word character, `.` or a quote
+after `COMPLETION_TYPING_DELAY_MS = 80`; an answer overtaken by a later request is dropped. A
+console whose datasource is not connected offers `lang-sql`'s keywords and starts no engine. The
+table editor's WHERE and ORDER BY bars complete with `scope: { path, relation }`: the bar's text is
+read as the body of a WHERE on that relation. While the popup is open Enter accepts and Esc closes
+it.
+
+`navigation.resolve` answers what the name under the caret declares: `{ kind: "alias" | "cte",
+from, to }` (the `orders o` span, or the CTE's name), `{ kind: "relation", path, relation }`,
+`{ kind: "column", path, relation, column }`, or `null`.
+
+| Action id                | Title             | macOS | Windows / Linux | Region         |
+| ------------------------ | ----------------- | ----- | --------------- | -------------- |
+| `editor.goToDeclaration` | Go to Declaration | `⌘B`  | `Ctrl+B`        | console editor |
+| `editor.openData`        | Open Data         | `F4`  | `F4`            | console editor |
+
+Go to Declaration on an alias or CTE moves the caret to its declaration and flashes it; on a
+relation or column it reveals the node in the Database tool window, expanding and describing the
+way there, and focuses the tree. Open Data opens the relation under the caret, through an alias,
+in a table tab. Both connect a disconnected console's datasource, being explicit commands.
 
 ## Datasources and secrets
 

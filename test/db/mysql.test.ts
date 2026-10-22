@@ -20,5 +20,9 @@ runPluginContract(mysql, {
     },
     { text: "SELECT 'it\\'s;' AS s; # a; note\nSELECT 2", statements: ["SELECT 'it\\'s;' AS s", "SELECT 2"] },
   ],
-  catalog: { path: ["table_craft"], quoted: { name: "odd `name`", qualified: "`table_craft`.`odd ``name```" } },
+  catalog: {
+    path: ["table_craft"],
+    quoted: { name: "odd `name`", qualified: "`table_craft`.`odd ``name```" },
+    lineItems: "`Line Items`",
+  },
 });

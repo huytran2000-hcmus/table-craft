@@ -2,6 +2,7 @@ import { HighlightStyle, syntaxHighlighting } from "@codemirror/language";
 import type { Extension } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import { tags } from "@lezer/highlight";
+import { COMPLETION_GLYPH_CLASS } from "@table-craft/desktop/renderer/console/completionGlyphs.js";
 
 /**
  * The SQL editor's look, every value a `--tc-*` variable `appearance/apply.ts` writes from the
@@ -17,6 +18,7 @@ const LINE_HEIGHT = "1.5";
 const GUTTER_PADDING = "0 8px 0 12px";
 const LINE_PADDING = "0 var(--tc-cell-padding)";
 const PANEL_PADDING = "4px var(--tc-cell-padding)";
+const GLYPH_GAP = "6px";
 
 /**
  * CodeMirror's base theme paints the focused band through this five-class selector; a shorter one
@@ -73,11 +75,15 @@ export const EDITOR_THEME_SPEC = {
     border: "1px solid var(--tc-border)",
     color: "var(--tc-ink)",
   },
-  ".cm-tooltip-autocomplete > ul": { fontFamily: "var(--tc-font-editor)" },
+  ".cm-tooltip-autocomplete > ul": { fontFamily: "var(--tc-font-editor)", fontSize: "var(--tc-font-editor-size)" },
+  ".cm-tooltip-autocomplete > ul > li": { display: "flex", alignItems: "center", gap: GLYPH_GAP },
   ".cm-tooltip-autocomplete > ul > li[aria-selected]": {
     backgroundColor: "var(--tc-selection)",
     color: "var(--tc-ink)",
   },
+  [`.${COMPLETION_GLYPH_CLASS}`]: { display: "inline-flex", flexShrink: "0" },
+  ".cm-completionDetail": { marginLeft: "auto", paddingLeft: "var(--tc-gap)", color: "var(--tc-ink-muted)" },
+  ".cm-completionMatchedText": { textDecoration: "none", color: "var(--tc-accent)" },
 };
 
 const HIGHLIGHT_STYLE = HighlightStyle.define([

@@ -23,6 +23,9 @@ import {
   classifyTokens,
   defaultKeyword,
   quoteIdentifierWith,
+  SQL_FUNCTIONS,
+  SQL_KEYWORDS,
+  sqlCompleter,
   sqlLiteral,
   sqlSplitter,
   transactionEffect,
@@ -44,13 +47,23 @@ const DIALECT: SqlDialectOptions = {
 
 const LITERALS: SqlLiteralOptions = { backslashEscapes: true, bytes: (hex) => `X'${hex}'` };
 
+const quoteIdentifier = quoteIdentifierWith("`");
+
 const language: SqlLanguage = {
   split: sqlSplitter(DIALECT),
   classify: (sql) => classifyTokens(sql, DIALECT),
-  quoteIdentifier: quoteIdentifierWith("`"),
+  quoteIdentifier,
   literal: (value) => sqlLiteral(value, LITERALS),
   emptyInsert: (table) => `INSERT INTO ${table} () VALUES ()`,
   updateDefault: defaultKeyword,
+  ...sqlCompleter({
+    dialect: DIALECT,
+    identifierFolding: "none",
+    plainIdentifier: /^[A-Za-z_][A-Za-z0-9_$]*$/,
+    quoteIdentifier,
+    keywords: [...SQL_KEYWORDS, "STRAIGHT_JOIN", "REPLACE"],
+    functions: [...SQL_FUNCTIONS, "concat", "date_format", "group_concat", "ifnull", "now"],
+  }),
 };
 
 /** Manual mode is autocommit off: the server opens a transaction with the next statement. */

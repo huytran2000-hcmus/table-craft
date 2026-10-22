@@ -4,8 +4,18 @@ import type { Chord } from "@table-craft/desktop/renderer/actions/chords.js";
  * The chords the SQL editor keeps while it has focus (plan 006 decision 21): the registry lets them
  * through to CodeMirror. `test/renderer/keymap.test.ts` fails when an action that can fire in the
  * editor declares one. Run, Run All and Commit (`Mod+Enter` and its siblings) stay with the registry.
+ * `Ctrl+Space` is CodeMirror's Basic Completion (plan 009 decision 17).
  */
-export const EDITOR_CHORDS: readonly Chord[] = ["Mod+Z", "Mod+Shift+Z", "Mod+A", "Mod+F", "Mod+/", "Mod+D", "Escape"];
+export const EDITOR_CHORDS: readonly Chord[] = [
+  "Mod+Z",
+  "Mod+Shift+Z",
+  "Mod+A",
+  "Mod+F",
+  "Mod+/",
+  "Mod+D",
+  "Escape",
+  "Ctrl+Space",
+];
 
 /**
  * The chords a plain text field keeps (plan 008): the table editor's cell editor and the value
