@@ -42,6 +42,10 @@ Run from the repository root.
 - `bun run test:smoke:packaged` - build the unpacked app and run `test/e2e/packaged.smoke.test.ts`
   against it on SQLite; `test:smoke:packaged:db` adds PostgreSQL and MySQL. `TABLE_CRAFT_APP_EXECUTABLE`
   points the harness at a packaged binary instead of the dev build
+- `bun run readme:media` - record the README GIFs into `docs/media/` (decision 036): builds the app,
+  reloads the demo `shop` database in the `test:db` Postgres and drives one scene per GIF. Needs
+  Docker, ffmpeg and a display; `README_MEDIA=explain,grid` re-records only those. Re-record after
+  a UI change a GIF shows
 - `node --experimental-strip-types packages/desktop/scripts/render-icon.ts` - re-render
   `build/icon.png` from `build/icon.svg` (under Node: Playwright hangs connecting to Electron under
   Bun)
@@ -132,9 +136,13 @@ test/                      Vitest suites, `givenX_whenY_thenZ`
   renderer/                renderer unit tests, typechecked with the DOM lib; no jsdom
   support/                 fixtures shared across suites (type_probe rows, seeded SQLite, configs);
                            `plans/` holds real EXPLAIN outputs, byte-exact (prettier skips it)
+  readme/                  the README media suite: the demo `shop` seeds, the screencast
+                           recorder (CDP frames to ffmpeg) and the pacing overlays; gated
+                           by `readme:media`
 .github/workflows/         ci.yml: verify, package per platform, draft release on a v* tag
 docs/design/               specification.md, design-system.md
 docs/decisions/            one numbered file per durable decision
+docs/media/                the README's GIFs, recorded by `readme:media` and nothing else
 docs/plans/                one plan per feature with its Live test section; untracked
                            except TEMPLATE.md (decision 035)
 docs/evidence/NNN/         screenshots from each plan's live test; untracked (decision 035)
@@ -181,3 +189,7 @@ or a named constant over a comment.
 - `docs/plans/` holds implementation plans. Start from `docs/plans/TEMPLATE.md`. A plan is done
   when its phases are green and its Live test section, with screenshots in `docs/evidence/NNN/`,
   is filled in. Plans and evidence stay out of git; never commit them (decision 035).
+- `README.md` is for users. `test/renderer/readme.test.ts` checks it against the code: images,
+  anchors, the shortcut table against the action registry, the settings table against the defaults,
+  the plugin capabilities, and the `bun run` scripts. Change the README with the behaviour it
+  describes, and re-record a GIF whose scene changed.

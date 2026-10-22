@@ -46,3 +46,4 @@ started, not when it is merged.
 | 033 | [The packaged app is `dist/` in asar, with the built-in plugins beside it](033-the-packaged-app-is-dist-in-asar-with-plugins-beside-it.md)                             |
 | 034 | [The window draws its own title bar, and keeps the native window controls](034-the-window-draws-its-own-title-bar-and-keeps-native-controls.md)                        |
 | 035 | [Plans and evidence stay local](035-plans-and-evidence-stay-local.md)                                                                                                  |
+| 036 | [README media is recorded by a script](036-readme-media-is-recorded-by-a-script.md)                                                                                    |
