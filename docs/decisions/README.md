@@ -26,7 +26,7 @@ started, not when it is merged.
 | 013 | [Every plugin passes one contract suite](013-every-plugin-passes-one-contract-suite.md)                                                                                |
 | 014 | [What v1 ships](014-what-v1-ships.md)                                                                                                                                  |
 | 015 | [Every command is an action](015-every-command-is-an-action.md)                                                                                                        |
-| 016 | [Plans and evidence are tracked](016-plans-and-evidence-are-tracked.md)                                                                                                |
+| 016 | [Plans and evidence are tracked](016-plans-and-evidence-are-tracked.md) (superseded by 035)                                                                            |
 | 017 | [Database values cross the wire as the database prints them](017-database-values-cross-the-wire-as-the-database-prints-them.md)                                        |
 | 018 | [The datasource comes from the environment until there is a list](018-the-datasource-comes-from-the-environment-until-there-is-a-list.md)                              |
 | 019 | [Connection forms are manifest data](019-connection-forms-are-manifest-data.md)                                                                                        |
@@ -45,3 +45,4 @@ started, not when it is merged.
 | 032 | [Settings live in main, and the renderer applies them](032-settings-live-in-main-and-the-renderer-applies-them.md)                                                     |
 | 033 | [The packaged app is `dist/` in asar, with the built-in plugins beside it](033-the-packaged-app-is-dist-in-asar-with-plugins-beside-it.md)                             |
 | 034 | [The window draws its own title bar, and keeps the native window controls](034-the-window-draws-its-own-title-bar-and-keeps-native-controls.md)                        |
+| 035 | [Plans and evidence stay local](035-plans-and-evidence-stay-local.md)                                                                                                  |

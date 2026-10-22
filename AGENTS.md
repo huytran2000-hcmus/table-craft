@@ -135,8 +135,9 @@ test/                      Vitest suites, `givenX_whenY_thenZ`
 .github/workflows/         ci.yml: verify, package per platform, draft release on a v* tag
 docs/design/               specification.md, design-system.md
 docs/decisions/            one numbered file per durable decision
-docs/plans/                one plan per feature, committed with its Live test section
-docs/evidence/NNN/         screenshots from each plan's live test (decision 016)
+docs/plans/                one plan per feature with its Live test section; untracked
+                           except TEMPLATE.md (decision 035)
+docs/evidence/NNN/         screenshots from each plan's live test; untracked (decision 035)
 ```
 
 ## Conventions
@@ -179,4 +180,4 @@ or a named constant over a comment.
   row to `docs/decisions/README.md`.
 - `docs/plans/` holds implementation plans. Start from `docs/plans/TEMPLATE.md`. A plan is done
   when its phases are green and its Live test section, with screenshots in `docs/evidence/NNN/`,
-  is filled in (decision 016).
+  is filled in. Plans and evidence stay out of git; never commit them (decision 035).

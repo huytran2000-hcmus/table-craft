@@ -1,6 +1,6 @@
 # 016: Plans and evidence are tracked
 
-Status: Accepted
+Status: Superseded by [035](035-plans-and-evidence-stay-local.md)
 
 ## Decision
 
