@@ -61,7 +61,7 @@ export interface DatasourceStoreOptions {
 
 /**
  * Each older version's upgrade to the next, keyed by the version it reads. Empty while version 1
- * is the only one; a file from a newer table-craft fails validation and is set aside.
+ * is the only one; a file from a newer TableCraft fails validation and is set aside.
  */
 const MIGRATIONS: ReadonlyMap<number, (file: Record<string, unknown>) => Record<string, unknown>> = new Map();
 

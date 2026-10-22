@@ -328,7 +328,7 @@ describe.runIf(DATABASES_ENABLED)("frameless window live test", () => {
       expect(await frameHeight(page)).toBe(0);
       expect(await contentSize(app)).toEqual(EVIDENCE_WINDOW);
       await expect.poll(() => page.getByTestId("window-title").textContent()).toBe("console [lite]");
-      await expect.poll(() => windowTitle(app)).toBe("console [lite] — table-craft");
+      await expect.poll(() => windowTitle(app)).toBe("console [lite] — TableCraft");
       for (const name of ["Run", "Search Everywhere", "Settings…"]) {
         expect(await mainToolbarButton(page, name).isVisible()).toBe(true);
       }
@@ -360,7 +360,7 @@ describe.runIf(DATABASES_ENABLED)("frameless window live test", () => {
     async () => {
       const { app, page } = await launch(POSTGRES);
 
-      await expect.poll(() => windowTitle(app)).toBe("console [pg] — table-craft");
+      await expect.poll(() => windowTitle(app)).toBe("console [pg] — TableCraft");
       expect(await page.getByTestId("window-title").textContent()).toBe("console [pg]");
       expect(await datasourceWidget(page).textContent()).toBe("pg");
       await captureWindow(page, "title");

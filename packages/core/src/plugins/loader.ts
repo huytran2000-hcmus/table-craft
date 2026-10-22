@@ -60,7 +60,7 @@ async function pluginDirectories(root: string): Promise<string[]> {
 }
 
 function incompatibleReason(apiVersion: string): string {
-  return `Built for plugin API ${apiVersion}, but this table-craft provides ${API_VERSION}. Install a compatible version of the plugin.`;
+  return `Built for plugin API ${apiVersion}, but this TableCraft provides ${API_VERSION}. Install a compatible version of the plugin.`;
 }
 
 type ManifestRead = { ok: true; manifest: PluginManifest } | { ok: false; reason: string };

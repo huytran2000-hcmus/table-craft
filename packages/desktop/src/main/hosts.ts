@@ -133,7 +133,7 @@ export function createHostRegistry<Target>(options: HostRegistryOptions<Target>)
           error: {
             code: "internal",
             message: `The test connection's engine exited with code ${String(code)} before it answered.`,
-            hint: "This is a table-craft bug; restart the app and report it.",
+            hint: "This is a TableCraft bug; restart the app and report it.",
           },
         });
       });

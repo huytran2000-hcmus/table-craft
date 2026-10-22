@@ -64,7 +64,7 @@ import type {
 import { engineRequestSchema, readRequestId } from "@table-craft/desktop/engine/requests.js";
 
 const SESSION_PREFIX = "session-";
-const BUG_HINT = "This is a table-craft bug; restart the app and report it.";
+const BUG_HINT = "This is a TableCraft bug; restart the app and report it.";
 
 export interface EngineOptions {
   readonly datasource: DatasourceConfig;

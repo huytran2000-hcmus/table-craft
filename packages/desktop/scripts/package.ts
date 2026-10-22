@@ -25,7 +25,7 @@ function hasDeveloperId(env: NodeJS.ProcessEnv): boolean {
 const passed = process.argv.slice(2);
 const platform = PLATFORM_FLAGS[process.platform];
 if (platform === undefined)
-  throw new Error(`table-craft packages on macOS, Windows and Linux only, not ${process.platform}.`);
+  throw new Error(`TableCraft packages on macOS, Windows and Linux only, not ${process.platform}.`);
 const arch = passed.some((flag) => ARCH_FLAGS.includes(flag)) ? [] : [`--${process.arch}`];
 const version = appVersion(systemGit);
 const args = [

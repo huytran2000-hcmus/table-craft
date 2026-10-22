@@ -14,7 +14,7 @@ export const SETTINGS_ACTION_IDS = {
 } as const;
 
 const ZOOM_STEP_PX = 1;
-const ABOUT_TITLE = "About table-craft";
+const ABOUT_TITLE = "About TableCraft";
 
 /** Help → About on Windows and Linux; macOS's app menu has the native panel (plan 014 decision 9). */
 async function showAbout(): Promise<void> {

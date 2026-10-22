@@ -1,6 +1,6 @@
-<p align="center"><img src="packages/desktop/build/icon.png" alt="table-craft logo" width="128"></p>
+<p align="center"><img src="packages/desktop/build/icon.png" alt="TableCraft logo" width="128"></p>
 
-# table-craft
+# TableCraft
 
 A desktop database IDE in the spirit of JetBrains DataGrip, for PostgreSQL, MySQL and SQLite.
 Connections, a database explorer, SQL consoles with schema-aware completion, a result grid, a table
@@ -33,23 +33,23 @@ are reached through datasource plugins loaded at runtime.
 Installers are published on the [Releases](https://github.com/tranphucbol/table-craft/releases)
 page; the first release is not out yet.
 
-| Platform              | File                                    |
-| :-------------------- | :-------------------------------------- |
-| macOS (Apple silicon) | `table-craft-<version>-arm64.dmg`       |
-| macOS (Intel)         | `table-craft-<version>-x64.dmg`         |
-| Windows x64           | `table-craft-<version>-x64.exe`         |
-| Linux x64             | `table-craft-<version>-x86_64.AppImage` |
+| Platform              | File                                   |
+| :-------------------- | :------------------------------------- |
+| macOS (Apple silicon) | `TableCraft-<version>-arm64.dmg`       |
+| macOS (Intel)         | `TableCraft-<version>-x64.dmg`         |
+| Windows x64           | `TableCraft-<version>-x64.exe`         |
+| Linux x64             | `TableCraft-<version>-x86_64.AppImage` |
 
 The builds are not signed with a paid certificate, so the first launch needs one extra step:
 
-- **macOS** (ad-hoc signed): opening the app shows _“table-craft” Not Opened. Apple could not verify
-  “table-craft” is free of malware that may harm your Mac or compromise your privacy._ Click
+- **macOS** (ad-hoc signed): opening the app shows _“TableCraft” Not Opened. Apple could not verify
+  “TableCraft” is free of malware that may harm your Mac or compromise your privacy._ Click
   **Done**, open **System Settings → Privacy & Security**, and click **Open Anyway** next to the
-  message about table-craft. Or clear the quarantine flag once:
-  `xattr -dr com.apple.quarantine /Applications/table-craft.app`.
+  message about TableCraft. Or clear the quarantine flag once:
+  `xattr -dr com.apple.quarantine /Applications/TableCraft.app`.
 - **Windows**: SmartScreen says _Windows protected your PC_; click **More info**, then **Run
   anyway**.
-- **Linux**: make the AppImage executable with `chmod +x table-craft-*.AppImage` and run it.
+- **Linux**: make the AppImage executable with `chmod +x TableCraft-*.AppImage` and run it.
 
 ### Build from source
 
@@ -73,7 +73,7 @@ bun run desktop:package    # an installer for this machine in packages/desktop/r
 
 ## How it works
 
-table-craft runs three kinds of process. The main process owns windows, menus and saved settings,
+TableCraft runs three kinds of process. The main process owns windows, menus and saved settings,
 and holds no database state. Each connected data source gets its own engine, an Electron utility
 process that loads the plugin and runs the queries, so a slow or crashing driver takes down one data
 source, not the app. The renderer is a pure view that talks to the engine over a `MessagePort`.
@@ -341,7 +341,7 @@ Everything is stored in one profile folder:
 | `plugins/`         | Your plugins                                                              |
 
 Passwords are never written to `datasources.json` or to logs, and there is no plaintext fallback:
-where the keychain cannot encrypt, _Forever_ is disabled. table-craft sends nothing anywhere
+where the keychain cannot encrypt, _Forever_ is disabled. TableCraft sends nothing anywhere
 except to the databases you connect to.
 
 ## Not in v1
@@ -353,7 +353,7 @@ except to the databases you connect to.
 
 ## Development
 
-table-craft is a Bun workspace written in TypeScript. The database suites need Docker; recording the
+TableCraft is a Bun workspace written in TypeScript. The database suites need Docker; recording the
 README GIFs also needs [ffmpeg](https://ffmpeg.org).
 
 ```sh

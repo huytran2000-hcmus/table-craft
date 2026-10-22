@@ -3,13 +3,13 @@ import { tabCaption, windowTitle } from "@table-craft/desktop/renderer/model/win
 
 describe("window title", () => {
   it("givenConsoleTab_whenTitled_thenTabThenAppName", () => {
-    expect(windowTitle({ title: "console" }, "pg")).toBe("console [pg] — table-craft");
+    expect(windowTitle({ title: "console" }, "pg")).toBe("console [pg] — TableCraft");
     expect(tabCaption({ title: "console" }, "pg")).toBe("console [pg]");
-    expect(windowTitle({ title: "orders" }, null)).toBe("orders — table-craft");
+    expect(windowTitle({ title: "orders" }, null)).toBe("orders — TableCraft");
   });
 
   it("givenNoTab_whenTitled_thenAppNameAlone", () => {
-    expect(windowTitle(null, "pg")).toBe("table-craft");
+    expect(windowTitle(null, "pg")).toBe("TableCraft");
     expect(tabCaption(null, null)).toBeNull();
   });
 });

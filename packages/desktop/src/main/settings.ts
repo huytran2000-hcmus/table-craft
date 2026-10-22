@@ -41,7 +41,7 @@ export interface SettingsStoreOptions {
 
 /**
  * Each older version's upgrade to the next, keyed by the version it reads. Empty while version 1
- * is the only one; a file from a newer table-craft fails the envelope and is set aside.
+ * is the only one; a file from a newer TableCraft fails the envelope and is set aside.
  */
 const MIGRATIONS: ReadonlyMap<number, (file: Record<string, unknown>) => Record<string, unknown>> = new Map();
 

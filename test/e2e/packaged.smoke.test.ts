@@ -162,8 +162,8 @@ describe.runIf(SMOKE_ENABLED && APP_EXECUTABLE !== undefined)("packaged app", ()
       const { app, page } = await launchSaved([]);
 
       expect(await app.evaluate(({ app: electron }) => electron.getVersion())).toBe(version);
-      await findAction(page, "About table-craft");
-      const about = page.getByRole("dialog").filter({ hasText: `table-craft ${version}` });
+      await findAction(page, "About TableCraft");
+      const about = page.getByRole("dialog").filter({ hasText: `TableCraft ${version}` });
       await about.waitFor({ timeout: LAUNCH_TIMEOUT_MS });
       expect(await about.textContent()).toMatch(/Electron \d+\.\d+\.\d+ · Chromium \d+/);
       await captureWindow(page, "packaged-about");

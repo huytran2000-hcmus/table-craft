@@ -18,7 +18,7 @@ import {
   type WindowState,
 } from "@table-craft/desktop/preload/bridge.js";
 
-const BUG_HINT = "This is a table-craft bug; restart the app and report it.";
+const BUG_HINT = "This is a TableCraft bug; restart the app and report it.";
 
 const secretChange = z.discriminatedUnion("action", [
   z.strictObject({ action: z.literal("keep") }),

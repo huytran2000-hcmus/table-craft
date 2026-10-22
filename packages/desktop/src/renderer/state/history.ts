@@ -70,5 +70,5 @@ export function createHistoryClient(options: HistoryClientOptions): HistoryClien
 export const history = createHistoryClient({
   bridge,
   isEphemeral: (datasourceId) => datasourceById(useDatasources.getState(), datasourceId)?.ephemeral ?? true,
-  log: (message, cause) => console.error(`table-craft: ${message}`, cause),
+  log: (message, cause) => console.error(`TableCraft: ${message}`, cause),
 });

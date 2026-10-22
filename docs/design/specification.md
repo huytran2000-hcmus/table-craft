@@ -1,4 +1,4 @@
-# table-craft specification
+# TableCraft specification
 
 A desktop database IDE modelled on JetBrains DataGrip, built with Electron, TypeScript and Bun.
 This document describes what the app does; `docs/decisions/` records why.
@@ -503,7 +503,7 @@ Linux only; Close Tab),
 Edit (role), View (Tool Windows ▸ Database, Services; Hide All Tool Windows; Show System Schemas;
 Query History…, Open Closed Console…; Find Action…; Search
 Everywhere; Toggle Developer Tools), Window (role, macOS only), Help (Find Action…; About
-table-craft on Windows and Linux only, which shows the name, version, Electron and Chromium; macOS
+TableCraft on Windows and Linux only, which shows the name, version, Electron and Chromium; macOS
 has the standard About panel with the same version). An item shows its
 action's accelerator with `registerAccelerator: false` and, when clicked, sends the action id to
 the renderer on `table-craft:invoke-action`; main never decides whether an action is enabled.
@@ -535,7 +535,7 @@ Every button is an action button (`ui/ActionButton.tsx`) that invokes its action
 where it was (`mousedown` is prevented), so Run from the toolbar runs the statement at the caret.
 The console toolbar keeps its own Run, Cancel, Commit and Rollback; it is named "Console toolbar".
 `document.title` is `windowTitle(tab, datasource)` (`model/windowTitle.ts`), `console [pg] —
-table-craft` or `table-craft`, which Electron mirrors to the window's title for the Dock, the
+TableCraft` or `TableCraft`, which Electron mirrors to the window's title for the Dock, the
 taskbar and the window switcher.
 
 Main builds the window chrome in one pure function, `windowChrome({platform, theme, density,
@@ -1259,7 +1259,9 @@ maps or `node_modules`: Vite inlines every runtime dependency, so `@table-craft/
 a development run (under `dist/`) and a packaged one.
 
 Targets: a DMG per macOS architecture (arm64, x64), NSIS for Windows x64, AppImage for Linux x64,
-each named `table-craft-<version>-<arch>.<ext>` in `packages/desktop/release/`.
+each named `TableCraft-<version>-<arch>.<ext>` in `packages/desktop/release/`. The product is
+TableCraft; the profile folder, the Linux executable, the app id, the packages and the IPC
+channels keep `table-craft` (decision 037).
 `bun run desktop:package` builds the host's platform and architecture (`--x64` builds an Intel DMG
 on Apple silicon); `bun run desktop:package:dir` builds only the unpacked app. Both go through
 `scripts/package.ts`, which never publishes.

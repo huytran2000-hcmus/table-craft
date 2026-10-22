@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { appPaths } from "@table-craft/desktop/main/paths.js";
 
 const REPOSITORY_DIST = join("/repo", "packages", "desktop", "dist");
-const RESOURCES = join("/Applications", "table-craft.app", "Contents", "Resources");
+const RESOURCES = join("/Applications", "TableCraft.app", "Contents", "Resources");
 const ASAR_DIST = join(RESOURCES, "app.asar", "dist");
 
 describe("app paths", () => {

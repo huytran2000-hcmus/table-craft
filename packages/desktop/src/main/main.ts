@@ -48,7 +48,9 @@ import {
   type WindowState,
 } from "@table-craft/desktop/preload/bridge.js";
 
-const APP_NAME = "table-craft";
+const APP_NAME = "TableCraft";
+/** The profile folder keeps the name it had before the product was TableCraft (decision 037). */
+const USER_DATA_DIRECTORY = "table-craft";
 const WINDOW_WIDTH = 1200;
 const WINDOW_HEIGHT = 800;
 const USER_PLUGINS_DIR = "plugins";
@@ -73,7 +75,7 @@ const MAC_PLATFORM = "darwin";
 // Electron reads the name from the package.json beside the entry, and `dist/main` has none; without
 // this, userData and so the user plugin root would be `Electron`.
 app.setName(APP_NAME);
-app.setPath(USER_DATA, process.env[USER_DATA_ENV] || join(app.getPath(APP_DATA), APP_NAME));
+app.setPath(USER_DATA, process.env[USER_DATA_ENV] || join(app.getPath(APP_DATA), USER_DATA_DIRECTORY));
 
 const ephemeral = datasourceFromEnvironment(process.env);
 
@@ -257,7 +259,7 @@ void app.whenReady().then(async () => {
   await mkdir(directory, { recursive: true });
   const history = openQueryHistory(join(directory, HISTORY_FILE));
   if (history.recoveredFrom !== null) {
-    console.error(`table-craft: ${HISTORY_FILE} could not be read; it was moved to ${history.recoveredFrom}`);
+    console.error(`TableCraft: ${HISTORY_FILE} could not be read; it was moved to ${history.recoveredFrom}`);
   }
   app.on("will-quit", () => history.close());
   // safeStorage answers only once the app is ready.
@@ -281,7 +283,7 @@ void app.whenReady().then(async () => {
       broadcast(CHANNELS.settingsChanged, changed);
     },
   });
-  if (settings.snapshot().warning !== null) console.error(`table-craft: ${String(settings.snapshot().warning)}`);
+  if (settings.snapshot().warning !== null) console.error(`TableCraft: ${String(settings.snapshot().warning)}`);
   nativeTheme.on("updated", () => {
     if (settings.snapshot().settings.appearance.theme === "system") applyWindowAppearance(settings);
   });
@@ -315,7 +317,7 @@ void app.whenReady().then(async () => {
       relaunchRequested = true;
       app.quit();
     },
-    log: (message, cause) => console.error(`table-craft: ${message}`, cause),
+    log: (message, cause) => console.error(`TableCraft: ${message}`, cause),
   });
   installApplicationMenu(() => BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0] ?? null);
   createWindow(settings);

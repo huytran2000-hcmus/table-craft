@@ -1,7 +1,8 @@
 # table-craft - Agent Guidelines
 
-`table-craft` is a desktop database IDE in the spirit of JetBrains DataGrip: connections, a
-database explorer, SQL consoles, a result grid and a table data editor. It is a Bun workspace
+TableCraft (this repository, `table-craft`) is a desktop database IDE in the spirit of JetBrains
+DataGrip: connections, a database explorer, SQL consoles, a result grid and a table data editor.
+Users read "TableCraft"; identifiers keep `table-craft` (decision 037). It is a Bun workspace
 written in TypeScript, shipped as an Electron app. Databases are reached through datasource
 plugins loaded at runtime; PostgreSQL, MySQL and SQLite ship as built-in plugins. Read
 `docs/design/specification.md` for the v1 scope and `docs/decisions/` before changing the process

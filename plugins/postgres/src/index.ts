@@ -106,7 +106,7 @@ const CONNECT_TIMEOUT_MS = 10_000;
 const FETCH_ROWS = 500;
 /** SQLSTATE `query_canceled`, raised by `pg_cancel_backend`. */
 const QUERY_CANCELED = "57014";
-const APPLICATION_NAME = "table-craft";
+const APPLICATION_NAME = "TableCraft";
 
 const SSL_MODES = ["disable", "require", "verify-full"] as const;
 

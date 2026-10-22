@@ -51,7 +51,7 @@ const SETTINGS_ACCELERATOR = "CmdOrCtrl+,";
 export const APPLICATION_MENU: readonly MenuEntry[] = [
   {
     kind: "submenu",
-    label: "table-craft",
+    label: "TableCraft",
     only: "mac",
     items: [
       { kind: "role", role: "about" },
@@ -134,7 +134,7 @@ export const APPLICATION_MENU: readonly MenuEntry[] = [
     items: [
       { kind: "action", label: "Find Action…", actionId: "palette.findAction" },
       { kind: "separator", only: "notMac" },
-      { kind: "action", label: "About table-craft", actionId: "app.about", only: "notMac" },
+      { kind: "action", label: "About TableCraft", actionId: "app.about", only: "notMac" },
     ],
   },
 ];

@@ -64,7 +64,7 @@ export function createSettingsStore(options: SettingsStoreOptions) {
         set({ notice: `Could not ${what}: ${failure}` });
       } catch (cause) {
         options.log(`could not ${what}`, cause);
-        set({ notice: `Could not ${what}. Restart table-craft and try again.` });
+        set({ notice: `Could not ${what}. Restart TableCraft and try again.` });
       }
       return false;
     }
@@ -120,7 +120,7 @@ export type SettingsStore = ReturnType<typeof createSettingsStore>;
 
 export const useSettings = createSettingsStore({
   bridge,
-  log: (message, cause) => console.error(`table-craft: ${message}`, cause),
+  log: (message, cause) => console.error(`TableCraft: ${message}`, cause),
 });
 
 /** The theme the settings choose, made concrete for the system appearance and the user themes. */

@@ -79,7 +79,7 @@ export const WINDOW_ACTIONS: readonly AnyAction[] = [
     id: WINDOW_ACTION_IDS.relaunch,
     title: "Restart Now",
     category: "App",
-    run: async () => reportFailure("Could not restart table-craft", await bridge().relaunch()),
+    run: async () => reportFailure("Could not restart TableCraft", await bridge().relaunch()),
   }),
   defineAction<SwitchToArgs | undefined>({
     id: WINDOW_ACTION_IDS.switchTo,

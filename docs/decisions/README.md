@@ -47,3 +47,4 @@ started, not when it is merged.
 | 034 | [The window draws its own title bar, and keeps the native window controls](034-the-window-draws-its-own-title-bar-and-keeps-native-controls.md)                        |
 | 035 | [Plans and evidence stay local](035-plans-and-evidence-stay-local.md)                                                                                                  |
 | 036 | [README media is recorded by a script](036-readme-media-is-recorded-by-a-script.md)                                                                                    |
+| 037 | [The product is named TableCraft](037-the-product-is-named-tablecraft.md)                                                                                              |

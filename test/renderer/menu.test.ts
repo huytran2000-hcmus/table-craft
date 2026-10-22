@@ -49,7 +49,7 @@ describe("application menu", () => {
     const help = menuFor(false).find((entry) => entry.kind === "submenu" && entry.label === "Help");
     const macHelp = menuFor(true).find((entry) => entry.kind === "submenu" && entry.label === "Help");
 
-    expect(help?.kind === "submenu" ? labelsOf(help.items) : []).toEqual(["Find Action…", "-", "About table-craft"]);
+    expect(help?.kind === "submenu" ? labelsOf(help.items) : []).toEqual(["Find Action…", "-", "About TableCraft"]);
     expect(macHelp?.kind === "submenu" ? labelsOf(macHelp.items) : []).toEqual(["Find Action…"]);
   });
 

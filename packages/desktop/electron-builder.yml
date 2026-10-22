@@ -1,5 +1,5 @@
 appId: dev.table-craft.desktop
-productName: table-craft
+productName: TableCraft
 
 directories:
   output: release
@@ -43,5 +43,6 @@ win:
 linux:
   target: AppImage
   category: Development
-  # Otherwise the binary is named after the package, `@table-craft/desktop`.
+  # Otherwise the binary is named after the package, `@table-craft/desktop`; Linux binaries are
+  # lower case, so it is not `TableCraft` (decision 037).
   executableName: table-craft

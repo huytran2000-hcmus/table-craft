@@ -6,8 +6,10 @@
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-/** `productName` and `linux.executableName` in `electron-builder.yml`. */
-export const PRODUCT_NAME = "table-craft";
+/** `productName` in `electron-builder.yml`. */
+export const PRODUCT_NAME = "TableCraft";
+/** `linux.executableName` in `electron-builder.yml`. */
+export const LINUX_EXECUTABLE_NAME = "table-craft";
 export const RELEASE_DIRECTORY = join(import.meta.dirname, "..", "release");
 
 /** electron-builder names the unpacked directory by platform, and by architecture unless it is x64. */
@@ -24,9 +26,13 @@ export function packagedExecutable(
     case "win32":
       return join(releaseDirectory, arch === "x64" ? "win-unpacked" : `win-${arch}-unpacked`, `${PRODUCT_NAME}.exe`);
     case "linux":
-      return join(releaseDirectory, arch === "x64" ? "linux-unpacked" : `linux-${arch}-unpacked`, PRODUCT_NAME);
+      return join(
+        releaseDirectory,
+        arch === "x64" ? "linux-unpacked" : `linux-${arch}-unpacked`,
+        LINUX_EXECUTABLE_NAME,
+      );
     default:
-      throw new Error(`table-craft packages for macOS, Windows and Linux only, not ${platform}.`);
+      throw new Error(`TableCraft packages for macOS, Windows and Linux only, not ${platform}.`);
   }
 }
 
