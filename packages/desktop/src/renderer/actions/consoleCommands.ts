@@ -2,6 +2,7 @@ import { bridge } from "@table-craft/desktop/renderer/bridge.js";
 import {
   autosave,
   bridgeConsoleFiles,
+  closedConsoleNames,
   firstFreeName,
   type ConsoleFileAccess,
 } from "@table-craft/desktop/renderer/state/consoleFiles.js";
@@ -37,16 +38,40 @@ export function openConsole(datasourceId: string, sql?: string): Promise<void> {
   const previous = allocating.get(datasourceId) ?? Promise.resolve();
   const opened = previous.then(async () => {
     const saved = persists(datasourceId) ? await files.list(datasourceId).catch(() => []) : [];
-    const open = consolesOf(useConsoles.getState().consoles, datasourceId).map(
-      (id) => useConsoles.getState().consoles[id]?.name ?? "",
-    );
-    const name = firstFreeName([...saved, ...open]);
+    const name = firstFreeName([...saved, ...openNames(datasourceId)]);
     const tab = newTab(name);
     useTabs.getState().open(tab);
     void useConsoles.getState().open(tab.id, datasourceId, { name, sql });
   });
   allocating.set(datasourceId, opened);
   return opened;
+}
+
+function openNames(datasourceId: string): readonly string[] {
+  const { consoles } = useConsoles.getState();
+  return consolesOf(consoles, datasourceId).map((id) => consoles[id]?.name ?? "");
+}
+
+/** The datasource's saved consoles no tab has open; pending writes land first, so one just closed is listed. */
+export async function closedConsoles(datasourceId: string): Promise<readonly string[]> {
+  await autosave.flush();
+  return closedConsoleNames(await files.list(datasourceId), openNames(datasourceId));
+}
+
+export function readConsole(datasourceId: string, name: string): Promise<string> {
+  return files.read(datasourceId, name).then((text) => text ?? "");
+}
+
+export function deleteConsoleFile(datasourceId: string, name: string): Promise<void> {
+  return files.remove(datasourceId, name);
+}
+
+/** Opens a saved console as a tab under its own name, with its text (plan 011 decision 14). */
+export async function reopenConsole(datasourceId: string, name: string): Promise<void> {
+  const sql = await readConsole(datasourceId, name);
+  const tab = newTab(name);
+  useTabs.getState().open(tab);
+  void useConsoles.getState().open(tab.id, datasourceId, { name, sql });
 }
 
 /**

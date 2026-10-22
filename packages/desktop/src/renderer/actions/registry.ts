@@ -47,7 +47,9 @@ export type ActionIcon =
   | "table"
   | "ddl"
   | "quickDoc"
-  | "generate";
+  | "generate"
+  | "history"
+  | "reopen";
 
 export interface Action<A = void> {
   readonly id: string;

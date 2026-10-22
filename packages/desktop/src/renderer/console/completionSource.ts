@@ -85,7 +85,9 @@ export function engineCompletionSource(target: CompletionTarget): CompletionSour
     } catch {
       return request === latest && !context.aborted ? keywords(context) : null;
     }
-    if (request !== latest || context.aborted) return null;
+    // CodeMirror closes the popup on blur only if it is already open, so an answer arriving after
+    // the editor lost focus (a click on Run, a dialog) would open it over whatever took focus.
+    if (request !== latest || context.aborted || context.view?.hasFocus === false) return null;
     return toEditorResult(result);
   };
 }

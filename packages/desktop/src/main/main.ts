@@ -14,6 +14,7 @@ import {
   type UtilityProcess,
   type WebContents,
 } from "electron";
+import { openQueryHistory } from "@table-craft/core";
 import { createCloseGuard } from "@table-craft/desktop/main/closeGuard.js";
 import { createConsoleFiles, type DirectoryFileSystem } from "@table-craft/desktop/main/consoleFiles.js";
 import { datasourceFromEnvironment } from "@table-craft/desktop/main/datasource.js";
@@ -40,6 +41,8 @@ const HOST_STDIO = "inherit";
 const UTF8 = "utf8";
 const MISSING_FILE = "ENOENT";
 const CIPHER_ENCODING = "base64";
+/** Decision 010's place for query history (decision 030). */
+const HISTORY_FILE = "history.sqlite";
 
 // Electron reads the name from the package.json beside the entry, and `dist/main` has none; without
 // this, userData and so the user plugin root would be `Electron`.
@@ -146,6 +149,12 @@ async function chooseFile(contents: WebContents, title: string): Promise<string 
 void app.whenReady().then(async () => {
   const directory = app.getPath(USER_DATA);
   const consoles = createConsoleFiles({ directory, files });
+  await mkdir(directory, { recursive: true });
+  const history = openQueryHistory(join(directory, HISTORY_FILE));
+  if (history.recoveredFrom !== null) {
+    console.error(`table-craft: ${HISTORY_FILE} could not be read; it was moved to ${history.recoveredFrom}`);
+  }
+  app.on("will-quit", () => history.close());
   // safeStorage answers only once the app is ready.
   const service = await createDatasourceService<WebContents>({
     store: createDatasourceStore({ directory, files }),
@@ -155,11 +164,13 @@ void app.whenReady().then(async () => {
     ephemeral,
     newId: randomUUID,
     consoles,
+    history,
     onChanged: (list) => broadcast(CHANNELS.datasourcesChanged, list),
   });
   registerIpc<WebContents>(ipcMain, {
     service,
     consoles,
+    history,
     chooseFile,
     saveFile,
     answerClose(sender, proceed) {

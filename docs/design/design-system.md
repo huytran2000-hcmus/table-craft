@@ -200,6 +200,43 @@ preview is `h-60` on `bg-canvas`; Open in Console is the primary button.
 | `density.popoverHeightPx`      | `--tc-popover-height`  | `max-h-popover-height` | 360 px             | Quick Documentation's maximum height |
 | `density.generatorWidthPx`     | `--tc-generator-width` | `w-generator`          | 640 px             | The SQL Generator dialog             |
 
+## Query history and Services
+
+Plan 011. An outcome is drawn in one of two sizes from `ui/Outcome.tsx`, on the shell's colours:
+
+| Outcome   | `OutcomeDot` (history list, 8 px `rounded-full`) | `OutcomeGlyph` (Services, `size-icon`)        |
+| --------- | ------------------------------------------------ | --------------------------------------------- |
+| running   |                                                  | `SpinnerIcon`, spinning, `text-accent`        |
+| success   | `bg-success`                                     | `SuccessIcon` (`CheckCircle`), `text-success` |
+| error     | `bg-danger`                                      | `ErrorIcon` (`XCircle`), `text-danger`        |
+| cancelled | `bg-warning`                                     | `CancelledIcon` (`Prohibit`), `text-warning`  |
+
+`ui/ListPicker.tsx` draws Query History and Open Closed Console as a modal like the others, wider:
+the title, a search field, a `listbox` of `h-row` options on `bg-canvas` in a `border-line` frame
+(the selected one `bg-selection`, the rest `hover:bg-raised`), the preview, then the buttons right
+aligned with the primary last before Close and a destructive one (`Clear History…`, `Delete…`) in
+the danger style. A history row reads the outcome dot, the first line in `font-editor text-editor`,
+then `×3`, rows, duration and time in `text-ink-muted tabular-nums`; the preview is the read-only
+`ui/SqlView.tsx`, `h-picker-list`, with an error message above it in `text-danger`. A closed
+console's row is `ConsoleIcon` in `text-ink-muted` and its name. The actions' icons are
+`ClockCounterClockwise` (Query History) and `FolderOpen` (Open Closed Console).
+
+| Token (`appearance/tokens.ts`) | CSS variable              | Tailwind        | Dark / comfortable | Used by                                       |
+| ------------------------------ | ------------------------- | --------------- | ------------------ | --------------------------------------------- |
+| `density.pickerWidthPx`        | `--tc-picker-width`       | `w-picker`      | 720 px             | Query History and Open Closed Console dialogs |
+| `density.pickerListHeightPx`   | `--tc-picker-list-height` | `h-picker-list` | 220 px             | The picker's list and its preview             |
+
+The Services tree reuses the Database tool window's rows (`h-row`, 16 px indent per level, a caret
+for expandable rows, `bg-selection` selected, `hover:bg-raised`). A datasource row is `DatabaseIcon`
+in `text-accent` (`text-danger` failed), the name and its connection state muted. A session row is
+the `Terminal` or `Table` glyph in `text-ink-muted`, a spinning `SpinnerIcon` in `text-accent`
+while running, the tab's title, its state
+(`text-accent` running, `text-danger` failed, else `text-ink-muted`) and the last duration right
+aligned. An execution row is its `OutcomeGlyph`, the label in `font-editor text-editor` with the
+error message as its tooltip, then rows, duration (elapsed while running) and start time right
+aligned in `text-ink-muted tabular-nums`. The session's context menu is the tab context menu's
+`bg-raised` panel.
+
 ## Datasource colours
 
 Plan 004. A datasource stores its colour by name (decision 011); the theme gives the value. The

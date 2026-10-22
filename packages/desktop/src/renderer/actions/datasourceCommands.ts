@@ -4,6 +4,8 @@ import { useConsoles } from "@table-craft/desktop/renderer/state/consoles.js";
 import { useDatasources } from "@table-craft/desktop/renderer/state/datasources.js";
 import { useModal } from "@table-craft/desktop/renderer/state/modal.js";
 
+const HISTORY_DELETED = " Its query history is deleted too.";
+
 function plural(count: number, noun: string): string {
   return `${String(count)} ${noun}${count === 1 ? "" : "s"}`;
 }
@@ -27,7 +29,7 @@ export async function deleteDatasource(view: DatasourceView): Promise<void> {
   const confirmed = await useModal.getState().ask({
     kind: "confirm",
     title: "Delete Data Source",
-    message: `Delete "${view.name}"?${view.storedSecrets.length === 0 ? "" : " Its saved password is removed too."}${closing}${files}`,
+    message: `Delete "${view.name}"?${view.storedSecrets.length === 0 ? "" : " Its saved password is removed too."}${closing}${files}${HISTORY_DELETED}`,
     confirm: "Delete",
     destructive: true,
   });

@@ -54,6 +54,8 @@ export function appearanceVariables(appearance: Appearance): Readonly<Record<str
     "--tc-popover-width": `${density.popoverWidthPx}px`,
     "--tc-popover-height": `${density.popoverHeightPx}px`,
     "--tc-generator-width": `${density.generatorWidthPx}px`,
+    "--tc-picker-width": `${density.pickerWidthPx}px`,
+    "--tc-picker-list-height": `${density.pickerListHeightPx}px`,
   };
 }
 

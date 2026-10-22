@@ -7,7 +7,14 @@ import type {
 } from "@table-craft/desktop/engine/protocol.js";
 import { EngineRequestError, type EngineClient } from "@table-craft/desktop/renderer/engine/client.js";
 import { selectCell } from "@table-craft/desktop/renderer/model/gridSelection.js";
-import { createTablesStore, pendingOf, refusedBars } from "@table-craft/desktop/renderer/state/tables.js";
+import { createExecutionsStore } from "@table-craft/desktop/renderer/state/executions.js";
+import {
+  createTablesStore,
+  pendingOf,
+  refusedBars,
+  submittedScript,
+} from "@table-craft/desktop/renderer/state/tables.js";
+import type { HistoryEntry } from "@table-craft/desktop/preload/bridge.js";
 
 const TARGET = { datasourceId: "pg", path: ["public"], relation: "edit_probe" };
 const IDENTITY: EditableIdentity = { identity: ["id"] };
@@ -79,7 +86,13 @@ function tableEngine(options: EngineOptions = {}) {
             }),
           );
         }
-        return Promise.resolve({ statements: ["UPDATE …"], rowsAffected: 1 });
+        return Promise.resolve({
+          statements: [
+            `UPDATE "public"."edit_probe" SET "label" = 'renamed' WHERE "id" = 1`,
+            `DELETE FROM "public"."edit_probe" WHERE "id" = 2`,
+          ],
+          rowsAffected: 2,
+        });
       case "table.count":
         return Promise.resolve(12_345);
       default:
@@ -91,7 +104,16 @@ function tableEngine(options: EngineOptions = {}) {
 
 async function openedTable(options: EngineOptions = {}) {
   const engine = tableEngine(options);
-  const store = createTablesStore({ connect: () => Promise.resolve(engine.client) });
+  const executions = createExecutionsStore();
+  const recorded: HistoryEntry[] = [];
+  let now = 0;
+  const store = createTablesStore({
+    connect: () => Promise.resolve(engine.client),
+    now: () => (now += 7),
+    clock: () => 1_000,
+    executions: executions.getState(),
+    record: (entry) => recorded.push(entry),
+  });
   await store.getState().open("t1", TARGET);
   const session = () => {
     const found = store.getState().tables.t1;
@@ -99,7 +121,8 @@ async function openedTable(options: EngineOptions = {}) {
     return found;
   };
   const calls = (type: string) => engine.call.mock.calls.filter(([name]) => name === type).map(([, params]) => params);
-  return { store, session, calls };
+  const executionsOf = () => executions.getState().byTab.t1 ?? [];
+  return { store, session, calls, recorded, executionsOf };
 }
 
 describe("tables store", () => {
@@ -152,7 +175,7 @@ describe("tables store", () => {
     ]);
     expect(calls("table.query")).toHaveLength(2);
     expect(pendingOf(session())).toBe(0);
-    expect(session().notice).toBe("Submitted 1 statement");
+    expect(session().notice).toBe("Submitted 2 statements");
   });
 
   it("givenUnchangedEdit_whenCommitted_thenNothingPending", async () => {
@@ -216,5 +239,84 @@ describe("tables store", () => {
 
     expect(calls("table.count")).toEqual([{ path: ["public"], relation: "edit_probe", where: "" }]);
     expect(session().count).toBe(12_345);
+  });
+
+  it("givenTableSubmit_whenRecorded_thenOneEntryWithTheScript", async () => {
+    const { store, recorded, executionsOf } = await openedTable();
+    store.getState().beginEdit("t1", { row: 0, column: 1 });
+    store.getState().changeEdit("t1", "renamed");
+    store.getState().commitEdit("t1");
+
+    await store.getState().submit("t1");
+
+    const script = [
+      `UPDATE "public"."edit_probe" SET "label" = 'renamed' WHERE "id" = 1;`,
+      `DELETE FROM "public"."edit_probe" WHERE "id" = 2;`,
+    ].join("\n");
+    expect(recorded).toEqual([
+      {
+        datasourceId: "pg",
+        sql: script,
+        startedAt: 1_000,
+        durationMs: 7,
+        outcome: "success",
+        rowCount: 2,
+        message: null,
+        source: "table",
+      },
+    ]);
+    expect(executionsOf().map((execution) => [execution.label, execution.sql])).toEqual([
+      ["Load rows", `SELECT * FROM "public"."edit_probe"`],
+      ["Submit 2 statements", script],
+      ["Load rows", `SELECT * FROM "public"."edit_probe"`],
+    ]);
+  });
+
+  it("givenRejectedSubmit_whenSubmitted_thenErrorExecutionAndNoHistory", async () => {
+    const { store, recorded, executionsOf } = await openedTable({ submitFails: true });
+    store.getState().beginEdit("t1", { row: 0, column: 1 });
+    store.getState().changeEdit("t1", "renamed");
+    store.getState().commitEdit("t1");
+
+    await store.getState().submit("t1");
+
+    expect(recorded).toEqual([]);
+    expect(executionsOf()[0]).toMatchObject({
+      label: "Submit changes",
+      outcome: "error",
+      message: "Statement 1 affected 0 rows instead of exactly one.",
+    });
+  });
+
+  it("givenTableLoad_whenRun_thenExecutionWithSqlAndNoHistory", async () => {
+    const { recorded, executionsOf } = await openedTable();
+
+    expect(recorded).toEqual([]);
+    expect(executionsOf()).toEqual([
+      {
+        id: expect.any(Number) as number,
+        startedAt: 1_000,
+        durationMs: 7,
+        outcome: "success",
+        label: "Load rows",
+        sql: `SELECT * FROM "public"."edit_probe"`,
+        rowCount: 2,
+        message: null,
+      },
+    ]);
+  });
+
+  it("givenRowsCounted_whenReported_thenCountExecutionWithTheCount", async () => {
+    const { store, executionsOf } = await openedTable();
+
+    await store.getState().countRows("t1");
+
+    expect(executionsOf()[0]).toMatchObject({ label: "Count rows", outcome: "success", rowCount: 12_345 });
+  });
+
+  it("givenStatements_whenScripted_thenEachEndsWithSemicolonOnItsOwnLine", () => {
+    expect(submittedScript(["UPDATE t SET a = 1 ", "DELETE FROM t WHERE id = 2;"])).toBe(
+      "UPDATE t SET a = 1;\nDELETE FROM t WHERE id = 2;",
+    );
   });
 });

@@ -1,0 +1,162 @@
+import { mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
+import { openQueryHistory, type HistoryEntry, type QueryHistory } from "@table-craft/core";
+
+const PG = "pg";
+const MYSQL = "mysql";
+const MEMORY = ":memory:";
+
+function entry(overrides: Partial<HistoryEntry> = {}): HistoryEntry {
+  return {
+    datasourceId: PG,
+    sql: "SELECT 1",
+    startedAt: 1_000,
+    durationMs: 5,
+    outcome: "success",
+    rowCount: 1,
+    message: null,
+    source: "console",
+    ...overrides,
+  };
+}
+
+const opened: QueryHistory[] = [];
+const directories: string[] = [];
+
+function open(path = MEMORY, options: Parameters<typeof openQueryHistory>[1] = {}): QueryHistory {
+  const history = openQueryHistory(path, options);
+  opened.push(history);
+  return history;
+}
+
+async function temporaryDirectory(): Promise<string> {
+  const directory = await mkdtemp(join(tmpdir(), "table-craft-history-"));
+  directories.push(directory);
+  return directory;
+}
+
+afterEach(async () => {
+  for (const history of opened.splice(0)) history.close();
+  for (const directory of directories.splice(0)) await rm(directory, { recursive: true, force: true });
+});
+
+describe("query history", () => {
+  it("givenStatementsRecorded_whenSearched_thenNewestFirstAndGroupedByText", () => {
+    const history = open();
+    history.record(entry({ sql: "SELECT 1", startedAt: 1_000, durationMs: 3 }));
+    history.record(entry({ sql: "SELECT * FROM orders", startedAt: 2_000 }));
+    history.record(
+      entry({ sql: "SELECT 1", startedAt: 3_000, durationMs: 9, outcome: "error", rowCount: null, message: "boom" }),
+    );
+
+    expect(history.search(PG, "")).toEqual([
+      {
+        sql: "SELECT 1",
+        lastStartedAt: 3_000,
+        lastDurationMs: 9,
+        lastOutcome: "error",
+        lastRowCount: null,
+        lastMessage: "boom",
+        runs: 2,
+      },
+      {
+        sql: "SELECT * FROM orders",
+        lastStartedAt: 2_000,
+        lastDurationMs: 5,
+        lastOutcome: "success",
+        lastRowCount: 1,
+        lastMessage: null,
+        runs: 1,
+      },
+    ]);
+  });
+
+  it("givenMixedCase_whenSearched_thenMatchesCaseInsensitively", () => {
+    const history = open();
+    history.record(entry({ sql: "SELECT * FROM Orders" }));
+    history.record(entry({ sql: "SELECT * FROM customers", startedAt: 2_000 }));
+
+    expect(history.search(PG, "oRdErS").map((found) => found.sql)).toEqual(["SELECT * FROM Orders"]);
+  });
+
+  it("givenQueryWithPercent_whenSearched_thenMatchesLiterally", () => {
+    const history = open();
+    history.record(entry({ sql: "SELECT '50%' AS share" }));
+    history.record(entry({ sql: "SELECT 50 AS share", startedAt: 2_000 }));
+    history.record(entry({ sql: "SELECT a_b FROM t", startedAt: 3_000 }));
+    history.record(entry({ sql: "SELECT axb FROM t", startedAt: 4_000 }));
+
+    expect(history.search(PG, "50%").map((found) => found.sql)).toEqual(["SELECT '50%' AS share"]);
+    expect(history.search(PG, "a_b").map((found) => found.sql)).toEqual(["SELECT a_b FROM t"]);
+  });
+
+  it("givenSearchLimit_whenSearched_thenAnswersAtMostThatMany", () => {
+    const history = open();
+    for (let index = 0; index < 5; index += 1)
+      history.record(entry({ sql: `SELECT ${String(index)}`, startedAt: index }));
+
+    expect(history.search(PG, "", 2).map((found) => found.sql)).toEqual(["SELECT 4", "SELECT 3"]);
+  });
+
+  it("givenMoreThanLimit_whenRecorded_thenOldestPruned", () => {
+    const history = open(MEMORY, { limit: 3 });
+    for (let index = 0; index < 5; index += 1)
+      history.record(entry({ sql: `SELECT ${String(index)}`, startedAt: index }));
+    history.record(entry({ datasourceId: MYSQL, sql: "SELECT 0", startedAt: 0 }));
+
+    expect(history.search(PG, "").map((found) => found.sql)).toEqual(["SELECT 4", "SELECT 3", "SELECT 2"]);
+    expect(history.search(MYSQL, "")).toHaveLength(1);
+  });
+
+  it("givenTwoDatasources_whenOneCleared_thenOtherKept", () => {
+    const history = open();
+    history.record(entry({ datasourceId: PG }));
+    history.record(entry({ datasourceId: MYSQL }));
+
+    history.clear(PG);
+
+    expect(history.search(PG, "")).toEqual([]);
+    expect(history.search(MYSQL, "")).toHaveLength(1);
+  });
+
+  it("givenRecordedToFile_whenReopened_thenStillListed", async () => {
+    const path = join(await temporaryDirectory(), "history.sqlite");
+    const first = openQueryHistory(path);
+    first.record(entry({ sql: "SELECT 42" }));
+    first.close();
+
+    const reopened = open(path);
+
+    expect(reopened.recoveredFrom).toBeNull();
+    expect(reopened.search(PG, "").map((found) => found.sql)).toEqual(["SELECT 42"]);
+  });
+
+  it("givenCorruptFile_whenOpened_thenRenamedAndFresh", async () => {
+    const directory = await temporaryDirectory();
+    const path = join(directory, "history.sqlite");
+    await writeFile(path, "this is not a database, it is a sentence long enough to fill a header");
+
+    const history = open(path, { now: () => 1234 });
+    history.record(entry());
+
+    expect(history.recoveredFrom).toBe(`${path}.corrupt-1234`);
+    expect(await readdir(directory)).toContain("history.sqlite.corrupt-1234");
+    expect(history.search(PG, "")).toHaveLength(1);
+  });
+
+  it("givenSqliteFileOfAnotherSchema_whenOpened_thenRenamedAndFresh", async () => {
+    const { DatabaseSync } = await import("node:sqlite");
+    const directory = await temporaryDirectory();
+    const path = join(directory, "history.sqlite");
+    const other = new DatabaseSync(path);
+    other.exec("CREATE TABLE something (x INTEGER)");
+    other.close();
+
+    const history = open(path, { now: () => 99 });
+
+    expect(history.recoveredFrom).toBe(`${path}.corrupt-99`);
+    expect(history.search(PG, "")).toEqual([]);
+  });
+});

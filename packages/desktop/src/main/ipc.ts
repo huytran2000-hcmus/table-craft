@@ -1,11 +1,15 @@
+import type { QueryHistory } from "@table-craft/core";
 import { z } from "@table-craft/plugin-api";
 import { ConsoleFileError, type ConsoleFiles } from "@table-craft/desktop/main/consoleFiles.js";
 import { draftSchema } from "@table-craft/desktop/main/datasources.js";
 import { SecretStoreError } from "@table-craft/desktop/main/secrets.js";
 import { DatasourceError, type DatasourceService } from "@table-craft/desktop/main/service.js";
 import {
+  HISTORY_OUTCOMES,
+  HISTORY_SOURCES,
   INVOKE_CHANNELS,
   type BridgeFailure,
+  type HistoryEntry,
   type InvokeResult,
   type SaveDatasourceRequest,
 } from "@table-craft/desktop/preload/bridge.js";
@@ -38,6 +42,18 @@ const consoleWriteRequest = z.strictObject({
   name: z.string().min(1),
   text: z.string(),
 });
+const historyEntry = z.strictObject({
+  datasourceId: z.string().min(1),
+  sql: z.string(),
+  startedAt: z.number().int().nonnegative(),
+  durationMs: z.number().int().nonnegative(),
+  outcome: z.enum(HISTORY_OUTCOMES),
+  rowCount: z.number().int().nonnegative().nullable(),
+  message: z.string().nullable(),
+  source: z.enum(HISTORY_SOURCES),
+}) satisfies z.ZodType<HistoryEntry>;
+const historySearchRequest = z.strictObject({ datasourceId: z.string().min(1), query: z.string() });
+const historyClearRequest = z.strictObject({ datasourceId: z.string().min(1) });
 const answerCloseRequest = z.strictObject({ proceed: z.boolean() });
 const noRequest = z.undefined();
 
@@ -49,6 +65,7 @@ export interface InvokeRegistrar<Sender> {
 export interface IpcOptions<Sender> {
   readonly service: DatasourceService<Sender>;
   readonly consoles: ConsoleFiles;
+  readonly history: Pick<QueryHistory, "record" | "search" | "clear">;
   readonly chooseFile: (sender: Sender, title: string) => Promise<string | null>;
   readonly saveFile: (sender: Sender, title: string, defaultName: string) => Promise<string | null>;
   /** The renderer's answer to a held close (`CHANNELS.closeRequested`). */
@@ -129,6 +146,19 @@ export function registerIpc<Sender>(ipc: InvokeRegistrar<Sender>, options: IpcOp
   });
   handle(INVOKE_CHANNELS.deleteConsole, consoleRequest, async ({ datasourceId, name }) => {
     await consoles.delete(datasourceId, name);
+    return null;
+  });
+
+  const { history } = options;
+  handle(INVOKE_CHANNELS.historyRecord, historyEntry, (entry) => {
+    history.record(entry);
+    return null;
+  });
+  handle(INVOKE_CHANNELS.historySearch, historySearchRequest, ({ datasourceId, query }) =>
+    history.search(datasourceId, query),
+  );
+  handle(INVOKE_CHANNELS.historyClear, historyClearRequest, ({ datasourceId }) => {
+    history.clear(datasourceId);
     return null;
   });
 }

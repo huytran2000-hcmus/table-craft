@@ -53,6 +53,8 @@
   --spacing-popover: var(--tc-popover-width);
   --spacing-popover-height: var(--tc-popover-height);
   --spacing-generator: var(--tc-generator-width);
+  --spacing-picker: var(--tc-picker-width);
+  --spacing-picker-list: var(--tc-picker-list-height);
 }
 
 html,

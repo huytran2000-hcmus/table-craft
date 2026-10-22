@@ -13,6 +13,10 @@ import {
   Funnel,
   Sigma,
   CheckCircle,
+  XCircle,
+  Prohibit,
+  ClockCounterClockwise,
+  FolderOpen,
   ArrowClockwise,
   ArrowCounterClockwise,
   ArrowDown,
@@ -99,6 +103,9 @@ export {
   Intersect as JoinIcon,
   TextT as KeywordIcon,
   FileCode as DdlIcon,
+  CheckCircle as SuccessIcon,
+  XCircle as ErrorIcon,
+  Prohibit as CancelledIcon,
 };
 
 /** The header's type glyph per column class (plan 007 decision 7); temporal reads as a date. */
@@ -152,4 +159,6 @@ export const ACTION_ICONS: Readonly<Record<ActionIcon, Icon>> = {
   ddl: FileCode,
   quickDoc: Info,
   generate: Code,
+  history: ClockCounterClockwise,
+  reopen: FolderOpen,
 };

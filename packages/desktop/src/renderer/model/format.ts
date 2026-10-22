@@ -164,3 +164,27 @@ export function syncFailedText(namespace: string, error: EngineError): string {
 export function tabLabel(title: string, datasourceName: string | undefined): string {
   return datasourceName === undefined ? title : `${title} [${datasourceName}]`;
 }
+
+function twoDigits(value: number): string {
+  return String(value).padStart(2, "0");
+}
+
+/** `14:03:07` in local time: when a Services execution started. */
+export function clockTime(at: number): string {
+  const date = new Date(at);
+  return `${twoDigits(date.getHours())}:${twoDigits(date.getMinutes())}:${twoDigits(date.getSeconds())}`;
+}
+
+/** A history entry's time (plan 011 decision 8): `14:03:07` today, `2026-10-21 09:15` before. */
+export function historyTime(at: number, now: number): string {
+  const date = new Date(at);
+  const today = new Date(now);
+  if (date.toDateString() === today.toDateString()) return clockTime(at);
+  const day = `${date.getFullYear()}-${twoDigits(date.getMonth() + 1)}-${twoDigits(date.getDate())}`;
+  return `${day} ${twoDigits(date.getHours())}:${twoDigits(date.getMinutes())}`;
+}
+
+/** `12 rows`, `1 row`: a history entry's or execution's count. */
+export function rowsText(count: number): string {
+  return rows(count);
+}

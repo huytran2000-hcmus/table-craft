@@ -61,6 +61,8 @@ export interface ActionContext {
   /** The active console's, table's or DDL tab's datasource's capabilities. */
   readonly capabilities: readonly Capability[];
   readonly focus: FocusRegion;
+  /** Focus is in the Database pane, or was when a menu or dialog took it: `datasource` is the tree's. */
+  readonly inDatabasePane: boolean;
   readonly toolWindows: Readonly<Record<ToolWindowId, boolean>>;
   /** The palette or any dialog is open; it owns the keyboard. */
   readonly paletteOpen: boolean;
@@ -136,6 +138,7 @@ export function currentContext(): ActionContext {
         ? []
         : capabilitiesOf(datasources.plugins, datasourceById(datasources, tabDatasourceId)?.pluginId ?? ""),
     focus,
+    inDatabasePane: inTree,
     toolWindows: useLayout.getState().layout.visible,
     paletteOpen: modalOpen(),
     speedSearching: useCatalog.getState().speedSearch !== null,

@@ -89,6 +89,10 @@ export interface DensityTokens {
   readonly popoverHeightPx: number;
   /** The SQL Generator dialog. */
   readonly generatorWidthPx: number;
+  /** Query History and Open Closed Console: a searchable list over a preview (plan 011). */
+  readonly pickerWidthPx: number;
+  /** The picker's list; the preview takes the same again. */
+  readonly pickerListHeightPx: number;
 }
 
 export interface Appearance {
@@ -167,6 +171,8 @@ export const COMFORTABLE_DENSITY: DensityTokens = {
   popoverWidthPx: 480,
   popoverHeightPx: 360,
   generatorWidthPx: 640,
+  pickerWidthPx: 720,
+  pickerListHeightPx: 220,
 };
 
 export const DEFAULT_APPEARANCE: Appearance = {

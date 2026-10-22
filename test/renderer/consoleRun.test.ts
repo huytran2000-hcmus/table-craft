@@ -9,6 +9,9 @@ import type {
 import { EngineRequestError, type EngineClient } from "@table-craft/desktop/renderer/engine/client.js";
 import { executedText } from "@table-craft/desktop/renderer/model/format.js";
 import { createConsolesStore, OUTPUT_TAB } from "@table-craft/desktop/renderer/state/consoles.js";
+import { createExecutionsStore } from "@table-craft/desktop/renderer/state/executions.js";
+import { createHistoryClient } from "@table-craft/desktop/renderer/state/history.js";
+import type { HistoryEntry } from "@table-craft/desktop/preload/bridge.js";
 
 const SESSION_ID = "s1";
 
@@ -104,12 +107,14 @@ function fakeEngine() {
   return { client, call, executed, released };
 }
 
-function harness(options: { confirm?: boolean } = {}) {
+function harness(options: { confirm?: boolean; record?: (entry: HistoryEntry) => void } = {}) {
   const engine = fakeEngine();
   const confirmDestructive = vi.fn((_statements: readonly ClassifiedStatement[]) =>
     Promise.resolve(options.confirm ?? true),
   );
   const onDdl = vi.fn();
+  const recorded: HistoryEntry[] = [];
+  const executions = createExecutionsStore();
   let now = 0;
   const store = createConsolesStore({
     connect: () => Promise.resolve(engine.client),
@@ -117,6 +122,8 @@ function harness(options: { confirm?: boolean } = {}) {
     clock: () => 0,
     confirmDestructive,
     onDdl,
+    executions: executions.getState(),
+    record: options.record ?? ((entry) => recorded.push(entry)),
   });
   const session = () => {
     const current = store.getState().consoles.c1;
@@ -124,10 +131,10 @@ function harness(options: { confirm?: boolean } = {}) {
     return current;
   };
   const messages = () => session().output.map((entry) => entry.message);
-  return { ...engine, store, confirmDestructive, onDdl, session, messages };
+  return { ...engine, store, confirmDestructive, onDdl, session, messages, recorded, executions };
 }
 
-async function opened(sql: string, options: { confirm?: boolean } = {}) {
+async function opened(sql: string, options: Parameters<typeof harness>[0] = {}) {
   const context = harness(options);
   await context.store.getState().open("c1", "pg", { sql });
   return context;
@@ -309,5 +316,111 @@ describe("output lines", () => {
     expect(executedText({ columns: [{}], rowCount: 500, complete: false, rowsAffected: null }, 38, "read")).toBe(
       "500+ rows retrieved in 38 ms",
     );
+  });
+});
+
+describe("console history and executions", () => {
+  it("givenScriptWithFailingSecondStatement_whenRun_thenFirstTwoRecordedThirdSkipped", async () => {
+    const { store, recorded, executions } = await opened("SELECT 1;\nSELECT FAIL;\nSELECT 3;");
+
+    await store.getState().run("c1", "all");
+
+    expect(recorded).toEqual([
+      {
+        datasourceId: "pg",
+        sql: "SELECT 1",
+        startedAt: 0,
+        durationMs: 5,
+        outcome: "success",
+        rowCount: 1,
+        message: null,
+        source: "console",
+      },
+      {
+        datasourceId: "pg",
+        sql: "SELECT FAIL",
+        startedAt: 0,
+        durationMs: 5,
+        outcome: "error",
+        rowCount: null,
+        message: "syntax error",
+        source: "console",
+      },
+    ]);
+    expect(executions.getState().byTab.c1?.map((execution) => [execution.label, execution.outcome])).toEqual([
+      ["SELECT FAIL", "error"],
+      ["SELECT 1", "success"],
+    ]);
+  });
+
+  it("givenWrite_whenRun_thenRowsAffectedRecorded", async () => {
+    const { store, recorded } = await opened("UPDATE orders SET n = 1 WHERE id = 1;");
+
+    await store.getState().run("c1", "all");
+
+    expect(recorded.map((entry) => [entry.sql, entry.rowCount])).toEqual([["UPDATE orders SET n = 1 WHERE id = 1", 1]]);
+  });
+
+  it("givenDestructiveDeclined_whenRun_thenNothingRecorded", async () => {
+    const { store, recorded, executions } = await opened("SELECT 1;\nDROP TABLE t;", { confirm: false });
+
+    await store.getState().run("c1", "all");
+
+    expect(recorded).toEqual([]);
+    expect(executions.getState().byTab.c1 ?? []).toEqual([]);
+  });
+
+  it("givenEmptyConsole_whenRun_thenNothingRecorded", async () => {
+    const { store, recorded } = await opened("  ");
+
+    await store.getState().run("c1", "all");
+
+    expect(recorded).toEqual([]);
+  });
+
+  it("givenEnvironmentDatasource_whenRun_thenNothingRecorded", async () => {
+    const historyRecord = vi.fn(() => Promise.resolve({ ok: true as const, value: null }));
+    const client = createHistoryClient({
+      bridge: () => ({ historyRecord, historySearch: vi.fn(), historyClear: vi.fn() }),
+      isEphemeral: (datasourceId) => datasourceId === "pg",
+      log: vi.fn(),
+    });
+    const { store } = await opened("SELECT 1;", { record: client.record });
+
+    await store.getState().run("c1", "all");
+
+    expect(historyRecord).not.toHaveBeenCalled();
+  });
+
+  it("givenHistoryWriteFails_whenRun_thenRunSucceeds", async () => {
+    const log = vi.fn();
+    const client = createHistoryClient({
+      bridge: () => ({
+        historyRecord: vi.fn(() => Promise.reject(new Error("disk full"))),
+        historySearch: vi.fn(),
+        historyClear: vi.fn(),
+      }),
+      isEphemeral: () => false,
+      log,
+    });
+    const { store, session, executed } = await opened("SELECT 1;\nSELECT 2;", { record: client.record });
+
+    await store.getState().run("c1", "all");
+    await Promise.resolve();
+
+    expect(executed).toEqual(["SELECT 1", "SELECT 2"]);
+    expect(session().lastRun?.outcome).toBe("succeeded");
+    expect(log).toHaveBeenCalledTimes(2);
+  });
+
+  it("givenText_whenInserted_thenOneShotUntilAcknowledged", async () => {
+    const { store, session } = await opened("SELECT 1;");
+
+    store.getState().insert("c1", "SELECT 2;");
+    const insertion = session().insertion;
+    store.getState().inserted("c1", insertion?.seq ?? -1);
+
+    expect(insertion?.text).toBe("SELECT 2;");
+    expect(session().insertion).toBeNull();
   });
 });

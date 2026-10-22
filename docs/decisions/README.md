@@ -40,3 +40,4 @@ started, not when it is merged.
 | 027 | [Actions scope to a tab kind, and chords clash only where they overlap](027-actions-scope-to-a-tab-kind-and-clash-only-where-they-overlap.md) |
 | 028 | [Completion asks the engine, which reads the cached catalog](028-completion-asks-the-engine-which-reads-the-cached-catalog.md)                |
 | 029 | [Object definitions come from the database, not from the cached catalog](029-object-definitions-come-from-the-database.md)                    |
+| 030 | [Query history lives in main, and the renderer records it](030-query-history-lives-in-main-and-the-renderer-records-it.md)                    |

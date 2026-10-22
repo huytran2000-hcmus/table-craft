@@ -53,6 +53,9 @@ const bridge: TableCraftBridge = {
   readConsole: (datasourceId, name) => invoke(INVOKE_CHANNELS.readConsole, { datasourceId, name }),
   writeConsole: (datasourceId, name, text) => invoke(INVOKE_CHANNELS.writeConsole, { datasourceId, name, text }),
   deleteConsole: (datasourceId, name) => invoke(INVOKE_CHANNELS.deleteConsole, { datasourceId, name }),
+  historyRecord: (entry) => invoke(INVOKE_CHANNELS.historyRecord, entry),
+  historySearch: (datasourceId, query) => invoke(INVOKE_CHANNELS.historySearch, { datasourceId, query }),
+  historyClear: (datasourceId) => invoke(INVOKE_CHANNELS.historyClear, { datasourceId }),
   onDatasourcesChanged: (listener) => subscribe<DatasourceList>(CHANNELS.datasourcesChanged, listener),
   onEngineExited: (listener) => subscribe<EngineExited>(CHANNELS.engineExited, listener),
   onInvokeAction(listener) {

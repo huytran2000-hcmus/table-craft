@@ -2,6 +2,8 @@ import * as Dialog from "@radix-ui/react-dialog";
 import { useState } from "react";
 import { Button, CONTENT_CLASS, OVERLAY_CLASS, TextInput } from "@table-craft/desktop/renderer/dialogs/parts.js";
 import { useModal, type ModalItem, type ModalRequest } from "@table-craft/desktop/renderer/state/modal.js";
+import { OpenClosedConsole } from "@table-craft/desktop/renderer/dialogs/OpenClosedConsole.js";
+import { QueryHistory } from "@table-craft/desktop/renderer/dialogs/QueryHistory.js";
 import { SqlGenerator } from "@table-craft/desktop/renderer/dialogs/SqlGenerator.js";
 import { PreviewStatements } from "@table-craft/desktop/renderer/table/PreviewDialog.js";
 import { cn } from "@table-craft/desktop/renderer/ui/cn.js";
@@ -13,7 +15,11 @@ const MODAL_WIDTHS: Readonly<Record<ModalRequest["kind"], string>> = {
   choice: "w-96",
   statements: "w-[40rem]",
   generator: "w-generator",
+  history: "w-picker",
+  closedConsoles: "w-picker",
 };
+
+type PickerKind = "generator" | "history" | "closedConsoles";
 
 function Items({ items }: { readonly items: readonly ModalItem[] }) {
   return (
@@ -30,7 +36,7 @@ function Items({ items }: { readonly items: readonly ModalItem[] }) {
   );
 }
 
-function Body({ request }: { readonly request: Exclude<ModalRequest, { kind: "generator" }> }) {
+function Body({ request }: { readonly request: Exclude<ModalRequest, { kind: PickerKind }> }) {
   const answer = useModal((state) => state.answer);
   const [text, setText] = useState(request.kind === "text" ? request.initial : "");
 
@@ -111,6 +117,10 @@ export function Modal() {
         >
           {pending === null ? null : pending.request.kind === "generator" ? (
             <SqlGenerator request={pending.request} />
+          ) : pending.request.kind === "history" ? (
+            <QueryHistory request={pending.request} />
+          ) : pending.request.kind === "closedConsoles" ? (
+            <OpenClosedConsole request={pending.request} />
           ) : (
             <Body request={pending.request} />
           )}

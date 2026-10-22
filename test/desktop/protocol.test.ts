@@ -1,6 +1,8 @@
 import { describe, expect, expectTypeOf, it } from "vitest";
 import {
   EXTRACTOR_KINDS,
+  HISTORY_OUTCOMES,
+  HISTORY_SOURCES,
   RESULT_FETCH_ALL_CAP,
   RESULT_PAGE_ROWS,
   RESULT_WINDOW_ROWS,
@@ -9,6 +11,8 @@ import {
   type CoreErrorCode,
   type EditableIdentity,
   type ExtractorKind,
+  type HistoryEntry,
+  type HistoryStatement,
   type OrderTerm,
   type ResultState,
   type ResultSummary,
@@ -37,12 +41,20 @@ import {
   type WireValue,
 } from "@table-craft/plugin-api";
 import * as protocol from "@table-craft/desktop/engine/protocol.js";
+import * as bridge from "@table-craft/desktop/preload/bridge.js";
 
 describe("engine protocol", () => {
   it("givenProtocolConstants_whenComparedWithCore_thenEqual", () => {
     expect(protocol.RESULT_WINDOW_ROWS).toBe(RESULT_WINDOW_ROWS);
     expect(protocol.RESULT_PAGE_ROWS).toBe(RESULT_PAGE_ROWS);
     expect(protocol.RESULT_FETCH_ALL_CAP).toBe(RESULT_FETCH_ALL_CAP);
+  });
+
+  it("givenHistoryTypes_whenComparedWithCore_thenIdentical", () => {
+    expectTypeOf<bridge.HistoryEntry>().toEqualTypeOf<HistoryEntry>();
+    expectTypeOf<bridge.HistoryStatement>().toEqualTypeOf<HistoryStatement>();
+    expect(bridge.HISTORY_OUTCOMES).toEqual(HISTORY_OUTCOMES);
+    expect(bridge.HISTORY_SOURCES).toEqual(HISTORY_SOURCES);
   });
 
   it("givenResultTypes_whenComparedWithCore_thenIdentical", () => {

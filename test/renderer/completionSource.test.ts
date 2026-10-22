@@ -1,6 +1,7 @@
 import { CompletionContext, type CompletionResult as EditorCompletionResult } from "@codemirror/autocomplete";
 import { PostgreSQL } from "@codemirror/lang-sql";
 import { EditorState } from "@codemirror/state";
+import type { EditorView } from "@codemirror/view";
 import { describe, expect, it } from "vitest";
 import type { CompletionResult } from "@table-craft/desktop/engine/protocol.js";
 import { completionGlyphMarkup } from "@table-craft/desktop/renderer/console/completionGlyphs.js";
@@ -54,6 +55,24 @@ describe("engine completion source", () => {
 
     expect(await first).toBeNull();
     expect(await labels(second)).toEqual(["orders", "Line Items"]);
+  });
+
+  it("givenEditorLostFocus_whenResponseArrives_thenDropped", async () => {
+    const engine = deferredEngine();
+    const source = engineCompletionSource({ dialect: () => PostgreSQL, engine: () => engine.call });
+    const view = { hasFocus: true };
+    const context = new CompletionContext(
+      EditorState.create({ doc: "SELECT * FROM o" }),
+      "SELECT * FROM o".length,
+      false,
+      view as EditorView,
+    );
+
+    const pending = source(context);
+    view.hasFocus = false;
+    engine.calls[0]?.resolve(RESULT);
+
+    expect(await pending).toBeNull();
   });
 
   it("givenDisconnectedDatasource_whenCompleting_thenOffersKeywordsWithoutAskingAnEngine", async () => {

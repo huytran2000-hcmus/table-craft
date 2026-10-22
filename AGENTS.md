@@ -60,13 +60,15 @@ packages/core/             @table-craft/core: plugin loader, session manager, re
                            store with open cursors and local sort (`results/`), the copy
                            and export extractors (`results/extract/`), the table
                            editor's row identity, generated DML and one-transaction
-                           submit (`edits/`), history, and the catalog cache and the
+                           submit (`edits/`), the query history store (`history/`,
+                           `<userData>/history.sqlite`), and the catalog cache and the
                            completion catalog over it (`catalog/`). Knows nothing about
                            Electron
 packages/desktop/          @table-craft/desktop, the Electron app
   src/main/                lifecycle, the window, menus, one engine host per datasource,
-                           the datasource list and secrets, console files, the invoke
-                           channels (`ipc.ts`)
+                           the datasource list and secrets, console files, the query
+                           history (opened at launch, written by the renderer over the
+                           `history.*` channels), the invoke channels (`ipc.ts`)
   src/preload/             contextBridge; hands the engine port to the renderer and relays
                            menu clicks. `menu.ts` declares the native menu as data
   src/engine/              the utilityProcess; `protocol.ts` is the only module the
@@ -78,7 +80,9 @@ packages/desktop/          @table-craft/desktop, the Electron app
                            Output, transactions;
                            `grid/` the result grid, its toolbar and value panel;
                            `table/` the table data editor: WHERE/ORDER BY bars and the
-                           preview; its pending changes are `model/editBuffer.ts`
+                           preview; its pending changes are `model/editBuffer.ts`;
+                           `state/history.ts` records what runs, `state/executions.ts`
+                           feeds the Services tree
 plugins/<id>/              built-in plugins (@table-craft/plugin-<id>): postgres, mysql,
                            sqlite. Each depends on plugin-api and its driver alone, and
                            ships a `table-craft-plugin.json` beside `src/`; its

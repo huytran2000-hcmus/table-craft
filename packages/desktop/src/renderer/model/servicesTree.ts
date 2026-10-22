@@ -1,0 +1,204 @@
+import type { DatasourceView } from "@table-craft/desktop/preload/bridge.js";
+import { serviceState, type ServiceState } from "@table-craft/desktop/renderer/model/format.js";
+import type { ConsoleSession } from "@table-craft/desktop/renderer/state/consoles.js";
+import type { Execution } from "@table-craft/desktop/renderer/state/executions.js";
+import type { TableSession, TableStatus } from "@table-craft/desktop/renderer/state/tables.js";
+import type { Tab } from "@table-craft/desktop/renderer/state/tabs.js";
+
+/** An open console or table tab: one session on its datasource (plan 011 decision 12). */
+export interface ServiceSession {
+  readonly tabId: string;
+  readonly kind: "console" | "table";
+  readonly title: string;
+  readonly state: ServiceState;
+  readonly lastDurationMs: number | null;
+  /** Newest first. */
+  readonly executions: readonly Execution[];
+}
+
+export interface ServiceDatasource {
+  readonly datasourceId: string;
+  readonly name: string;
+  readonly sessions: readonly ServiceSession[];
+}
+
+export interface ServicesInput {
+  readonly tabs: readonly Tab[];
+  readonly consoles: Readonly<Record<string, ConsoleSession>>;
+  readonly tables: Readonly<Record<string, TableSession>>;
+  readonly executions: Readonly<Record<string, readonly Execution[]>>;
+  readonly datasources: readonly DatasourceView[];
+}
+
+const TABLE_STATE: Readonly<Record<TableStatus, ServiceState>> = {
+  connecting: "connecting",
+  ready: "idle",
+  loading: "running",
+  submitting: "running",
+  failed: "failed",
+  disconnected: "disconnected",
+};
+
+const NONE: readonly Execution[] = [];
+
+function lastFinished(executions: readonly Execution[]): number | null {
+  return executions.find((execution) => execution.durationMs !== null)?.durationMs ?? null;
+}
+
+function sessionOf(tab: Tab, input: ServicesInput): { datasourceId: string; session: ServiceSession } | null {
+  const executions = input.executions[tab.id] ?? NONE;
+  if (tab.kind === "console") {
+    const console = input.consoles[tab.id];
+    if (console === undefined) return null;
+    return {
+      datasourceId: console.datasourceId,
+      session: {
+        tabId: tab.id,
+        kind: "console",
+        title: tab.title,
+        state: serviceState(console),
+        lastDurationMs: console.lastRun?.durationMs ?? null,
+        executions,
+      },
+    };
+  }
+  if (tab.kind === "table") {
+    const table = input.tables[tab.id];
+    if (table === undefined) return null;
+    return {
+      datasourceId: table.datasourceId,
+      session: {
+        tabId: tab.id,
+        kind: "table",
+        title: tab.title,
+        state: TABLE_STATE[table.status],
+        lastDurationMs: lastFinished(executions),
+        executions,
+      },
+    };
+  }
+  return null;
+}
+
+/** Datasources with an open console or table tab, in tab order, each with its sessions in tab order. */
+export function servicesTree(input: ServicesInput): readonly ServiceDatasource[] {
+  const groups = new Map<string, ServiceSession[]>();
+  for (const tab of input.tabs) {
+    const found = sessionOf(tab, input);
+    if (found === null) continue;
+    const sessions = groups.get(found.datasourceId) ?? [];
+    sessions.push(found.session);
+    groups.set(found.datasourceId, sessions);
+  }
+  return [...groups].map(([datasourceId, sessions]) => ({
+    datasourceId,
+    name: input.datasources.find((view) => view.id === datasourceId)?.name ?? datasourceId,
+    sessions,
+  }));
+}
+
+/** One visible line of the tree; `key` is stable across renders, `parent` the line ← moves to. */
+export type ServiceRow =
+  | { readonly kind: "datasource"; readonly key: string; readonly depth: 0; readonly node: ServiceDatasource }
+  | {
+      readonly kind: "session";
+      readonly key: string;
+      readonly depth: 1;
+      readonly parent: string;
+      readonly node: ServiceSession;
+    }
+  | {
+      readonly kind: "execution";
+      readonly key: string;
+      readonly depth: 2;
+      readonly parent: string;
+      readonly tabId: string;
+      readonly node: Execution;
+    };
+
+export function datasourceRowKey(datasourceId: string): string {
+  return `datasource:${datasourceId}`;
+}
+
+export function sessionRowKey(tabId: string): string {
+  return `session:${tabId}`;
+}
+
+/** The lines shown, every node expanded unless `collapsed` holds its key (the tree starts expanded). */
+export function serviceRows(tree: readonly ServiceDatasource[], collapsed: ReadonlySet<string>): readonly ServiceRow[] {
+  const rows: ServiceRow[] = [];
+  for (const datasource of tree) {
+    const datasourceKey = datasourceRowKey(datasource.datasourceId);
+    rows.push({ kind: "datasource", key: datasourceKey, depth: 0, node: datasource });
+    if (collapsed.has(datasourceKey)) continue;
+    for (const session of datasource.sessions) {
+      const sessionKey = sessionRowKey(session.tabId);
+      rows.push({ kind: "session", key: sessionKey, depth: 1, parent: datasourceKey, node: session });
+      if (collapsed.has(sessionKey)) continue;
+      for (const execution of session.executions) {
+        rows.push({
+          kind: "execution",
+          key: `execution:${session.tabId}:${String(execution.id)}`,
+          depth: 2,
+          parent: sessionKey,
+          tabId: session.tabId,
+          node: execution,
+        });
+      }
+    }
+  }
+  return rows;
+}
+
+/** Whether a line has children to show or hide. */
+export function expandable(row: ServiceRow): boolean {
+  if (row.kind === "datasource") return row.node.sessions.length > 0;
+  return row.kind === "session" && row.node.executions.length > 0;
+}
+
+export interface TreeMove {
+  readonly selected: string | null;
+  readonly collapsed: ReadonlySet<string>;
+}
+
+/**
+ * The Database pane's arrow keys (WAI-ARIA tree): ↑ ↓ move, → expands then steps in, ← collapses
+ * then steps out, Home and End jump. Null for any other key.
+ */
+export function movedInTree(
+  rows: readonly ServiceRow[],
+  selected: string | null,
+  collapsed: ReadonlySet<string>,
+  key: string,
+): TreeMove | null {
+  if (rows.length === 0) return null;
+  const at = rows.findIndex((row) => row.key === selected);
+  const row = rows[at];
+  const to = (index: number): TreeMove => ({ selected: rows[index]?.key ?? selected, collapsed });
+  switch (key) {
+    case "ArrowDown":
+      return to(Math.min(at + 1, rows.length - 1));
+    case "ArrowUp":
+      return to(Math.max(at - 1, 0));
+    case "Home":
+      return to(0);
+    case "End":
+      return to(rows.length - 1);
+    case "ArrowRight": {
+      if (row === undefined || !expandable(row)) return { selected, collapsed };
+      if (collapsed.has(row.key)) {
+        const next = new Set(collapsed);
+        next.delete(row.key);
+        return { selected, collapsed: next };
+      }
+      return to(at + 1);
+    }
+    case "ArrowLeft": {
+      if (row === undefined) return { selected, collapsed };
+      if (expandable(row) && !collapsed.has(row.key)) return { selected, collapsed: new Set(collapsed).add(row.key) };
+      return row.kind === "datasource" ? { selected, collapsed } : { selected: row.parent, collapsed };
+    }
+    default:
+      return null;
+  }
+}

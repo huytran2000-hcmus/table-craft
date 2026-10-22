@@ -78,6 +78,9 @@ export const APPLICATION_MENU: readonly MenuEntry[] = [
       },
       { kind: "action", label: "Show System Schemas", actionId: "explorer.toggleSystemSchemas" },
       SEPARATOR,
+      { kind: "action", label: "Query History…", actionId: "history.show", accelerator: "CmdOrCtrl+Alt+E" },
+      { kind: "action", label: "Open Closed Console…", actionId: "console.reopen" },
+      SEPARATOR,
       { kind: "action", label: "Find Action…", actionId: "palette.findAction", accelerator: "CmdOrCtrl+Shift+A" },
       // No accelerator: Electron cannot express a double Shift.
       { kind: "action", label: "Search Everywhere", actionId: "palette.searchEverywhere" },

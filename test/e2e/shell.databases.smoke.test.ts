@@ -5,6 +5,7 @@
  *
  *   TABLE_CRAFT_EVIDENCE_DIR=docs/evidence/003 bun run test:smoke:db
  */
+import type { Page } from "playwright-core";
 import { afterEach, describe, expect, it } from "vitest";
 import { MYSQL_CONFIG, POSTGRES_CONFIG, withWrongPassword } from "../support/databases.js";
 import {
@@ -38,6 +39,11 @@ const ONE_SQL = "SELECT 1";
 /** A page expression, because this program has no DOM lib. */
 const FOCUSED_LABEL = "document.activeElement?.getAttribute('aria-label') ?? null";
 
+/** The session rows of the Services tree (plan 011). */
+function serviceSessions(page: Page) {
+  return toolWindow(page, "Services").locator('[role="treeitem"][data-kind="session"]');
+}
+
 describe.runIf(DATABASES_ENABLED)("shell live test", () => {
   let running: RunningApp | null = null;
 
@@ -61,7 +67,7 @@ describe.runIf(DATABASES_ENABLED)("shell live test", () => {
       const node = toolWindow(page, "Database").locator('[role="treeitem"][data-kind="datasource"]');
       expect(await node.getAttribute("data-state")).toBe("connected");
       expect(await editorTabs(page).allTextContents()).toEqual(["console [postgres]"]);
-      expect(await toolWindow(page, "Services").getByRole("option").allTextContents()).toHaveLength(1);
+      expect(await serviceSessions(page).count()).toBe(1);
       await captureWindow(page, "shell-default");
     },
     SCENARIO_TIMEOUT_MS,
@@ -154,7 +160,7 @@ describe.runIf(DATABASES_ENABLED)("shell live test", () => {
       await editorTabs(page).filter({ hasText: "console_1 " }).click();
       await expect.poll(() => gridText(page)).toEqual(customers);
 
-      const consoles = toolWindow(page, "Services").getByRole("option");
+      const consoles = serviceSessions(page);
       expect(await consoles.count()).toBe(2);
       for (const text of await consoles.allTextContents()) expect(text).toMatch(/idle.*\d+ ms|idle.*\d+(\.\d+)? s/);
       await captureWindow(page, "two-consoles");

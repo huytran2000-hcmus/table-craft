@@ -7,6 +7,7 @@ import {
   useDatasources,
   type DatasourcesStore,
 } from "@table-craft/desktop/renderer/state/datasources.js";
+import { useExecutions, type ExecutionsStore } from "@table-craft/desktop/renderer/state/executions.js";
 import { tablesOf, useTables, type TablesStore } from "@table-craft/desktop/renderer/state/tables.js";
 import { useTabs, type TabsStore } from "@table-craft/desktop/renderer/state/tabs.js";
 
@@ -17,14 +18,16 @@ export interface WiredStores {
   readonly catalog?: CatalogStore;
   readonly tables?: TablesStore;
   readonly ddl?: DdlStore;
+  readonly executions?: ExecutionsStore;
 }
 
 /**
  * What one store's change means for the others: a datasource whose engine went away leaves its
  * consoles and tables disconnected and its catalog forgotten, a deleted one takes its tabs with it,
- * and a namespace described anew refreshes the DDL tabs showing its relations.
+ * a namespace described anew refreshes the DDL tabs showing its relations, and a closed tab's
+ * executions leave Services with it.
  */
-export function wireStores({ datasources, consoles, tabs, catalog, tables, ddl }: WiredStores): () => void {
+export function wireStores({ datasources, consoles, tabs, catalog, tables, ddl, executions }: WiredStores): () => void {
   const offDetached = datasources.onDetached((id, error) => {
     consoles.getState().detach(id, error);
     tables?.getState().detach(id, error);
@@ -48,12 +51,23 @@ export function wireStores({ datasources, consoles, tabs, catalog, tables, ddl }
   });
   const offAttached = catalog === undefined ? () => undefined : followAttaches(datasources, catalog);
   const offRedescribes = catalog === undefined || ddl === undefined ? () => undefined : followRedescribes(ddl, catalog);
+  const offClosed = executions === undefined ? () => undefined : dropClosedExecutions(tabs, executions);
   return () => {
     offDetached();
     offRemoved();
     offAttached();
     offRedescribes();
+    offClosed();
   };
+}
+
+/** Services lists open tabs only: a tab leaving the strip takes its executions (plan 011, decision 11). */
+export function dropClosedExecutions(tabs: TabsStore, executions: ExecutionsStore): () => void {
+  return tabs.subscribe((state, previous) => {
+    if (state.tabs === previous.tabs) return;
+    const open = new Set(state.tabs.map((tab) => tab.id));
+    for (const tab of previous.tabs) if (!open.has(tab.id)) executions.getState().drop(tab.id);
+  });
 }
 
 /**
@@ -82,6 +96,7 @@ export function installDatasourceSync(onFirstList: () => void): () => void {
     catalog: useCatalog,
     tables: useTables,
     ddl: useDdl,
+    executions: useExecutions,
   });
   const offChanged = bridge().onDatasourcesChanged((list) => useDatasources.getState().applyList(list));
   const offExited = bridge().onEngineExited((exited) => useDatasources.getState().engineExited(exited));

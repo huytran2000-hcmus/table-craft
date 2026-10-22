@@ -17,6 +17,12 @@ export function firstFreeName(used: Iterable<string>): string {
   }
 }
 
+/** Saved consoles no tab has open, by name (plan 011 decision 14): what Open Closed Console lists. */
+export function closedConsoleNames(saved: readonly string[], open: Iterable<string>): readonly string[] {
+  const opened = new Set(open);
+  return saved.filter((name) => !opened.has(name)).sort((a, b) => a.localeCompare(b));
+}
+
 /** The console files main keeps under `<userData>/consoles/<datasourceId>/`. */
 export interface ConsoleFileAccess {
   readonly list: (datasourceId: string) => Promise<readonly string[]>;

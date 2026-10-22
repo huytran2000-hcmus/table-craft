@@ -3,12 +3,14 @@ import {
   type ClassifiedStatement,
   type Column,
   type EngineError,
+  type ExecutedStatement,
   type ExtractorKind,
   type RowRange,
   type SortKey,
   type TransactionMode,
   type TransactionState,
 } from "@table-craft/desktop/engine/protocol.js";
+import type { HistoryEntry } from "@table-craft/desktop/preload/bridge.js";
 import type { EngineClient } from "@table-craft/desktop/renderer/engine/client.js";
 import { carriedLayout, type ColumnLayout } from "@table-craft/desktop/renderer/model/columnLayout.js";
 import { executedText, exportedText, firstLine } from "@table-craft/desktop/renderer/model/format.js";
@@ -16,6 +18,12 @@ import { clampSelection, type GridSelection } from "@table-craft/desktop/rendere
 import { statementsToRun, type RunScope, type TextSpan } from "@table-craft/desktop/renderer/model/statementAt.js";
 import { useCatalog } from "@table-craft/desktop/renderer/state/catalog.js";
 import { useDatasources } from "@table-craft/desktop/renderer/state/datasources.js";
+import {
+  useExecutions,
+  type ExecutionEnd,
+  type ExecutionReporter,
+} from "@table-craft/desktop/renderer/state/executions.js";
+import { history } from "@table-craft/desktop/renderer/state/history.js";
 import { useModal } from "@table-craft/desktop/renderer/state/modal.js";
 import { resultTabOf, type ResultTab } from "@table-craft/desktop/renderer/state/resultTab.js";
 import { createResultWindows, toError } from "@table-craft/desktop/renderer/state/resultWindows.js";
@@ -83,6 +91,13 @@ export interface ConsoleSession {
   readonly flash: Flash | null;
   /** Where an action asked the editor to put its caret; `seq` repeats a jump to the same place. */
   readonly jump: Flash | null;
+  /** Text an action asked the editor to put at its selection; the editor clears it once applied. */
+  readonly insertion: Insertion | null;
+}
+
+export interface Insertion {
+  readonly text: string;
+  readonly seq: number;
 }
 
 export interface OpenOptions {
@@ -104,6 +119,10 @@ export interface ConsolesState {
   readonly setSelection: (id: string, selection: TextSpan) => void;
   /** Puts the editor's caret at `span.from` and flashes `span`, as Go to Declaration lands. */
   readonly jumpTo: (id: string, span: TextSpan) => void;
+  /** Asks the editor to replace its selection with `text`, or insert it at the caret, as one undo step. */
+  readonly insert: (id: string, text: string) => void;
+  /** The editor applied the insertion numbered `seq`. */
+  readonly inserted: (id: string, seq: number) => void;
   /** Runs what `scope` picks, one statement after another, opening a session first when it has none. */
   readonly run: (id: string, scope: RunScope) => Promise<void>;
   /** Asks the engine to cancel the running statement; `run` then reports it as cancelled. */
@@ -173,6 +192,10 @@ export interface ConsolesDependencies {
   readonly confirmDestructive?: (statements: readonly ClassifiedStatement[]) => Promise<boolean>;
   /** DDL took effect outside a transaction: the datasource's cached catalog is stale (decision 19). */
   readonly onDdl?: (datasourceId: string) => void;
+  /** Hears each statement start and end, for Services (plan 011, decision 11). */
+  readonly executions?: ExecutionReporter;
+  /** Each statement once it ends, for query history (decision 030); must not throw. */
+  readonly record?: (entry: HistoryEntry) => void;
 }
 
 function newConsole(datasourceId: string, name: string, sql: string, connect: boolean): ConsoleSession {
@@ -192,6 +215,7 @@ function newConsole(datasourceId: string, name: string, sql: string, connect: bo
     lastRun: null,
     flash: null,
     jump: null,
+    insertion: null,
   };
 }
 
@@ -206,6 +230,7 @@ export function createConsolesStore(dependencies: ConsolesDependencies) {
   const pendingDdl = new Set<string>();
   const clock = dependencies.clock ?? (() => Date.now());
   const confirmDestructive = dependencies.confirmDestructive ?? (() => Promise.resolve(true));
+  const executions = dependencies.executions ?? { start: () => 0, finish: () => undefined };
   let entries = 0;
   let flashes = 0;
   let resultIds = 0;
@@ -237,6 +262,43 @@ export function createConsolesStore(dependencies: ConsolesDependencies) {
 
     function logError(id: string, sql: string, error: EngineError): void {
       log(id, { sql, message: error.message, hint: error.hint, tone: "error" });
+    }
+
+    /** One statement on its way to the engine: Services lists it now, history once it ends. */
+    function started(id: string, sql: string): (end: ExecutionEnd) => void {
+      const startedAt = clock();
+      const datasourceId = get().consoles[id]?.datasourceId;
+      const executionId = executions.start(id, { label: firstLine(sql), sql, startedAt });
+      return (end) => {
+        const durationMs = Math.max(0, Math.round(end.durationMs));
+        executions.finish(id, executionId, { ...end, durationMs });
+        if (datasourceId === undefined) return;
+        const { outcome, rowCount, message } = end;
+        dependencies.record?.({
+          datasourceId,
+          sql,
+          startedAt,
+          durationMs,
+          outcome,
+          rowCount,
+          message,
+          source: "console",
+        });
+      };
+    }
+
+    function rowsOf(executed: Pick<ExecutedStatement, "columns" | "rowCount" | "rowsAffected">): number | null {
+      return executed.columns.length > 0 ? executed.rowCount : executed.rowsAffected;
+    }
+
+    function failureEnd(error: EngineError, durationMs: number): ExecutionEnd {
+      const cancelled = error.code === "cancelled";
+      return {
+        durationMs,
+        outcome: cancelled ? "cancelled" : "error",
+        rowCount: null,
+        message: cancelled ? null : error.message,
+      };
     }
 
     /** Opens a session for the console; false when it could not, with the console marked failed. */
@@ -344,6 +406,7 @@ export function createConsolesStore(dependencies: ConsolesDependencies) {
       for (const [index, statement] of statements.entries()) {
         const sql = firstLine(statement.sql);
         patch(id, { flash: { from: statement.from, to: statement.to, seq: ++flashes } });
+        const ended = started(id, statement.sql);
         const startedAt = dependencies.now();
         try {
           cursorsClosed(id);
@@ -352,6 +415,7 @@ export function createConsolesStore(dependencies: ConsolesDependencies) {
             sql: statement.sql,
           });
           const elapsed = dependencies.now() - startedAt;
+          ended({ durationMs: elapsed, outcome: "success", rowCount: rowsOf(executed), message: null });
           log(id, { sql, message: executedText(executed, elapsed, statement.kind), tone: "success" });
           const current = get().consoles[id];
           if (current === undefined) return "cancelled";
@@ -377,6 +441,7 @@ export function createConsolesStore(dependencies: ConsolesDependencies) {
           }
         } catch (cause) {
           const error = toError(cause);
+          ended(failureEnd(error, dependencies.now() - startedAt));
           const cancelled = error.code === "cancelled";
           if (cancelled) log(id, { sql, message: "Cancelled", tone: "warning" });
           else logError(id, sql, error);
@@ -464,6 +529,17 @@ export function createConsolesStore(dependencies: ConsolesDependencies) {
         if (current === undefined) return;
         if (current.selection.from === selection.from && current.selection.to === selection.to) return;
         patch(id, { selection });
+      },
+
+      insert(id, text) {
+        if (get().consoles[id] === undefined) return;
+        flashes += 1;
+        patch(id, { insertion: { text, seq: flashes } });
+      },
+
+      inserted(id, seq) {
+        if (get().consoles[id]?.insertion?.seq !== seq) return;
+        patch(id, { insertion: null });
       },
 
       jumpTo(id, span) {
@@ -578,6 +654,8 @@ export function createConsolesStore(dependencies: ConsolesDependencies) {
         const startedAt = dependencies.now();
         patch(id, { status: "running", error: null });
         let outcome: RunOutcome;
+        let ended: ((end: ExecutionEnd) => void) | null = null;
+        let statementStartedAt = startedAt;
         try {
           const [statement] = await client.call("script.split", { text: tab.sql });
           if (statement !== undefined && statement.destructive !== null && !(await confirmDestructive([statement]))) {
@@ -585,12 +663,17 @@ export function createConsolesStore(dependencies: ConsolesDependencies) {
             outcome = "cancelled";
           } else {
             cursorsClosed(id);
+            ended = started(id, tab.sql);
+            statementStartedAt = dependencies.now();
             const { transactionOpen, ...executed } = await client.call("statement.execute", {
               sessionId,
               sql: tab.sql,
             });
             const kind = statement?.kind ?? "read";
-            log(id, { sql, message: executedText(executed, dependencies.now() - startedAt, kind), tone: "success" });
+            const elapsed = dependencies.now() - statementStartedAt;
+            ended({ durationMs: elapsed, outcome: "success", rowCount: rowsOf(executed), message: null });
+            ended = null;
+            log(id, { sql, message: executedText(executed, elapsed, kind), tone: "success" });
             const latest = resultOf(id, resultId);
             if (latest === undefined) {
               void client.call("result.release", { handle: executed.handle }).catch(() => undefined);
@@ -619,6 +702,7 @@ export function createConsolesStore(dependencies: ConsolesDependencies) {
           }
         } catch (cause) {
           const error = toError(cause);
+          ended?.(failureEnd(error, dependencies.now() - statementStartedAt));
           if (error.code === "cancelled") log(id, { sql, message: "Cancelled", tone: "warning" });
           else logError(id, sql, error);
           patch(id, { error, activeResult: OUTPUT_TAB });
@@ -697,6 +781,11 @@ export const useConsoles = createConsolesStore({
   now: () => performance.now(),
   confirmDestructive: askDestructive,
   onDdl: (datasourceId) => void useCatalog.getState().refreshCached(datasourceId),
+  executions: {
+    start: (tabId, start) => useExecutions.getState().start(tabId, start),
+    finish: (tabId, executionId, end) => useExecutions.getState().finish(tabId, executionId, end),
+  },
+  record: (entry) => history.record(entry),
 });
 
 /** The consoles open on a datasource, by console id. */

@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, type KeyboardEvent } from "react";
 import { ACTION_IDS } from "@table-craft/desktop/renderer/actions/appActions.js";
 import { currentPlatform, formatChord } from "@table-craft/desktop/renderer/actions/chords.js";
 import { DDL_ACTION_IDS } from "@table-craft/desktop/renderer/actions/ddlActions.js";
+import { HISTORY_ACTION_IDS } from "@table-craft/desktop/renderer/actions/historyActions.js";
 import { invoke, registry, useActionEnabled } from "@table-craft/desktop/renderer/actions/index.js";
 import { TABLE_ACTION_IDS } from "@table-craft/desktop/renderer/actions/tableActions.js";
 import type { OpenTableArgs } from "@table-craft/desktop/renderer/actions/tableCommands.js";
@@ -68,6 +69,8 @@ const TOOLBAR_ACTIONS = [
 ] as const;
 const DATASOURCE_MENU = [
   ACTION_IDS.newConsole,
+  HISTORY_ACTION_IDS.show,
+  HISTORY_ACTION_IDS.reopen,
   ACTION_IDS.connect,
   ACTION_IDS.disconnect,
   ACTION_IDS.synchronize,

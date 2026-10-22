@@ -33,6 +33,9 @@ export const INVOKE_CHANNELS = {
   readConsole: "table-craft:consoles.read",
   writeConsole: "table-craft:consoles.write",
   deleteConsole: "table-craft:consoles.delete",
+  historyRecord: "table-craft:history.record",
+  historySearch: "table-craft:history.search",
+  historyClear: "table-craft:history.clear",
   answerClose: "table-craft:window.answer-close",
 } as const;
 
@@ -138,6 +141,38 @@ export interface EngineExited {
   readonly clean: boolean;
 }
 
+/** Mirrors core's `HISTORY_OUTCOMES` and `HISTORY_SOURCES` (decision 030). */
+export const HISTORY_OUTCOMES = ["success", "error", "cancelled"] as const;
+export type HistoryOutcome = (typeof HISTORY_OUTCOMES)[number];
+export const HISTORY_SOURCES = ["console", "table"] as const;
+export type HistorySource = (typeof HISTORY_SOURCES)[number];
+
+/** Mirrors core's `HistoryEntry`: one statement run, as the renderer saw it end. */
+export interface HistoryEntry {
+  readonly datasourceId: string;
+  readonly sql: string;
+  /** Epoch milliseconds. */
+  readonly startedAt: number;
+  readonly durationMs: number;
+  readonly outcome: HistoryOutcome;
+  /** Rows returned for a result set, rows affected otherwise; null when unknown. */
+  readonly rowCount: number | null;
+  /** The error's message for a failure. */
+  readonly message: string | null;
+  readonly source: HistorySource;
+}
+
+/** Mirrors core's `HistoryStatement`: every run of one exact text, described by its newest. */
+export interface HistoryStatement {
+  readonly sql: string;
+  readonly lastStartedAt: number;
+  readonly lastDurationMs: number;
+  readonly lastOutcome: HistoryOutcome;
+  readonly lastRowCount: number | null;
+  readonly lastMessage: string | null;
+  readonly runs: number;
+}
+
 /** A failure main can explain; anything else is a bug. */
 export interface BridgeFailure {
   readonly message: string;
@@ -172,6 +207,11 @@ export interface TableCraftBridge {
   readConsole(datasourceId: string, name: string): Promise<InvokeResult<string | null>>;
   writeConsole(datasourceId: string, name: string, text: string): Promise<InvokeResult<null>>;
   deleteConsole(datasourceId: string, name: string): Promise<InvokeResult<null>>;
+  /** Appends one run to the datasource's query history (decision 030). */
+  historyRecord(entry: HistoryEntry): Promise<InvokeResult<null>>;
+  /** The datasource's distinct statements containing `query`, case-insensitively, newest first. */
+  historySearch(datasourceId: string, query: string): Promise<InvokeResult<readonly HistoryStatement[]>>;
+  historyClear(datasourceId: string): Promise<InvokeResult<null>>;
   onDatasourcesChanged(listener: (list: DatasourceList) => void): () => void;
   onEngineExited(listener: (exited: EngineExited) => void): () => void;
   /** Calls `listener` with the action id of each native menu item picked; returns the unsubscribe. */

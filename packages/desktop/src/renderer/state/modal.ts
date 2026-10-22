@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import type { HistoryStatement } from "@table-craft/desktop/preload/bridge.js";
 
 /** A line of a confirmation's list: a statement and why it is listed, say. */
 export interface ModalItem {
@@ -60,11 +61,36 @@ export type ModalRequest =
       readonly highlight: string | null | undefined;
       readonly generate: (statement: string) => Promise<string>;
       readonly choices: readonly ModalChoice[];
+    }
+  | {
+      /**
+       * Query History (plan 011 decision 8): `search` answers as the field changes; resolves
+       * `pickerAnswer(choice, sql)` for a `HISTORY_CHOICES` choice.
+       */
+      readonly kind: "history";
+      readonly title: string;
+      readonly search: (query: string) => Promise<readonly HistoryStatement[]>;
+      readonly highlight: string | null | undefined;
+      /** `Insert` into the console it was opened from, or `Open in Console`. */
+      readonly restore: string;
+      /** Epoch milliseconds the dialog opened at; entries from that day show only their time. */
+      readonly now: number;
+    }
+  | {
+      /** Open Closed Console (plan 011 decision 14): resolves `pickerAnswer(choice, name)` for a `CLOSED_CONSOLE_CHOICES` choice. */
+      readonly kind: "closedConsoles";
+      readonly title: string;
+      readonly names: readonly string[];
+      readonly read: (name: string) => Promise<string>;
+      readonly highlight: string | null | undefined;
     };
+
+export const HISTORY_CHOICES = { restore: "restore", copy: "copy", clear: "clear" } as const;
+export const CLOSED_CONSOLE_CHOICES = { open: "open", delete: "delete" } as const;
 
 /**
  * Confirm and statements resolve "" when accepted; text resolves what was typed; choice resolves the chosen
- * id, generator its `generatorAnswer`; every kind resolves null on cancel.
+ * id, generator its `generatorAnswer`, the pickers their `pickerAnswer`; every kind resolves null on cancel.
  */
 export type ModalAnswer = string | null;
 
@@ -74,6 +100,9 @@ const GENERATOR_SEPARATOR = ":";
 export function generatorAnswer(choice: string, statement: string): string {
   return `${choice}${GENERATOR_SEPARATOR}${statement}`;
 }
+
+/** A picker's answer: the button chosen and the item it acts on. */
+export const pickerAnswer = generatorAnswer;
 
 export function parseGeneratorAnswer(answer: string): { readonly choice: string; readonly statement: string } {
   const at = answer.indexOf(GENERATOR_SEPARATOR);
@@ -114,3 +143,8 @@ export const useModal = create<ModalState>()((set, get) => ({
     pending?.resolve(answer);
   },
 }));
+
+export function parsePickerAnswer(answer: string): { readonly choice: string; readonly value: string } {
+  const { choice, statement } = parseGeneratorAnswer(answer);
+  return { choice, value: statement };
+}

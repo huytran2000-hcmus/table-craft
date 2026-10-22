@@ -10,6 +10,7 @@ import type {
   RowRange,
   SortKey,
 } from "@table-craft/desktop/engine/protocol.js";
+import type { HistoryEntry } from "@table-craft/desktop/preload/bridge.js";
 import type { EngineClient } from "@table-craft/desktop/renderer/engine/client.js";
 import { formatCell } from "@table-craft/desktop/renderer/grid/format.js";
 import { carriedLayout, type ColumnLayout } from "@table-craft/desktop/renderer/model/columnLayout.js";
@@ -31,6 +32,12 @@ import {
 } from "@table-craft/desktop/renderer/model/editBuffer.js";
 import { clampSelection, type GridSelection } from "@table-craft/desktop/renderer/model/gridSelection.js";
 import { useDatasources } from "@table-craft/desktop/renderer/state/datasources.js";
+import {
+  useExecutions,
+  type ExecutionEnd,
+  type ExecutionReporter,
+} from "@table-craft/desktop/renderer/state/executions.js";
+import { history } from "@table-craft/desktop/renderer/state/history.js";
 import { resultTabOf, rowAt, type ResultTab } from "@table-craft/desktop/renderer/state/resultTab.js";
 import { createResultWindows, toError } from "@table-craft/desktop/renderer/state/resultWindows.js";
 
@@ -158,6 +165,14 @@ export interface OpenTableOptions {
 
 export interface TablesDependencies {
   readonly connect: (datasourceId: string) => Promise<EngineClient>;
+  /** A monotonic clock for durations; defaults to `performance.now`. */
+  readonly now?: () => number;
+  /** Wall-clock time an execution started; defaults to `Date.now`. */
+  readonly clock?: () => number;
+  /** Hears each load, count and submit start and end, for Services (plan 011, decision 11). */
+  readonly executions?: ExecutionReporter;
+  /** Each submit that ran, for query history (plan 011, decision 6); must not throw. */
+  readonly record?: (entry: HistoryEntry) => void;
 }
 
 const EMPTY_CLAUSES: TableClauses = { where: "", orderBy: "" };
@@ -244,6 +259,22 @@ function newTable(target: TableTarget, where: string): TableSession {
   };
 }
 
+export const LOAD_LABEL = "Load rows";
+export const COUNT_LABEL = "Count rows";
+const SUBMIT_LABEL = "Submit changes";
+
+function submitLabel(statements: number): string {
+  return `Submit ${String(statements)} ${statements === 1 ? "statement" : "statements"}`;
+}
+
+/** A submit as one script that runs as it ran: each statement ends in `;`, one per line. */
+export function submittedScript(statements: readonly string[]): string {
+  return statements
+    .map((statement) => statement.trimEnd())
+    .map((statement) => (statement.endsWith(";") ? statement : `${statement};`))
+    .join("\n");
+}
+
 /** The footer notice after a submit. */
 function submittedText(statements: number): string {
   return `Submitted ${String(statements)} ${statements === 1 ? "statement" : "statements"}`;
@@ -251,6 +282,9 @@ function submittedText(statements: number): string {
 
 export function createTablesStore(dependencies: TablesDependencies) {
   const clients = new Map<string, EngineClient>();
+  const now = dependencies.now ?? (() => performance.now());
+  const clock = dependencies.clock ?? (() => Date.now());
+  const executions = dependencies.executions ?? { start: () => 0, finish: () => undefined };
   let resultIds = 0;
 
   return create<TablesState>()((set, get) => {
@@ -265,6 +299,22 @@ export function createTablesStore(dependencies: TablesDependencies) {
       const current = get().tables[id];
       if (current === undefined) return;
       set({ tables: { ...get().tables, [id]: { ...current, ...change } } });
+    }
+
+    /** Services lists the work now and finishes it with what `end` says; `durationMs` is filled in. */
+    function started(id: string, label: string, sql: string | null) {
+      const begun = now();
+      const executionId = executions.start(id, { label, sql, startedAt: clock() });
+      return (end: Omit<ExecutionEnd, "durationMs">): number => {
+        const durationMs = Math.max(0, Math.round(now() - begun));
+        executions.finish(id, executionId, { ...end, durationMs });
+        return durationMs;
+      };
+    }
+
+    function failed(error: EngineError): Omit<ExecutionEnd, "durationMs"> {
+      const cancelled = error.code === "cancelled";
+      return { outcome: cancelled ? "cancelled" : "error", rowCount: null, message: cancelled ? null : error.message };
     }
 
     function resultOf(id: string, resultId: string): ResultTab | undefined {
@@ -339,6 +389,7 @@ export function createTablesStore(dependencies: TablesDependencies) {
       if (session === null || current === undefined) return false;
       const { client, sessionId } = session;
       patch(id, { status: "loading", error: null, draft: clauses });
+      const ended = started(id, LOAD_LABEL, null);
       try {
         cursorClosed(id);
         const answer = await client.call("table.query", {
@@ -348,6 +399,7 @@ export function createTablesStore(dependencies: TablesDependencies) {
           where: clauses.where,
           orderBy: clauses.orderBy,
         });
+        ended({ outcome: "success", rowCount: answer.statement.rowCount, message: null, sql: answer.sql });
         const latest = get().tables[id];
         if (latest === undefined) return false;
         const previous = latest.result;
@@ -388,6 +440,7 @@ export function createTablesStore(dependencies: TablesDependencies) {
         return true;
       } catch (cause) {
         const error = toError(cause);
+        ended(failed(error));
         if (error.code === "statementFailed") patch(id, { queryError: error });
         else patch(id, { error });
         return false;
@@ -645,6 +698,8 @@ export function createTablesStore(dependencies: TablesDependencies) {
         if (current?.result == null || current.sessionId === null || client === undefined) return false;
         if (current.status !== "ready" || pendingCount(current.buffer) === 0) return false;
         patch(id, { status: "submitting", error: null });
+        const startedAt = clock();
+        const ended = started(id, SUBMIT_LABEL, null);
         try {
           cursorClosed(id);
           const submitted = await client.call("edits.submit", {
@@ -652,12 +707,28 @@ export function createTablesStore(dependencies: TablesDependencies) {
             handle: current.result.handle,
             edits: toEdits(current.buffer),
           });
+          const sql = submittedScript(submitted.statements);
+          const rowCount = submitted.rowsAffected;
+          const label = submitLabel(submitted.statements.length);
+          const durationMs = ended({ outcome: "success", rowCount, message: null, label, sql });
+          dependencies.record?.({
+            datasourceId: current.datasourceId,
+            sql,
+            startedAt,
+            durationMs,
+            outcome: "success",
+            rowCount,
+            message: null,
+            source: "table",
+          });
           patch(id, { status: settled(id), buffer: EMPTY_BUFFER, count: null });
           await get().query(id, current.applied);
           patch(id, { notice: submittedText(submitted.statements.length) });
           return true;
         } catch (cause) {
-          patch(id, { status: settled(id), error: toError(cause) });
+          const error = toError(cause);
+          ended(failed(error));
+          patch(id, { status: settled(id), error });
           return false;
         }
       },
@@ -665,6 +736,7 @@ export function createTablesStore(dependencies: TablesDependencies) {
       async countRows(id) {
         const current = get().tables[id];
         if (current === undefined) return;
+        const ended = started(id, COUNT_LABEL, null);
         try {
           const client = clients.get(id) ?? (await dependencies.connect(current.datasourceId));
           const count = await client.call("table.count", {
@@ -672,9 +744,12 @@ export function createTablesStore(dependencies: TablesDependencies) {
             relation: current.relation,
             where: current.applied.where,
           });
+          ended({ outcome: "success", rowCount: count, message: null });
           patch(id, { count, error: null });
         } catch (cause) {
-          patch(id, { error: toError(cause) });
+          const error = toError(cause);
+          ended(failed(error));
+          patch(id, { error });
         }
       },
 
@@ -701,6 +776,11 @@ export type TablesStore = ReturnType<typeof createTablesStore>;
 
 export const useTables = createTablesStore({
   connect: (datasourceId) => useDatasources.getState().connect(datasourceId),
+  executions: {
+    start: (tabId, start) => useExecutions.getState().start(tabId, start),
+    finish: (tabId, executionId, end) => useExecutions.getState().finish(tabId, executionId, end),
+  },
+  record: (entry) => history.record(entry),
 });
 
 /** The table tabs open on a datasource, by tab id. */

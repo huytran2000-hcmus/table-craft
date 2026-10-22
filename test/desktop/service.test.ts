@@ -1,5 +1,6 @@
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import { openQueryHistory } from "@table-craft/core";
 import { createConsoleFiles } from "@table-craft/desktop/main/consoleFiles.js";
 import { createDatasourceStore, DATASOURCES_FILE } from "@table-craft/desktop/main/datasources.js";
 import { createHostRegistry } from "@table-craft/desktop/main/hosts.js";
@@ -37,6 +38,7 @@ async function service(options: { ephemeral?: EphemeralDatasource; cipher?: Retu
   const changes: DatasourceList[] = [];
   let ids = 0;
   const hosts = createHostRegistry({ pluginRoots: [], dependencies, onExit: () => undefined });
+  const history = openQueryHistory(":memory:");
   const created = await createDatasourceService({
     store: createDatasourceStore({ directory: DIRECTORY, files }),
     secrets: await createSecretStore({ directory: DIRECTORY, files, cipher }),
@@ -45,9 +47,10 @@ async function service(options: { ephemeral?: EphemeralDatasource; cipher?: Retu
     ephemeral: options.ephemeral ?? null,
     newId: () => `id-${String(++ids)}`,
     consoles: createConsoleFiles({ directory: DIRECTORY, files }),
+    history,
     onChanged: (list) => changes.push(list),
   });
-  return { files, cipher, dependencies, changes, service: created };
+  return { files, cipher, dependencies, changes, history, service: created };
 }
 
 function saving(datasource: DatasourceDraft, password?: string): SaveDatasourceRequest {
@@ -205,6 +208,27 @@ describe("datasource service", () => {
 
     expect(await consoles.list(saved.id)).toEqual([]);
     expect(await consoles.list("other")).toEqual(["console"]);
+  });
+
+  it("givenDatasourceDeleted_whenSearched_thenEmpty", async () => {
+    const { history, service: datasources } = await service();
+    const saved = await datasources.save(saving(PG_DRAFT));
+    const run = {
+      sql: "SELECT 1",
+      startedAt: 1,
+      durationMs: 2,
+      outcome: "success",
+      rowCount: 1,
+      message: null,
+      source: "console",
+    } as const;
+    history.record({ ...run, datasourceId: saved.id });
+    history.record({ ...run, datasourceId: "other" });
+
+    await datasources.delete(saved.id);
+
+    expect(history.search(saved.id, "")).toEqual([]);
+    expect(history.search("other", "")).toHaveLength(1);
   });
 
   it("givenEphemeralDatasource_whenListed_thenFirstNeverSavedAndWithoutSecret", async () => {

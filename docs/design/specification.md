@@ -367,8 +367,8 @@ falls back to the default layout.
 Each console tab belongs to one datasource and owns a session on that datasource's engine; closing
 the tab sends `session.close`. The tab reads `console [name]`, and a datasource's colour tints its
 tabs and its console's border; a read-only one shows a lock. The Database tool window shows the
-datasource list (see Datasources and secrets); Services lists the open consoles as idle, running or
-failed with the last statement's duration. The status bar shows the active console's datasource,
+datasource list (see Datasources and secrets); Services is the session tree of the open console and
+table tabs with their recent executions (see Query history and Services). The status bar shows the active console's datasource,
 or the selected tree node's, as "pg · connected · PostgreSQL 17.4", or the connect error's message,
 and the namespace's last synchronization (see Database explorer) on the left, and a running
 indicator on the right; later plans add items to its slot list (`renderer/shell/statusItems.tsx`).
@@ -424,6 +424,13 @@ of the stores; a disabled action shows greyed and does not run.
 | `explorer.toggleSystemSchemas`           | Show System Schemas                   |          |                        |
 | `explorer.copyName`                      | Copy Qualified Name                   | `⌥⇧⌘C` ¹ | `Ctrl+Alt+Shift+C` ¹   |
 | `explorer.reveal`                        | Select in Database View               |          |                        |
+| `history.show`                           | Query History…                        | `⌥⌘E`    | `Ctrl+Alt+E`           |
+| `history.clear`                          | Clear Query History…                  |          |                        |
+| `console.reopen`                         | Open Closed Console…                  |          |                        |
+| `services.cancel`                        | Cancel Running Statement              |          |                        |
+| `services.clearExecutions`               | Clear Executions                      |          |                        |
+| `services.copySql`                       | Copy Execution SQL                    |          |                        |
+| `services.openInConsole`                 | Open Execution in Console             |          |                        |
 
 ¹ Only with focus in the Database tool window (`shortcutRegion`); elsewhere the key reaches the
 focused element. ² Only with focus in a result grid (region `grid`); in the editor and
@@ -447,7 +454,7 @@ run actions come first.
 The native menu is declared in `preload/menu.ts` and built by main: File (New Data Source…, New
 Console; Data Source Properties…, Disconnect, Synchronize; Close Tab),
 Edit (role), View (Tool Windows ▸ Database, Services; Hide All Tool Windows; Show System Schemas;
-Find Action…; Search
+Query History…, Open Closed Console…; Find Action…; Search
 Everywhere; Toggle Developer Tools), Window (role, macOS only), Help (Find Action…). An item shows its
 action's accelerator with `registerAccelerator: false` and, when clicked, sends the action id to
 the renderer on `table-craft:invoke-action`; main never decides whether an action is enabled.
@@ -580,7 +587,8 @@ A console on a saved datasource autosaves to `<userData>/consoles/<datasourceId>
 A new console takes the first free name of `console`, `console_1`, `console_2`…, counting files and
 open tabs. Closing a tab keeps its file unless the text is blank, which deletes it. Deleting a
 datasource deletes its console directory; the confirmation says how many files that is. Consoles on
-the `TABLE_CRAFT_DATASOURCE` datasource are not saved.
+the `TABLE_CRAFT_DATASOURCE` datasource are not saved. A closed console's file comes back through
+Open Closed Console… (see Query history and Services), which reopens it under its own name.
 
 The layout remembers the open console tabs (`openConsoles`: datasource id, name, which is active).
 At launch they reopen with their text and their datasource disconnected; the first Run connects, so
@@ -775,6 +783,55 @@ Go to DDL and the generator's CREATE need `ddl` (decision 007). The context menu
 the Database tool window reads Open Data, Go to DDL, Quick Documentation, SQL Generator…, New
 Console, then Synchronize and Copy Qualified Name; a column's starts with Quick Documentation.
 
+## Query history and Services
+
+Plan 011, decision 030. Main keeps the query history in `<userData>/history.sqlite`, opened with
+`node:sqlite` by core's `history/` (`openQueryHistory`): one table `entries` (`id`,
+`datasource_id`, `sql`, `started_at`, `duration_ms`, `outcome` success, error or cancelled,
+`row_count`, `message`, `source` console or table), `user_version` 1, WAL. A file that does not
+open as that schema is renamed `history.sqlite.corrupt-<ms>` and a fresh one is created. Each
+datasource keeps its newest `HISTORY_LIMIT = 10_000` entries; recording prunes the oldest. Search
+answers distinct statement texts, newest first, at most `HISTORY_SEARCH_LIMIT = 200`, each with its
+last start, duration, outcome, row count and message and how many times it ran; the query matches
+anywhere in the text, case-insensitively and literally (`%` and `_` are plain characters).
+Deleting a datasource clears its history, and its confirmation says so.
+
+The renderer records, fire-and-forget over `history.record`; a failed write is logged and the run
+goes on. Recorded: every statement a console runs (Run, Run All, Rerun) when it succeeds, fails or
+is cancelled, with the duration of the statement alone, its row count (rows retrieved, else rows
+affected) and the error's message. Not recorded: statements a failure skipped, a batch whose
+destructive confirmation was declined, `Nothing to run`, table loads and counts, and anything on the
+`TABLE_CRAFT_DATASOURCE` datasource. A successful table submit is one entry with source `table`
+whose text is its statements, each ending in `;`, one per line.
+
+Query History… (`⌥⌘E`) works on the active console's datasource or the selected one in the Database
+tool window, whose context menu lists it after New Console. The dialog is a `ListPicker`
+(`renderer/ui/ListPicker.tsx`): a search field over the statements, a list showing each one's
+outcome dot, first line, `×3` when it ran more than once, rows, duration and time (`13:28:57`
+today, else `2026-10-21 13:28`), and the selected statement in full in a read-only SQL view, with
+its error message above it. `↑`/`↓` move, Enter or Insert puts the statement at the console's
+caret, replacing the selection as one undo step, and focuses the editor; from the Database tool
+window the button reads Open in Console and opens a new console with the text. Copy puts it on the
+clipboard; Clear History… asks `Clear the query history of pg? This cannot be undone.` and shows
+the emptied list.
+
+Services is a tree (`renderer/model/servicesTree.ts`) with the Database tool window's keyboard
+model: each datasource with an open console or table tab and its connection state, under it one
+session per tab (console or table glyph, the tab's title, idle, running, failed or disconnected,
+the last run's duration), and under each session its last `EXECUTIONS_PER_SESSION = 50` executions,
+newest first, kept in the renderer for as long as the tab is open (`renderer/state/executions.ts`).
+An execution shows its outcome glyph, a spinner and the elapsed time ticking each second while it
+runs, its label (a console statement's first line, `Load rows`, `Count rows`, `Submit 2
+statements`), rows, duration and start time. Everything starts expanded; `No open sessions.` when
+there is nothing. Enter or a click on a session or execution activates its tab. A session's context
+menu holds Cancel Running Statement while a console runs and Clear Executions; an execution with
+SQL holds Copy Execution SQL and Open Execution in Console.
+
+Open Closed Console… (on a saved datasource, from its context menu, the palette or one of its
+consoles) lists the datasource's console files that no tab has open, by name, with the selected
+one's text in a read-only SQL view. Enter or Open reopens it as a tab under its own name; Delete…
+removes the file after a confirmation and shows the list again.
+
 ## Datasources and secrets
 
 Main owns the datasource list (decision 010) and every secret (decision 020). The renderer reads
@@ -841,13 +898,16 @@ request is parsed with Zod in main.
 | -------------------------- | -------------------------------- | -------------------------------------------------------------------- |
 | `datasources.list`         | none                             | `{ datasources, warning, encryption: { available, reason } }`        |
 | `datasources.save`         | `{ datasource, secrets }`        | the saved datasource                                                 |
-| `datasources.delete`       | `id`                             | `null`; stops its engine, clears its secrets, deletes its consoles   |
+| `datasources.delete`       | `id`                             | `null`; stops its engine, clears its secrets, consoles and history   |
 | `datasources.test`         | `{ datasource, secrets }`        | the probe result; stored secrets are merged in main                  |
 | `plugins.list`             | none                             | `{ id, name, unavailableReason, capabilities, fields, highlight }[]` |
 | `consoles.list`            | `datasourceId`                   | the saved console names, sorted                                      |
 | `consoles.read`            | `datasourceId`, `name`           | the text, or `null` when there is no file                            |
 | `consoles.write`           | `datasourceId`, `name`, `text`   | `null`; written atomically                                           |
 | `consoles.delete`          | `datasourceId`, `name`           | `null`; deleting a missing file is not an error                      |
+| `history.record`           | a `HistoryEntry`                 | `null`                                                               |
+| `history.search`           | `datasourceId`, `query`          | `HistoryStatement[]`, newest first                                   |
+| `history.clear`            | `datasourceId`                   | `null`                                                               |
 | `window.answer-close`      | `proceed`                        | `null`; closes the window, or finishes the quit (decision 024)       |
 | `engine.connect`           | `datasourceId`, typed `secrets?` | `connected`, `needsSecrets { keys }` or `failed`                     |
 | `engine.disconnect`        | `datasourceId`                   | `null` once the engine has exited                                    |
