@@ -332,15 +332,17 @@ describe.runIf(DATABASES_ENABLED)("completion and navigation live test", () => {
   );
 
   it(
-    "givenMysqlCaretOnCustomers_whenGoToDeclaration_thenTheDatabasePaneSelectsIt",
+    // A column, because Go to Declaration on a relation opens its DDL instead (plan 010).
+    "givenMysqlCaretOnCustomersEmail_whenGoToDeclaration_thenTheDatabasePaneSelectsIt",
     async () => {
       const page = await launch(MYSQL);
-      expect(await treeRow(page, "customers").count()).toBe(0);
+      const email = explorer(page).getByRole("treeitem", { name: /^email / });
+      expect(await email.count()).toBe(0);
 
-      await typeAt(page, "SELECT * FROM customers", "SELECT * FROM cust".length);
+      await typeAt(page, "SELECT email FROM customers", "SELECT em".length);
       await pressChord(page, "B");
 
-      await expect.poll(() => treeRow(page, "customers").getAttribute("aria-selected")).toBe("true");
+      await expect.poll(() => email.getAttribute("aria-selected")).toBe("true");
       await expect
         .poll(() => page.evaluate("document.activeElement?.closest('[aria-label=\"Database\"]') != null"))
         .toBe(true);

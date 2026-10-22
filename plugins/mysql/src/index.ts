@@ -26,6 +26,7 @@ import {
   SQL_FUNCTIONS,
   SQL_KEYWORDS,
   sqlCompleter,
+  sqlGenerator,
   sqlLiteral,
   sqlSplitter,
   transactionEffect,
@@ -35,7 +36,7 @@ import {
 import { mysqlIntrospector } from "./introspect.js";
 
 const PLUGIN_ID = "mysql";
-const CAPABILITIES: readonly Capability[] = ["sql", "cancel", "schemaTree", "transactions"];
+const CAPABILITIES: readonly Capability[] = ["sql", "cancel", "schemaTree", "transactions", "ddl"];
 
 /** What the mysql client accepts: `'\''`, `# comments`, `DELIMITER //` and `BEGIN … END` routine bodies. */
 const DIALECT: SqlDialectOptions = {
@@ -49,6 +50,9 @@ const LITERALS: SqlLiteralOptions = { backslashEscapes: true, bytes: (hex) => `X
 
 const quoteIdentifier = quoteIdentifierWith("`");
 
+const PLAIN_IDENTIFIER = /^[A-Za-z_][A-Za-z0-9_$]*$/;
+const KEYWORDS: readonly string[] = [...SQL_KEYWORDS, "STRAIGHT_JOIN", "REPLACE"];
+
 const language: SqlLanguage = {
   split: sqlSplitter(DIALECT),
   classify: (sql) => classifyTokens(sql, DIALECT),
@@ -59,10 +63,16 @@ const language: SqlLanguage = {
   ...sqlCompleter({
     dialect: DIALECT,
     identifierFolding: "none",
-    plainIdentifier: /^[A-Za-z_][A-Za-z0-9_$]*$/,
+    plainIdentifier: PLAIN_IDENTIFIER,
     quoteIdentifier,
-    keywords: [...SQL_KEYWORDS, "STRAIGHT_JOIN", "REPLACE"],
+    keywords: KEYWORDS,
     functions: [...SQL_FUNCTIONS, "concat", "date_format", "group_concat", "ifnull", "now"],
+  }),
+  ...sqlGenerator({
+    quoteIdentifier,
+    updateDefault: defaultKeyword,
+    plainIdentifier: PLAIN_IDENTIFIER,
+    keywords: KEYWORDS,
   }),
 };
 

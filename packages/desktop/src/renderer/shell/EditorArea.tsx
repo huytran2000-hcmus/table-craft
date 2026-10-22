@@ -5,12 +5,13 @@ import { REGION_ATTRIBUTE } from "@table-craft/desktop/renderer/actions/context.
 import { invoke, registry, useActionEnabled } from "@table-craft/desktop/renderer/actions/index.js";
 import { Console } from "@table-craft/desktop/renderer/console/Console.js";
 import { useConsoleDatasource } from "@table-craft/desktop/renderer/console/useConsoleDatasource.js";
+import { DdlView } from "@table-craft/desktop/renderer/ddl/DdlView.js";
 import { tabLabel } from "@table-craft/desktop/renderer/model/format.js";
 import { useDatasources } from "@table-craft/desktop/renderer/state/datasources.js";
-import { activeTab, useTabs, type Tab } from "@table-craft/desktop/renderer/state/tabs.js";
+import { activeTab, useTabs, type Tab, type TabKind } from "@table-craft/desktop/renderer/state/tabs.js";
 import { cn } from "@table-craft/desktop/renderer/ui/cn.js";
 import { TableEditor } from "@table-craft/desktop/renderer/table/TableEditor.js";
-import { CloseIcon, ConsoleIcon, ReadOnlyIcon, TableIcon } from "@table-craft/desktop/renderer/ui/icons.js";
+import { CloseIcon, ConsoleIcon, DdlIcon, ReadOnlyIcon, TableIcon } from "@table-craft/desktop/renderer/ui/icons.js";
 import { TINT_TAB } from "@table-craft/desktop/renderer/ui/tint.js";
 
 const TAB_MENU_ACTIONS = [ACTION_IDS.closeTab, ACTION_IDS.closeOtherTabs, ACTION_IDS.closeAllTabs] as const;
@@ -32,6 +33,13 @@ function TabMenuItem({ actionId, tabId }: { readonly actionId: string; readonly 
       )}
     </ContextMenu.Item>
   );
+}
+
+const TAB_ICONS = { console: ConsoleIcon, table: TableIcon, ddl: DdlIcon } as const satisfies Record<TabKind, unknown>;
+
+function TabIcon({ kind }: { readonly kind: TabKind }) {
+  const Icon = TAB_ICONS[kind];
+  return <Icon aria-hidden data-tab-kind={kind} className="size-icon" />;
 }
 
 function TabButton({ tab, active }: { readonly tab: Tab; readonly active: boolean }) {
@@ -58,11 +66,7 @@ function TabButton({ tab, active }: { readonly tab: Tab; readonly active: boolea
             className="flex items-center gap-cell outline-none"
             onClick={() => activate(tab.id)}
           >
-            {tab.kind === "table" ? (
-              <TableIcon aria-hidden className="size-icon" />
-            ) : (
-              <ConsoleIcon aria-hidden className="size-icon" />
-            )}
+            <TabIcon kind={tab.kind} />
             {label}
             {datasource?.readOnly === true ? (
               <ReadOnlyIcon aria-label="read-only" className="size-icon text-ink-muted" />
@@ -133,6 +137,8 @@ export function EditorArea() {
         <EmptyEditor />
       ) : active.kind === "table" ? (
         <TableEditor key={active.id} tableId={active.id} />
+      ) : active.kind === "ddl" ? (
+        <DdlView key={active.id} ddlId={active.id} />
       ) : (
         <Console key={active.id} consoleId={active.id} />
       )}

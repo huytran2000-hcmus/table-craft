@@ -1,6 +1,7 @@
 import type mysql from "mysql2";
 import {
   byName,
+  DefinitionNotFoundError,
   PluginError,
   type ColumnMeta,
   type ForeignKey,
@@ -23,6 +24,9 @@ const UNIQUE_KEY = "UNIQUE";
 const FOREIGN_KEY = "FOREIGN KEY";
 const PROCEDURE = "PROCEDURE";
 const DEFAULT_ACTION = "NO ACTION";
+/** The result columns `SHOW CREATE TABLE` and `SHOW CREATE VIEW` put the statement in. */
+const CREATE_TABLE_COLUMN = "Create Table";
+const CREATE_VIEW_COLUMN = "Create View";
 
 const NAMESPACES_SQL = `
   SELECT SCHEMA_NAME AS name, DATABASE() AS current
@@ -70,6 +74,9 @@ const ROUTINES_SQL = `
   SELECT ROUTINE_NAME AS name, ROUTINE_TYPE AS kind
   FROM information_schema.ROUTINES
   WHERE ROUTINE_SCHEMA = ?`;
+
+const RELATION_TYPE_SQL =
+  "SELECT TABLE_TYPE AS kind FROM information_schema.TABLES WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ?";
 
 /** information_schema hands some columns over in a binary collation, which mysql2 reads as bytes. */
 type Text = string | Buffer | null;
@@ -271,6 +278,22 @@ export function mysqlIntrospector(connection: mysql.Connection): Introspector {
         routines: byName(routinesByName.values()),
         sequences: [],
       };
+    },
+
+    /** `SHOW CREATE TABLE` or `SHOW CREATE VIEW` verbatim (decision 029), definer and counters included. */
+    async definition(path: readonly string[], name: string): Promise<string> {
+      const [database] = path;
+      const found =
+        path.length === 1 && database !== undefined
+          ? (await rows<{ kind: Text }>(RELATION_TYPE_SQL, [database, name]))[0]
+          : undefined;
+      if (found === undefined || database === undefined) throw new DefinitionNotFoundError(path, name);
+      const view = VIEW_TYPES.has(text(found.kind));
+      const qualified = [database, name].map(quote).join(".");
+      const shown = await rows<Record<string, Text>>(`SHOW CREATE ${view ? "VIEW" : "TABLE"} ${qualified}`);
+      const statement = text(shown[0]?.[view ? CREATE_VIEW_COLUMN : CREATE_TABLE_COLUMN] ?? null);
+      if (statement === "") throw new DefinitionNotFoundError(path, name);
+      return `${statement};`;
     },
 
     qualifiedName(path: readonly string[], name: string): string {

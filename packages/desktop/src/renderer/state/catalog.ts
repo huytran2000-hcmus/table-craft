@@ -30,6 +30,8 @@ export interface CatalogState {
   readonly expandDatasource: (datasourceId: string) => Promise<void>;
   /** Expands the namespace, describing it when it is a schema not read yet. */
   readonly expandNamespace: (datasourceId: string, namespace: Namespace) => Promise<void>;
+  /** Describes the schema at `path` unless it already is, without expanding anything. */
+  readonly ensureDescribed: (datasourceId: string, path: readonly string[]) => Promise<void>;
   /** Reads `path` again, or the namespace list when `path` is null or names a database. */
   readonly synchronize: (datasourceId: string, path: readonly string[] | null) => Promise<void>;
   /** Reads again the namespace list and every schema already described, after DDL (plan 006). */
@@ -175,6 +177,12 @@ export function createCatalogStore(dependencies: CatalogDependencies) {
         expand([namespaceKey(id, namespace.path)]);
         if (namespace.kind !== "schema" || catalogOf(id).namespaceStates[pathKey(namespace.path)] !== undefined) return;
         await describe(id, namespace.path, false);
+      },
+
+      async ensureDescribed(id, path) {
+        const state = catalogOf(id).namespaceStates[pathKey(path)];
+        if (state?.described != null || state?.loading === true) return;
+        await describe(id, path, false);
       },
 
       async synchronize(id, path) {

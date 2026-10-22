@@ -84,6 +84,11 @@ export interface DensityTokens {
   readonly dialogHeightPx: number;
   /** The datasource list inside it. */
   readonly dialogListWidthPx: number;
+  /** Quick Documentation's popover, at most this big; its columns list scrolls. */
+  readonly popoverWidthPx: number;
+  readonly popoverHeightPx: number;
+  /** The SQL Generator dialog. */
+  readonly generatorWidthPx: number;
 }
 
 export interface Appearance {
@@ -159,6 +164,9 @@ export const COMFORTABLE_DENSITY: DensityTokens = {
   dialogWidthPx: 880,
   dialogHeightPx: 580,
   dialogListWidthPx: 240,
+  popoverWidthPx: 480,
+  popoverHeightPx: 360,
+  generatorWidthPx: 640,
 };
 
 export const DEFAULT_APPEARANCE: Appearance = {

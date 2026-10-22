@@ -5,14 +5,15 @@ CREATE TABLE customers (
   id INT PRIMARY KEY,
   name VARCHAR(255) NOT NULL,
   email VARCHAR(255) NOT NULL UNIQUE
-);
+) COMMENT = 'People who place orders';
 
 CREATE TABLE orders (
   id INT PRIMARY KEY,
   customer_id INT NOT NULL,
   total DECIMAL(12, 2) NOT NULL,
   placed_at DATETIME NOT NULL,
-  FOREIGN KEY (customer_id) REFERENCES customers (id)
+  FOREIGN KEY (customer_id) REFERENCES customers (id),
+  CONSTRAINT orders_total_nonnegative CHECK (total >= 0)
 );
 
 CREATE INDEX orders_placed_at_idx ON orders (placed_at);

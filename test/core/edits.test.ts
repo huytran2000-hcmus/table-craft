@@ -25,6 +25,7 @@ import {
   defaultValuesInsert,
   quoteIdentifierWith,
   sqlCompleter,
+  sqlGenerator,
   sqlLiteral,
   sqlSplitter,
   classifyTokens,
@@ -45,6 +46,12 @@ const LANGUAGE: SqlLanguage = {
     quoteIdentifier: quoteIdentifierWith('"'),
     keywords: [],
     functions: [],
+  }),
+  ...sqlGenerator({
+    quoteIdentifier: quoteIdentifierWith('"'),
+    updateDefault: defaultKeyword,
+    plainIdentifier: /^[A-Za-z_][A-Za-z0-9_]*$/,
+    keywords: [],
   }),
 };
 

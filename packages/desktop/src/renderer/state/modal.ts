@@ -47,13 +47,49 @@ export type ModalRequest =
       readonly items?: readonly ModalItem[];
       /** Shown before Cancel, the first one focused. */
       readonly choices: readonly ModalChoice[];
+    }
+  | {
+      /**
+       * The SQL Generator (plan 010 decision 13): one statement kind at a time, previewed as
+       * `generate` answers it; resolves `generatorAnswer(button, statement)`.
+       */
+      readonly kind: "generator";
+      readonly title: string;
+      readonly statements: readonly ModalChoice[];
+      readonly initial: string;
+      readonly highlight: string | null | undefined;
+      readonly generate: (statement: string) => Promise<string>;
+      readonly choices: readonly ModalChoice[];
     };
 
 /**
- * Confirm and statements resolve "" when accepted; text resolves what was typed; choice resolves the chosen id;
- * every kind resolves null on cancel.
+ * Confirm and statements resolve "" when accepted; text resolves what was typed; choice resolves the chosen
+ * id, generator its `generatorAnswer`; every kind resolves null on cancel.
  */
 export type ModalAnswer = string | null;
+
+const GENERATOR_SEPARATOR = ":";
+
+/** A generator's answer: the button chosen and the statement showing when it was. */
+export function generatorAnswer(choice: string, statement: string): string {
+  return `${choice}${GENERATOR_SEPARATOR}${statement}`;
+}
+
+export function parseGeneratorAnswer(answer: string): { readonly choice: string; readonly statement: string } {
+  const at = answer.indexOf(GENERATOR_SEPARATOR);
+  return { choice: answer.slice(0, at), statement: answer.slice(at + GENERATOR_SEPARATOR.length) };
+}
+
+/** The radio group's arrow keys, as WAI-ARIA's radio group pattern moves them. */
+const STEP_KEYS: Readonly<Record<string, number>> = { ArrowLeft: -1, ArrowUp: -1, ArrowRight: 1, ArrowDown: 1 };
+
+/** The generator statement an arrow key moves to from `current`, wrapping; null for any other key. */
+export function steppedStatement(statements: readonly string[], current: string, key: string): string | null {
+  const step = STEP_KEYS[key];
+  if (step === undefined || statements.length === 0) return null;
+  const at = Math.max(statements.indexOf(current), 0);
+  return statements[(at + step + statements.length) % statements.length] ?? null;
+}
 
 interface Pending {
   readonly request: ModalRequest;

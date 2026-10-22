@@ -7,6 +7,9 @@ import {
   ArrowSquareOut,
   ArrowUUpLeft,
   FileSql,
+  FileCode,
+  Info,
+  Code,
   Funnel,
   Sigma,
   CheckCircle,
@@ -95,6 +98,7 @@ export {
   BracketsRound as CteIcon,
   Intersect as JoinIcon,
   TextT as KeywordIcon,
+  FileCode as DdlIcon,
 };
 
 /** The header's type glyph per column class (plan 007 decision 7); temporal reads as a date. */
@@ -145,4 +149,7 @@ export const ACTION_ICONS: Readonly<Record<ActionIcon, Icon>> = {
   goTo: ArrowSquareOut,
   referencing: ArrowBendDownRight,
   table: Table,
+  ddl: FileCode,
+  quickDoc: Info,
+  generate: Code,
 };

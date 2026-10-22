@@ -40,7 +40,10 @@ export interface Column {
 }
 
 /** Mirrors `Capability` in plugin-api. The renderer branches on these, never on a plugin id (decision 007). */
-export type Capability = "sql" | "cancel" | "schemaTree" | "transactions";
+export type Capability = "sql" | "cancel" | "schemaTree" | "transactions" | "ddl";
+
+/** What the SQL Generator writes: `create` is the relation's definition, the rest mirror `GeneratedStatement` in plugin-api. */
+export type GeneratorStatement = "create" | "drop" | "select" | "insert" | "update";
 
 /** Mirrors `StatementKind` in plugin-api. */
 export type StatementKind = "read" | "write" | "ddl" | "transaction" | "other";
@@ -417,6 +420,19 @@ export interface EngineCalls {
   /** `name` inside `path`, quoted by the plugin (decision 008). Needs `schemaTree`. */
   "catalog.qualifiedName": { params: { readonly path: readonly string[]; readonly name: string }; result: string };
   /**
+   * The statements that create relation `name`, read from the database on the introspection session
+   * and never cached (decision 029). Fails with `definitionNotFound` when it is gone. Needs `ddl`.
+   */
+  "catalog.definition": { params: { readonly path: readonly string[]; readonly name: string }; result: string };
+  /**
+   * A statement over relation `name` from the cached catalog, written by the plugin's language;
+   * `create` answers what `catalog.definition` does. Needs `sql`, and `ddl` for `create`.
+   */
+  "sql.generate": {
+    params: { readonly path: readonly string[]; readonly name: string; readonly statement: GeneratorStatement };
+    result: string;
+  };
+  /**
    * Opens `relation` in the table editor: `SELECT *` with the bars' clauses verbatim, run on the
    * session, plus its identity from the catalog cache (decision 026). Its result refuses local sort.
    */
@@ -497,6 +513,7 @@ export type EngineErrorCode =
   | "statementFailed"
   | "cancelled"
   | "introspectionFailed"
+  | "definitionNotFound"
   | "invalidRequest"
   | "editRejected"
   | "timedOut"

@@ -19,7 +19,7 @@ its own MessagePort (decision 002).
 
 A plugin is a directory with `table-craft-plugin.json` and an ESM entry exporting a
 `DatasourcePlugin` (decisions 005 to 008). The contract lives in `@table-craft/plugin-api`.
-`API_VERSION` is `0.8.0`; while it is `0.x` the contract is unstable and every minor is a break.
+`API_VERSION` is `0.9.0`; while it is `0.x` the contract is unstable and every minor is a break.
 
 ### Discovery
 
@@ -73,6 +73,7 @@ dialog lists every plugin, an unavailable one with its reason. A connection fiel
 | `transactions` | `Session.transactions` switches auto and manual commit, commits, rolls back     | manual insert then rollback leaves no row and `open` false, manual insert then commit is visible to a second session only after the commit, auto mode tracks an explicit `BEGIN`, switching to auto while open rejects `statementFailed` and stays open, commit and rollback with nothing open are no-ops                                                                                                                                                                                 |
 | `cancel`       | `Session.cancel` stops the running statement from another call                  | idle cancel is a no-op, a sleeping statement rejects `cancelled` well before it ends, the session runs the next statement                                                                                                                                                                                                                                                                                                                                                                 |
 | `schemaTree`   | `Session.introspector` lists namespaces, describes one, quotes a qualified name | the current namespace is marked, the fixture's tables and `customer_totals` view are described, `orders` has its foreign key and `orders_placed_at_idx`, `customers` has its primary and unique keys, an unknown namespace rejects `introspectionFailed`, `qualifiedName` quotes an awkward identifier, the session runs statements after introspecting                                                                                                                                   |
+| `ddl`          | `Introspector.definition` reads a relation's definition; requires `schemaTree`  | `definition` exists exactly when `ddl` is declared; `orders` has its columns, primary key, `orders_total_nonnegative` check and the foreign key naming `customers`; `customer_totals` has its query; `customers` carries its comment where the dialect has one; an unknown relation rejects `definitionNotFound` naming the path and relation                                                                                                                                             |
 
 Every plugin, whatever it declares, is checked for a valid schema; for its manifest's connection
 fields agreeing with `connectionSchema` (each field a key the schema accepts, every required key
@@ -84,16 +85,16 @@ staying usable.
 `runPluginContract(plugin, fixture)` from `@table-craft/plugin-api/testing` registers the cases for
 each declared capability (decision 013). The fixture carries what the suite cannot write portably:
 
-| Field                 | Meaning                                                                                                                                      |
-| --------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
-| `manifest`            | The plugin's parsed `table-craft-plugin.json`                                                                                                |
-| `config`              | A config for a database seeded from `test/db/schema/<dialect>.sql`                                                                           |
-| `wrongPasswordConfig` | Optional; the same database with a password it refuses                                                                                       |
-| `statements.sleep(s)` | Optional; a statement that sleeps `s` seconds, required to exercise `cancel`                                                                 |
-| `statements.write`    | Optional; an idempotent write (`TYPE_PROBE_WRITE`) for the read-only case                                                                    |
-| `typeProbe.expected`  | The `type_probe` rows as wire values; every dialect shares `test/support/typeProbe.ts`                                                       |
-| `catalog`             | Required with `schemaTree`: the fixture's namespace path, and an awkward identifier with its expected quoting (`quoted { name, qualified }`) |
-| `scripts`             | Optional; dialect scripts with the statements `split` must return (`SplitCase { text, statements }`), added to the shared ones               |
+| Field                 | Meaning                                                                                                                                                                                                                                                             |
+| --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `manifest`            | The plugin's parsed `table-craft-plugin.json`                                                                                                                                                                                                                       |
+| `config`              | A config for a database seeded from `test/db/schema/<dialect>.sql`                                                                                                                                                                                                  |
+| `wrongPasswordConfig` | Optional; the same database with a password it refuses                                                                                                                                                                                                              |
+| `statements.sleep(s)` | Optional; a statement that sleeps `s` seconds, required to exercise `cancel`                                                                                                                                                                                        |
+| `statements.write`    | Optional; an idempotent write (`TYPE_PROBE_WRITE`) for the read-only case                                                                                                                                                                                           |
+| `typeProbe.expected`  | The `type_probe` rows as wire values; every dialect shares `test/support/typeProbe.ts`                                                                                                                                                                              |
+| `catalog`             | Required with `schemaTree`: the fixture's namespace path, an awkward identifier with its expected quoting (`quoted { name, qualified }`), the name of `orders`' check (`ordersCheck`) and `customers`' expected comment (`customersComment`, null without comments) |
+| `scripts`             | Optional; dialect scripts with the statements `split` must return (`SplitCase { text, statements }`), added to the shared ones                                                                                                                                      |
 
 ### DatasourcePlugin and Session
 
@@ -113,7 +114,10 @@ interface SqlLanguage {
   literal(value: WireValue, columnType: string | null): string; // reads back as the same value
   emptyInsert(qualifiedTable: string): string; // a row of defaults: DEFAULT VALUES or () VALUES ()
   updateDefault(defaultExpression: string | null): string; // SET col = <this>: DEFAULT, or SQLite's expression
+  generate(statement: GeneratedStatement, relation: Relation, qualifiedName: string): string; // sqlGenerator
 }
+
+type GeneratedStatement = "drop" | "select" | "insert" | "update";
 
 interface ConnectOptions {
   readonly readOnly: boolean; // a guard against mistakes, not a security boundary (decision 011)
@@ -140,10 +144,16 @@ interface Introspector {
   namespaces(): Promise<readonly Namespace[]>; // sorted by name
   describe(path: readonly string[]): Promise<NamespaceCatalog>; // rejects `introspectionFailed`
   qualifiedName(path: readonly string[], name: string): string; // quoted as the dialect quotes
+  definition?(path: readonly string[], name: string): Promise<string>; // present exactly when `ddl` is declared
 }
 
 class PluginError extends Error {
-  readonly code: "cancelled" | "connectionFailed" | "statementFailed" | "introspectionFailed";
+  readonly code: "cancelled" | "connectionFailed" | "statementFailed" | "introspectionFailed" | "definitionNotFound";
+}
+
+class DefinitionNotFoundError extends PluginError {
+  readonly path: readonly string[];
+  readonly relation: string;
 }
 
 interface ExecuteResult {
@@ -211,7 +221,8 @@ materialized view with its comment, `columns` (`name`, `position`, `type` as the
 it, `nullable`, `default` as database text, `comment`, `autoIncrement`), `primaryKey`,
 `uniqueKeys`, `foreignKeys` (`target { path, relation, columns }`, `onDelete`, `onUpdate`) and
 `indexes` (`unique`, `primary`). Lists are sorted by name, columns by position. Triggers, checks,
-partitions, users and grants are not described. PostgreSQL describes a schema the user lacks
+partitions, users and grants are not described; a relation's definition shows them (DDL and SQL
+generation). PostgreSQL describes a schema the user lacks
 `USAGE` on as `introspectionFailed` ("permission denied for schema …"), since `pg_catalog` itself
 would answer. SQLite has no constraint names, so the plugin names keys as DataGrip does
 (`orders_pk`, `orders_customers_id_fk`).
@@ -290,6 +301,8 @@ handles belong to the port that created them and are released when it closes.
 | `catalog.namespaces`    | `refresh?`                                               | `Namespace[]`                                                                                                  |
 | `catalog.describe`      | `path`, `refresh?`                                       | `{ catalog, introspectedAt, elapsedMs }`                                                                       |
 | `catalog.qualifiedName` | `path`, `name`                                           | the plugin's quoting, e.g. `"public"."orders"`                                                                 |
+| `catalog.definition`    | `path`, `name`                                           | the relation's DDL text, read anew each time; needs `ddl`; see DDL and SQL generation                          |
+| `sql.generate`          | `path`, `name`, `statement`                              | `create`, `drop`, `select`, `insert` or `update` text for the relation; `create` is `catalog.definition`       |
 | `table.query`           | `sessionId`, `path`, `relation`, `where`, `orderBy`      | `TableQuery { statement, sql, editable, columns, foreignKeys, referencing }`; see Table data editor            |
 | `table.count`           | `path`, `relation`, `where`                              | the row count, read on a short-lived session of its own                                                        |
 | `table.orderBy`         | `terms: { name, direction }[]`                           | the ORDER BY text in the plugin's quoting, e.g. `"qty" DESC, "label"`                                          |
@@ -337,6 +350,7 @@ was unreadable. `hint` says what to do next.
 | `statementFailed`     | The database rejected the statement; the message is the driver's        |
 | `cancelled`           | `statement.cancel` stopped the statement                                |
 | `introspectionFailed` | The database refused to describe a namespace; the hint says Synchronize |
+| `definitionNotFound`  | `catalog.definition` named a relation the database no longer has        |
 | `timedOut`            | Test Connection got no answer within `PROBE_TIMEOUT_MS`                 |
 | `editRejected`        | Submit rolled back; `statementIndex` names the failing statement        |
 | `invalidRequest`      | The request did not parse, or asks a plugin for a capability it lacks   |
@@ -693,9 +707,73 @@ from, to }` (the `orders o` span, or the CTE's name), `{ kind: "relation", path,
 | `editor.openData`        | Open Data         | `F4`  | `F4`            | console editor |
 
 Go to Declaration on an alias or CTE moves the caret to its declaration and flashes it; on a
-relation or column it reveals the node in the Database tool window, expanding and describing the
-way there, and focuses the tree. Open Data opens the relation under the caret, through an alias,
-in a table tab. Both connect a disconnected console's datasource, being explicit commands.
+relation it opens the relation's DDL tab when the plugin declares `ddl` (DDL and SQL generation);
+on a column, or a relation without `ddl`, it reveals the node in the Database tool window, expanding
+and describing the way there, and focuses the tree. Open Data opens the relation under the caret,
+through an alias, in a table tab. Both connect a disconnected console's datasource, being explicit
+commands.
+
+## DDL and SQL generation
+
+Plan 010, decision 029. A relation's definition comes from the database, and the statements built
+around it come from the plugin's language over the cached catalog.
+
+`catalog.definition { path, name }` runs `Introspector.definition` on the introspection session and
+is never cached. Each statement ends in `;`, separated from the next by a blank line. An unknown
+relation answers `definitionNotFound`, whose hint says Synchronize.
+
+| Plugin     | Definition                                                                                                                                                                                                                                                                                                      |
+| ---------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| PostgreSQL | assembled: `CREATE TABLE` with `format_type` types, identity, generated and `pg_get_expr` defaults, then constraints (`pg_get_constraintdef`, p u f c x); `CREATE INDEX` for indexes backing no constraint; `pg_get_viewdef(oid, true)` for views and materialized views; `COMMENT ON` the relation and columns |
+| MySQL      | `SHOW CREATE TABLE` or `SHOW CREATE VIEW`, verbatim (`DEFINER`, `AUTO_INCREMENT=` included)                                                                                                                                                                                                                     |
+| SQLite     | `sqlite_master.sql` for the relation, then its explicit indexes' and triggers'                                                                                                                                                                                                                                  |
+
+`sql.generate { path, name, statement }` answers `create` with the definition, and `drop`, `select`,
+`insert` and `update` with `language.generate(statement, relation, qualifiedName)`, the relation
+read from the catalog cache and `qualifiedName` the introspector's. The built-ins spread
+`sqlGenerator({ quoteIdentifier, updateDefault, plainIdentifier, keywords })` from
+`@table-craft/plugin-api/sql`: one clause per line, columns in table order, column names quoted
+only when the completer would quote them.
+
+| Statement | Text for `orders` on PostgreSQL                                                                           |
+| --------- | --------------------------------------------------------------------------------------------------------- |
+| DROP      | `DROP TABLE "public"."orders";` (`DROP VIEW`, `DROP MATERIALIZED VIEW`); never `CASCADE`                  |
+| SELECT    | `SELECT id, customer_id, total, placed_at` / `FROM "public"."orders";`                                    |
+| INSERT    | every column but identity ones; each value the column's `updateDefault(default)`, else `NULL`             |
+| UPDATE    | `SET` every non-key column `= NULL`, `WHERE` each primary-key column `= NULL` (every column when keyless) |
+
+A generated UPDATE matches no row until edited, since `= NULL` is never true; the INSERT is the
+only statement that writes as it stands.
+
+A DDL tab (kind `ddl`, the DDL glyph, titled `orders [pg]`) is one per datasource, path and
+relation; opening it again focuses it. Its body is a read-only, highlighted SQL view with a toolbar:
+Refresh, Copy, Open in Console. It reads again whenever the renderer's catalog re-describes its
+namespace, as after DDL in a console. DDL tabs are not restored on relaunch.
+
+Quick Documentation is a popover (at most 480×360 px, scrolling) anchored at the selected tree row
+or at the caret, drawn from the renderer's catalog copy with no request of its own; F1 at a caret
+resolves the name with `navigation.resolve` (an alias resolves to its relation) and describes the
+namespace if the tree never did. A relation shows its kind, qualified name, comment, columns (name,
+type, `NOT NULL`, default, key marks), primary key, foreign keys out (→) and in (←), and indexes; a
+column its type and nullability, default, comment and the keys and indexes it is in. `Esc` or a
+click outside closes it.
+
+The SQL Generator is a modal on the selected relation: a radio group CREATE / DROP / SELECT /
+INSERT / UPDATE (CREATE only with `ddl`; SELECT chosen and focused; arrow keys move), a read-only
+preview, and Open in Console or Copy. Every switch sends `sql.generate`.
+
+| Action id           | Title               | macOS | Windows / Linux | Region                   |
+| ------------------- | ------------------- | ----- | --------------- | ------------------------ |
+| `ddl.open`          | Go to DDL           | `⌘B`  | `Ctrl+B`        | Database tool window     |
+| `catalog.quickDoc`  | Quick Documentation | `F1`  | `F1`            | Database, console editor |
+| `sql.generator`     | SQL Generator…      | `⌥⌘G` | `Ctrl+Alt+G`    | Database tool window     |
+| `ddl.refresh`       | Refresh DDL         |       |                 | DDL tab                  |
+| `ddl.copy`          | Copy DDL            |       |                 | DDL tab                  |
+| `ddl.openInConsole` | Open DDL in Console |       |                 | DDL tab                  |
+
+Go to DDL and the generator's CREATE need `ddl` (decision 007). The context menu of a relation in
+the Database tool window reads Open Data, Go to DDL, Quick Documentation, SQL Generator…, New
+Console, then Synchronize and Copy Qualified Name; a column's starts with Quick Documentation.
 
 ## Datasources and secrets
 

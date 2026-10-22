@@ -6,6 +6,7 @@ import { useCatalog } from "@table-craft/desktop/renderer/state/catalog.js";
 import { useConsoles } from "@table-craft/desktop/renderer/state/consoles.js";
 import { useDataSourcesDialog } from "@table-craft/desktop/renderer/state/dataSourcesDialog.js";
 import { useDatasources } from "@table-craft/desktop/renderer/state/datasources.js";
+import { useDdl } from "@table-craft/desktop/renderer/state/ddl.js";
 import { useLayout } from "@table-craft/desktop/renderer/state/layout.js";
 import { useModal } from "@table-craft/desktop/renderer/state/modal.js";
 import { usePalette } from "@table-craft/desktop/renderer/state/palette.js";
@@ -27,6 +28,7 @@ const STORES = [
   useConsoles,
   useDatasources,
   useCatalog,
+  useDdl,
   useLayout,
   usePalette,
   useDataSourcesDialog,

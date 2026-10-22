@@ -203,7 +203,7 @@ describe("engine", () => {
 
     expect(resultOf(response)).toMatchObject({
       pluginName: "SQLite",
-      capabilities: ["sql", "schemaTree", "transactions"],
+      capabilities: ["sql", "schemaTree", "transactions", "ddl"],
     });
   });
 
@@ -396,6 +396,73 @@ describe("engine catalog", () => {
     const response = await engine.connect().handle({ id: 6, type: "catalog.describe", path: [] });
 
     expect(response).toMatchObject({ id: 6, type: "engine.error", error: { code: "invalidRequest" } });
+  });
+
+  it("givenDdlDatasource_whenDefinitionRequested_thenReadsTheDatabaseEveryTime", async () => {
+    const { engine } = countingSqlite();
+    const connection = engine.connect();
+    const first = resultOf<string>(
+      await connection.handle({ id: 7, type: "catalog.definition", path: ["main"], name: "orders" }),
+    );
+    const sessionId = await openSession(connection);
+    await connection.handle({
+      id: 8,
+      type: "statement.execute",
+      sessionId,
+      sql: "CREATE INDEX orders_total_idx ON orders (total)",
+    });
+
+    const second = resultOf<string>(
+      await connection.handle({ id: 9, type: "catalog.definition", path: ["main"], name: "orders" }),
+    );
+
+    expect(first).toMatch(/^CREATE TABLE orders \(/);
+    expect(first).toContain("CREATE INDEX orders_placed_at_idx ON orders (placed_at);");
+    expect(second).toContain("CREATE INDEX orders_total_idx ON orders (total);");
+  });
+
+  it("givenUnknownRelation_whenDefinitionRequested_thenDefinitionNotFoundWithSynchronizeHint", async () => {
+    const { engine } = countingSqlite();
+
+    const response = await engine
+      .connect()
+      .handle({ id: 10, type: "catalog.definition", path: ["main"], name: "gone" });
+
+    expect(response).toMatchObject({ id: 10, type: "engine.error", error: { code: "definitionNotFound" } });
+    expect(response.type === "engine.error" && response.error.hint).toMatch(/Synchronize/);
+  });
+
+  it("givenGenerateRequest_whenAnswered_thenPluginWritesTheStatementFromTheCatalog", async () => {
+    const { engine } = countingSqlite();
+    const connection = engine.connect();
+
+    const select = await connection.handle({
+      id: 11,
+      type: "sql.generate",
+      path: ["main"],
+      name: "orders",
+      statement: "select",
+    });
+    const create = await connection.handle({
+      id: 12,
+      type: "sql.generate",
+      path: ["main"],
+      name: "customer_totals",
+      statement: "create",
+    });
+
+    expect(resultOf<string>(select)).toBe('SELECT id, customer_id, total, placed_at\nFROM "main"."orders";');
+    expect(resultOf<string>(create)).toMatch(/^CREATE VIEW customer_totals AS/);
+  });
+
+  it("givenUnknownStatement_whenGenerating_thenInvalidRequest", async () => {
+    const { engine } = countingSqlite();
+
+    const response = await engine
+      .connect()
+      .handle({ id: 13, type: "sql.generate", path: ["main"], name: "orders", statement: "delete" });
+
+    expect(response).toMatchObject({ id: 13, type: "engine.error", error: { code: "invalidRequest" } });
   });
 });
 

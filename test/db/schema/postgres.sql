@@ -4,11 +4,14 @@ CREATE TABLE customers (
   email TEXT NOT NULL UNIQUE
 );
 
+COMMENT ON TABLE customers IS 'People who place orders';
+
 CREATE TABLE orders (
   id INTEGER PRIMARY KEY,
   customer_id INTEGER NOT NULL REFERENCES customers (id),
   total NUMERIC(12, 2) NOT NULL,
-  placed_at TIMESTAMP NOT NULL
+  placed_at TIMESTAMP NOT NULL,
+  CONSTRAINT orders_total_nonnegative CHECK (total >= 0)
 );
 
 CREATE INDEX orders_placed_at_idx ON orders (placed_at);

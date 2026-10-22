@@ -51,6 +51,9 @@ export function appearanceVariables(appearance: Appearance): Readonly<Record<str
     "--tc-dialog-width": `${density.dialogWidthPx}px`,
     "--tc-dialog-height": `${density.dialogHeightPx}px`,
     "--tc-dialog-list-width": `${density.dialogListWidthPx}px`,
+    "--tc-popover-width": `${density.popoverWidthPx}px`,
+    "--tc-popover-height": `${density.popoverHeightPx}px`,
+    "--tc-generator-width": `${density.generatorWidthPx}px`,
   };
 }
 

@@ -1,5 +1,11 @@
 /** Failures the host tells apart; anything else a plugin throws is reported as `statementFailed`. */
-export const PLUGIN_ERROR_CODES = ["cancelled", "connectionFailed", "statementFailed", "introspectionFailed"] as const;
+export const PLUGIN_ERROR_CODES = [
+  "cancelled",
+  "connectionFailed",
+  "statementFailed",
+  "introspectionFailed",
+  "definitionNotFound",
+] as const;
 
 export type PluginErrorCode = (typeof PLUGIN_ERROR_CODES)[number];
 
@@ -24,4 +30,23 @@ export function isPluginError(error: unknown): error is PluginError {
   if (!(error instanceof Error) || error.name !== "PluginError") return false;
   const code: unknown = (error as { code?: unknown }).code;
   return PLUGIN_ERROR_CODES.some((known) => known === code);
+}
+
+/**
+ * `Introspector.definition` asked for a relation the database does not have, usually one dropped
+ * or renamed since the catalog was read (decision 029). Coded `definitionNotFound`, so the host
+ * recognises it with `isPluginError` across plugin bundles.
+ */
+export class DefinitionNotFoundError extends PluginError {
+  constructor(
+    readonly path: readonly string[],
+    readonly relation: string,
+    options?: ErrorOptions,
+  ) {
+    super(
+      "definitionNotFound",
+      `There is no relation ${relation} in ${path.join(".")}; synchronize the data source to see what it holds now.`,
+      options,
+    );
+  }
 }

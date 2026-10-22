@@ -6,6 +6,7 @@ import {
   type ConsoleFileAccess,
 } from "@table-craft/desktop/renderer/state/consoleFiles.js";
 import { consolesOf, openTransactions, useConsoles } from "@table-craft/desktop/renderer/state/consoles.js";
+import { useDdl } from "@table-craft/desktop/renderer/state/ddl.js";
 import { datasourceById, useDatasources } from "@table-craft/desktop/renderer/state/datasources.js";
 import { useLayout } from "@table-craft/desktop/renderer/state/layout.js";
 import { useModal } from "@table-craft/desktop/renderer/state/modal.js";
@@ -151,7 +152,8 @@ export async function closeTabs(ids: readonly string[], close: () => readonly Ta
   if (!(await settleTransactions(ids, "close"))) return;
   for (const tab of close()) {
     if (tab.kind === "console") useConsoles.getState().close(tab.id);
-    else useTables.getState().close(tab.id);
+    else if (tab.kind === "table") useTables.getState().close(tab.id);
+    else useDdl.getState().close(tab.id);
   }
 }
 

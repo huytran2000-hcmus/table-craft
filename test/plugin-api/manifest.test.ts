@@ -37,6 +37,13 @@ describe("pluginManifestSchema", () => {
     expect(result.success).toBe(false);
   });
 
+  it("givenDdlWithoutSchemaTree_whenParsed_thenFails", () => {
+    expect(pluginManifestSchema.safeParse({ ...VALID_MANIFEST, capabilities: ["sql", "ddl"] }).success).toBe(false);
+    expect(
+      pluginManifestSchema.safeParse({ ...VALID_MANIFEST, capabilities: ["sql", "schemaTree", "ddl"] }).success,
+    ).toBe(true);
+  });
+
   it("givenNonSemverApiVersion_whenParsed_thenFails", () => {
     const result = pluginManifestSchema.safeParse({ ...VALID_MANIFEST, apiVersion: "latest" });
     expect(result.success).toBe(false);

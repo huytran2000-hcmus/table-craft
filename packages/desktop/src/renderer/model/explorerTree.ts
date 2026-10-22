@@ -230,8 +230,23 @@ export function columnRevealKeys(
   return [
     ...revealKeys(datasourceId, path, relation),
     catalogKey(datasourceId, "relationGroup", path, relation.name, "columns"),
-    catalogKey(datasourceId, "column", path, relation.name, column),
+    columnKey(datasourceId, path, relation.name, column),
   ];
+}
+
+export function columnKey(datasourceId: string, path: readonly string[], relation: string, column: string): string {
+  return catalogKey(datasourceId, "column", path, relation, column);
+}
+
+const COLUMN_NAME_PART = 4;
+
+/** The column a column node's key names, or null for any other key. */
+export function columnNameOf(key: string): string | null {
+  if (!key.startsWith(`${CATALOG_KEY_PREFIX}[`)) return null;
+  const parts: unknown = JSON.parse(key.slice(CATALOG_KEY_PREFIX.length));
+  if (!Array.isArray(parts) || parts[1] !== "column") return null;
+  const name: unknown = parts[COLUMN_NAME_PART];
+  return typeof name === "string" ? name : null;
 }
 
 function isPrefix(prefix: readonly string[], path: readonly string[]): boolean {

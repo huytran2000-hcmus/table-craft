@@ -10,7 +10,8 @@ CREATE TABLE orders (
   id INTEGER PRIMARY KEY,
   customer_id INTEGER NOT NULL REFERENCES customers (id),
   total TEXT NOT NULL,
-  placed_at TEXT NOT NULL
+  placed_at TEXT NOT NULL,
+  CONSTRAINT orders_total_nonnegative CHECK (total >= 0)
 );
 
 CREATE INDEX orders_placed_at_idx ON orders (placed_at);

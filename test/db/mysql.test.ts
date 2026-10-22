@@ -24,5 +24,7 @@ runPluginContract(mysql, {
     path: ["table_craft"],
     quoted: { name: "odd `name`", qualified: "`table_craft`.`odd ``name```" },
     lineItems: "`Line Items`",
+    ordersCheck: "orders_total_nonnegative",
+    customersComment: "People who place orders",
   },
 });

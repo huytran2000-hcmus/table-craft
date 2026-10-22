@@ -21,6 +21,7 @@ import { useEffect, useRef } from "react";
 import { ACTION_IDS } from "@table-craft/desktop/renderer/actions/appActions.js";
 import { currentPlatform, formatChord } from "@table-craft/desktop/renderer/actions/chords.js";
 import { registry } from "@table-craft/desktop/renderer/actions/index.js";
+import { trackEditor } from "@table-craft/desktop/renderer/console/caretAnchor.js";
 import { completion, connectedEngine } from "@table-craft/desktop/renderer/console/completionSource.js";
 import { EDITOR_THEME, FLASH_CLASS } from "@table-craft/desktop/renderer/console/editorTheme.js";
 import { useConsoleDatasource } from "@table-craft/desktop/renderer/console/useConsoleDatasource.js";
@@ -166,9 +167,11 @@ export function Editor({ consoleId }: { readonly consoleId: string }) {
       }),
     });
     viewRef.current = view;
+    const untrack = trackEditor(consoleId, view);
     // Each tab mounts its own console, so focus follows the tab the user just chose.
     view.focus();
     return () => {
+      untrack();
       view.destroy();
       viewRef.current = null;
     };

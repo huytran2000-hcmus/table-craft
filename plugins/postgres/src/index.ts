@@ -26,6 +26,7 @@ import {
   SQL_FUNCTIONS,
   SQL_KEYWORDS,
   sqlCompleter,
+  sqlGenerator,
   sqlLiteral,
   sqlSplitter,
   transactionEffect,
@@ -35,7 +36,7 @@ import {
 import { postgresIntrospector } from "./introspect.js";
 
 const PLUGIN_ID = "postgres";
-const CAPABILITIES: readonly Capability[] = ["sql", "cancel", "schemaTree", "transactions"];
+const CAPABILITIES: readonly Capability[] = ["sql", "cancel", "schemaTree", "transactions", "ddl"];
 
 /** Function bodies live in dollar quotes; `BEGIN ATOMIC … END` holds a SQL-standard body. */
 const DIALECT: SqlDialectOptions = { dollarQuotes: true, nestedBlockComments: true, blockKeywords: ["BEGIN"] };
@@ -43,6 +44,10 @@ const DIALECT: SqlDialectOptions = { dollarQuotes: true, nestedBlockComments: tr
 const LITERALS: SqlLiteralOptions = { backslashEscapes: false, bytes: (hex) => `'\\x${hex}'::bytea` };
 
 const quoteIdentifier = quoteIdentifierWith('"');
+
+/** An upper-case letter would fold away unquoted, so only lower case reads back as written. */
+const PLAIN_IDENTIFIER = /^[a-z_][a-z0-9_$]*$/;
+const KEYWORDS: readonly string[] = [...SQL_KEYWORDS, "ILIKE", "LATERAL", "RETURNING"];
 
 const language: SqlLanguage = {
   split: sqlSplitter(DIALECT),
@@ -54,11 +59,16 @@ const language: SqlLanguage = {
   ...sqlCompleter({
     dialect: DIALECT,
     identifierFolding: "lower",
-    // An upper-case letter would fold away unquoted, so only lower case reads back as written.
-    plainIdentifier: /^[a-z_][a-z0-9_$]*$/,
+    plainIdentifier: PLAIN_IDENTIFIER,
     quoteIdentifier,
-    keywords: [...SQL_KEYWORDS, "ILIKE", "LATERAL", "RETURNING"],
+    keywords: KEYWORDS,
     functions: [...SQL_FUNCTIONS, "array_agg", "now", "string_agg", "to_char"],
+  }),
+  ...sqlGenerator({
+    quoteIdentifier,
+    updateDefault: defaultKeyword,
+    plainIdentifier: PLAIN_IDENTIFIER,
+    keywords: KEYWORDS,
   }),
 };
 

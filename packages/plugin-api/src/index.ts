@@ -24,7 +24,13 @@ export {
   type IncomingForeignKey,
   type ResolveRequest,
 } from "./completion.js";
-export { isPluginError, PLUGIN_ERROR_CODES, PluginError, type PluginErrorCode } from "./errors.js";
+export {
+  DefinitionNotFoundError,
+  isPluginError,
+  PLUGIN_ERROR_CODES,
+  PluginError,
+  type PluginErrorCode,
+} from "./errors.js";
 export {
   CONNECTION_FIELD_GROUPS,
   CONNECTION_FIELD_KINDS,
@@ -43,6 +49,8 @@ export {
   type ConnectOptions,
   type DatasourcePlugin,
   type ExecuteResult,
+  GENERATED_STATEMENTS,
+  type GeneratedStatement,
   type Row,
   type Session,
   type SqlLanguage,

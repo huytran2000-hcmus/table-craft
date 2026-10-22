@@ -1,5 +1,5 @@
 import type { z } from "zod";
-import type { Introspector } from "./catalog.js";
+import type { Introspector, Relation } from "./catalog.js";
 import type {
   CompletionCatalog,
   CompletionRequest,
@@ -13,9 +13,14 @@ import type { WireValue } from "./values.js";
  * What a plugin can do. The UI branches on these, never on a plugin id (decision 007), and a
  * capability without contract-suite coverage cannot be declared (decision 013).
  */
-export const CAPABILITIES = ["sql", "cancel", "schemaTree", "transactions"] as const;
+export const CAPABILITIES = ["sql", "cancel", "schemaTree", "transactions", "ddl"] as const;
 
 export type Capability = (typeof CAPABILITIES)[number];
+
+/** Statements `SqlLanguage.generate` writes from a catalog relation (plan 010). */
+export const GENERATED_STATEMENTS = ["drop", "select", "insert", "update"] as const;
+
+export type GeneratedStatement = (typeof GENERATED_STATEMENTS)[number];
 
 export interface Column {
   readonly name: string;
@@ -106,6 +111,13 @@ export interface SqlLanguage {
   complete(request: CompletionRequest, catalog: CompletionCatalog): Promise<CompletionResult>;
   /** Where the name at the caret was declared; null when it names nothing the scope or catalog knows. */
   resolve(request: ResolveRequest, catalog: CompletionCatalog): Promise<Declaration | null>;
+  /**
+   * A `statement` over `relation` for the SQL Generator (decision 029): one clause per line, columns
+   * in table order, names quoted only where needed; `qualifiedName` is what the introspector names
+   * the relation. A generated UPDATE matches no row until its `NULL`s are edited. `sqlGenerator` in
+   * `@table-craft/plugin-api/sql` implements it.
+   */
+  generate(statement: GeneratedStatement, relation: Relation, qualifiedName: string): string;
 }
 
 export const TRANSACTION_MODES = ["auto", "manual"] as const;

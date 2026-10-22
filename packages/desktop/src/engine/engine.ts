@@ -49,6 +49,7 @@ import type {
   EngineResponse,
   ExecutedStatement,
   ExportedResult,
+  GeneratorStatement,
   ProbeResult,
   ReferencingKey,
   RequestOf,
@@ -129,8 +130,14 @@ function statementFailed(cause: unknown, readOnly: boolean): EngineFailure {
 
 const INTROSPECTION_HINT = "Check that this user may read the schema, then choose Synchronize (⌥⌘Y) to try again.";
 
+const DEFINITION_HINT = "Choose Synchronize (⌥⌘Y) to see what the namespace holds now.";
+
 function introspectionFailed(cause: unknown): unknown {
-  if (!isPluginError(cause) || cause.code !== "introspectionFailed") return cause;
+  if (!isPluginError(cause)) return cause;
+  if (cause.code === "definitionNotFound") {
+    return new EngineFailure({ code: "definitionNotFound", message: cause.message, hint: DEFINITION_HINT });
+  }
+  if (cause.code !== "introspectionFailed") return cause;
   return new EngineFailure({ code: "introspectionFailed", message: cause.message, hint: INTROSPECTION_HINT });
 }
 
@@ -314,6 +321,36 @@ export function createEngine(options: EngineOptions, now: () => number = Date.no
       }
       return { relation, qualified: session.introspector?.qualifiedName(path, name) ?? name };
     });
+  }
+
+  /** Read afresh on every call, never from the cache (decision 029). */
+  function definitionOf(path: readonly string[], name: string): Promise<string> {
+    const { plugin } = loadedPlugin(options.plugins, options.datasource.pluginId);
+    if (!plugin.capabilities.includes("ddl")) {
+      throw new EngineFailure({
+        code: "invalidRequest",
+        message: "This datasource's plugin does not declare the ddl capability.",
+        hint: BUG_HINT,
+      });
+    }
+    return introspect(async ({ session }) => {
+      const introspector = session.introspector;
+      if (introspector?.definition === undefined) {
+        throw new EngineFailure({
+          code: "invalidRequest",
+          message: "This datasource's plugin declares ddl but its introspector has no definition.",
+          hint: BUG_HINT,
+        });
+      }
+      return introspector.definition(path, name);
+    });
+  }
+
+  async function generate(path: readonly string[], name: string, statement: GeneratorStatement): Promise<string> {
+    if (statement === "create") return definitionOf(path, name);
+    const language = sqlLanguage();
+    const { relation, qualified } = await relationOf(path, name);
+    return language.generate(statement, relation, qualified);
   }
 
   /** Foreign keys in every described namespace that target `path`.`name`. */
@@ -711,6 +748,8 @@ export function createEngine(options: EngineOptions, now: () => number = Date.no
       "catalog.describe": ({ path, refresh }) => introspect(({ cache }) => cache.describe(path, refresh)),
       "catalog.qualifiedName": ({ path, name }) =>
         introspect(({ session }) => session.introspector?.qualifiedName(path, name) ?? name),
+      "catalog.definition": ({ path, name }) => definitionOf(path, name),
+      "sql.generate": ({ path, name, statement }) => generate(path, name, statement),
       "completion.complete": ({ text, offset, scope }) =>
         complete(scope === undefined ? { text, offset } : { text, offset, scope }),
       "navigation.resolve": ({ text, offset }) => resolve({ text, offset }),

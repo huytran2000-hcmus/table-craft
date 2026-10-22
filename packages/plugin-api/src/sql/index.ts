@@ -15,3 +15,4 @@ export {
   sqlLiteral,
   type SqlLiteralOptions,
 } from "./literals.js";
+export { sqlGenerator, type GeneratorOptions } from "./generate.js";

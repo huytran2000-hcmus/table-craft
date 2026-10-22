@@ -141,7 +141,7 @@ function isOpenTableArgs(args: unknown): args is OpenTableArgs {
 }
 
 /** The relation the Database pane's selection is, as Open Data's argument. */
-function selectedRelation(context: ActionContext): OpenTableArgs | null {
+export function selectedRelation(context: ActionContext): OpenTableArgs | null {
   const { selection } = context;
   if (selection?.kind !== "catalog" || selection.name === null) return null;
   if (selection.key !== relationKey(selection.id, selection.path, selection.name)) return null;

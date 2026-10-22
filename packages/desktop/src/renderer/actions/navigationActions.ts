@@ -1,5 +1,6 @@
-import type { Declaration, RelationKind } from "@table-craft/desktop/engine/protocol.js";
+import type { Capability, Declaration, RelationKind } from "@table-craft/desktop/engine/protocol.js";
 import type { ActionContext } from "@table-craft/desktop/renderer/actions/context.js";
+import { openDdl } from "@table-craft/desktop/renderer/actions/ddlCommands.js";
 import { revealInDatabase } from "@table-craft/desktop/renderer/actions/explorerActions.js";
 import { defineAction, type AnyAction } from "@table-craft/desktop/renderer/actions/registry.js";
 import { openTable } from "@table-craft/desktop/renderer/actions/tableCommands.js";
@@ -16,14 +17,14 @@ export const NAVIGATION_ACTION_IDS = {
 /** A relation Go to Declaration or Open Data lands on. */
 type RelationDeclaration = Extract<Declaration, { kind: "relation" | "column" }>;
 
-interface Caret {
+export interface Caret {
   readonly consoleId: string;
   readonly datasourceId: string;
   readonly text: string;
   readonly offset: number;
 }
 
-function caretOf(context: ActionContext): Caret | null {
+export function caretOf(context: ActionContext): Caret | null {
   if (context.activeTab?.kind !== "console" || context.console === null) return null;
   return {
     consoleId: context.activeTab.id,
@@ -36,18 +37,30 @@ function caretOf(context: ActionContext): Caret | null {
 const inConsole = (context: ActionContext) => caretOf(context) !== null && context.capabilities.includes("sql");
 
 /** What the name at `offset` declares, asked of the engine; an explicit command may connect. */
-async function resolve(datasourceId: string, text: string, offset: number): Promise<Declaration | null> {
+export async function resolve(datasourceId: string, text: string, offset: number): Promise<Declaration | null> {
   const client = await useDatasources.getState().connect(datasourceId);
   return client.call("navigation.resolve", { text, offset });
 }
 
 /** The relation an alias stands for: what is declared at the alias declaration's start. */
-async function relationOf(caret: Caret, declaration: Declaration | null): Promise<RelationDeclaration | null> {
+export async function relationOf(caret: Caret, declaration: Declaration | null): Promise<RelationDeclaration | null> {
   if (declaration === null) return null;
   if (!("from" in declaration)) return declaration;
   if (declaration.kind === "cte") return null;
   const aliased = await resolve(caret.datasourceId, caret.text, declaration.from);
   return aliased?.kind === "relation" ? aliased : null;
+}
+
+/** Where Go to Declaration lands (plan 010 decision 9). */
+export type DeclarationTarget = "jump" | "ddl" | "reveal";
+
+/**
+ * An alias or CTE jumps to where the console declares it; a relation opens its DDL when the
+ * plugin can read definitions, else it is revealed, as a column always is.
+ */
+export function declarationTarget(declaration: Declaration, capabilities: readonly Capability[]): DeclarationTarget {
+  if ("from" in declaration) return "jump";
+  return declaration.kind === "relation" && capabilities.includes("ddl") ? "ddl" : "reveal";
 }
 
 /**
@@ -84,6 +97,10 @@ export const NAVIGATION_ACTIONS: readonly AnyAction[] = [
       if (declaration === null) return;
       if ("from" in declaration) {
         useConsoles.getState().jumpTo(caret.consoleId, { from: declaration.from, to: declaration.to });
+        return;
+      }
+      if (declarationTarget(declaration, context.capabilities) === "ddl") {
+        await openDdl({ datasourceId: caret.datasourceId, path: declaration.path, relation: declaration.relation });
         return;
       }
       const kind = await relationKind(caret.datasourceId, declaration.path, declaration.relation);

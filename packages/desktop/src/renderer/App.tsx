@@ -12,6 +12,7 @@ import { invoke, registry } from "@table-craft/desktop/renderer/actions/index.js
 import { installKeymap } from "@table-craft/desktop/renderer/actions/keymap.js";
 import { rememberOpenTables, restoreTables } from "@table-craft/desktop/renderer/actions/tableCommands.js";
 import { bridge } from "@table-craft/desktop/renderer/bridge.js";
+import { QuickDoc } from "@table-craft/desktop/renderer/catalog/QuickDoc.js";
 import { editorReservedChords } from "@table-craft/desktop/renderer/console/editorKeys.js";
 import { DataSourcesDialog } from "@table-craft/desktop/renderer/dialogs/DataSources.js";
 import { Modal } from "@table-craft/desktop/renderer/dialogs/Modal.js";
@@ -79,6 +80,7 @@ export function App() {
       <DataSourcesDialog />
       <SecretPrompt />
       <Modal />
+      <QuickDoc />
     </TooltipProvider>
   );
 }

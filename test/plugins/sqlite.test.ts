@@ -43,6 +43,8 @@ runPluginContract(sqlite, {
     path: ["main"],
     quoted: { name: 'odd "name"', qualified: '"main"."odd ""name"""' },
     lineItems: '"Line Items"',
+    ordersCheck: "orders_total_nonnegative",
+    customersComment: null,
   },
 });
 

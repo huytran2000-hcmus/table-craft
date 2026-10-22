@@ -1,6 +1,7 @@
 import type { DatabaseSync } from "node:sqlite";
 import {
   byName,
+  DefinitionNotFoundError,
   PluginError,
   type ColumnMeta,
   type ForeignKey,
@@ -38,6 +39,12 @@ const INDEXES_SQL = 'SELECT name, "unique", origin FROM pragma_index_list(?, ?)'
 const INDEX_PARTS_SQL = "SELECT name FROM pragma_index_info(?, ?) ORDER BY seqno";
 const FOREIGN_KEYS_SQL =
   'SELECT id, "table", "from", "to", on_update, on_delete FROM pragma_foreign_key_list(?, ?) ORDER BY id, seq';
+
+/** `sqlite_schema` keeps each object's statement as written; an index a constraint made has none. */
+const definedRelationSql = (schema: string): string =>
+  `SELECT sql FROM ${quote(schema)}.sqlite_master WHERE name = ? AND type IN ('table', 'view') AND sql IS NOT NULL`;
+const definedPartsSql = (schema: string): string =>
+  `SELECT sql FROM ${quote(schema)}.sqlite_master WHERE tbl_name = ? AND type IN ('index', 'trigger') AND sql IS NOT NULL ORDER BY type, name`;
 
 interface ColumnRow {
   readonly name: string;
@@ -176,6 +183,18 @@ export function sqliteIntrospector(database: DatabaseSync): Introspector {
           return [describeRelation(schema, row.name, kind)];
         });
         return { path: [schema], relations: byName(relations), routines: [], sequences: [] };
+      }),
+
+    definition: (path, name) =>
+      introspecting((): string => {
+        const [schema] = path;
+        const relation =
+          path.length === 1 && schema !== undefined && databases().includes(schema)
+            ? all<{ sql: string }>(definedRelationSql(schema), name)[0]
+            : undefined;
+        if (relation === undefined || schema === undefined) throw new DefinitionNotFoundError(path, name);
+        const parts = all<{ sql: string }>(definedPartsSql(schema), name);
+        return [relation, ...parts].map((part) => `${part.sql};`).join("\n\n");
       }),
 
     qualifiedName: (path, name) => [...path, name].map(quote).join("."),

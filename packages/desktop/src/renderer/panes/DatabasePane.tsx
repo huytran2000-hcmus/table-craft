@@ -3,6 +3,7 @@ import { useVirtualizer } from "@tanstack/react-virtual";
 import { useEffect, useMemo, useRef, type KeyboardEvent } from "react";
 import { ACTION_IDS } from "@table-craft/desktop/renderer/actions/appActions.js";
 import { currentPlatform, formatChord } from "@table-craft/desktop/renderer/actions/chords.js";
+import { DDL_ACTION_IDS } from "@table-craft/desktop/renderer/actions/ddlActions.js";
 import { invoke, registry, useActionEnabled } from "@table-craft/desktop/renderer/actions/index.js";
 import { TABLE_ACTION_IDS } from "@table-craft/desktop/renderer/actions/tableActions.js";
 import type { OpenTableArgs } from "@table-craft/desktop/renderer/actions/tableCommands.js";
@@ -80,6 +81,27 @@ const DATASOURCE_MENU = [
 const FOLDER_MENU = [ACTION_IDS.newDatasource, ACTION_IDS.newFolder] as const;
 const CATALOG_MENU = [
   TABLE_ACTION_IDS.openData,
+  ACTION_IDS.newConsole,
+  null,
+  ACTION_IDS.synchronize,
+  ACTION_IDS.copyName,
+  null,
+  ACTION_IDS.toggleSystemSchemas,
+] as const;
+const RELATION_MENU = [
+  TABLE_ACTION_IDS.openData,
+  DDL_ACTION_IDS.open,
+  DDL_ACTION_IDS.quickDoc,
+  DDL_ACTION_IDS.generator,
+  ACTION_IDS.newConsole,
+  null,
+  ACTION_IDS.synchronize,
+  ACTION_IDS.copyName,
+  null,
+  ACTION_IDS.toggleSystemSchemas,
+] as const;
+const COLUMN_MENU = [
+  DDL_ACTION_IDS.quickDoc,
   ACTION_IDS.newConsole,
   null,
   ACTION_IDS.synchronize,
@@ -182,6 +204,8 @@ function isSelected(selection: TreeSelection | null, row: ExplorerRow): boolean 
 function menuOf(node: ExplorerNode): readonly (string | null)[] {
   if (node.kind === "folder") return FOLDER_MENU;
   if (node.kind === "datasource") return DATASOURCE_MENU;
+  if (node.kind === "relation") return RELATION_MENU;
+  if (node.kind === "column") return COLUMN_MENU;
   return CATALOG_MENU;
 }
 

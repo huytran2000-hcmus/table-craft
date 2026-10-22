@@ -24,5 +24,7 @@ runPluginContract(postgres, {
     path: ["table_craft", "public"],
     quoted: { name: 'odd "name"', qualified: '"public"."odd ""name"""' },
     lineItems: '"Line Items"',
+    ordersCheck: "orders_total_nonnegative",
+    customersComment: "People who place orders",
   },
 });

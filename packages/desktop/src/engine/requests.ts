@@ -1,5 +1,5 @@
 import { EXTRACTOR_KINDS } from "@table-craft/core";
-import { TRANSACTION_MODES, z } from "@table-craft/plugin-api";
+import { GENERATED_STATEMENTS, TRANSACTION_MODES, z } from "@table-craft/plugin-api";
 import type { EngineRequest } from "@table-craft/desktop/engine/protocol.js";
 
 const requestId = z.number().int().nonnegative();
@@ -10,6 +10,7 @@ const index = z.number().int().nonnegative();
 const extractor = z.enum(EXTRACTOR_KINDS);
 const columns = z.array(index);
 const relation = z.string().min(1);
+const GENERATOR_STATEMENTS = ["create", ...GENERATED_STATEMENTS] as const;
 const cellInput = z.discriminatedUnion("kind", [
   z.strictObject({ kind: z.literal("text"), text: z.string() }),
   z.strictObject({ kind: z.literal("null") }),
@@ -91,6 +92,14 @@ export const engineRequestSchema = z.discriminatedUnion("type", [
     type: z.literal("catalog.qualifiedName"),
     path: namespacePath,
     name: z.string().min(1),
+  }),
+  z.strictObject({ id: requestId, type: z.literal("catalog.definition"), path: namespacePath, name: relation }),
+  z.strictObject({
+    id: requestId,
+    type: z.literal("sql.generate"),
+    path: namespacePath,
+    name: relation,
+    statement: z.enum(GENERATOR_STATEMENTS),
   }),
   z.strictObject({
     id: requestId,

@@ -25,6 +25,7 @@ import {
   SQL_FUNCTIONS,
   SQL_KEYWORDS,
   sqlCompleter,
+  sqlGenerator,
   sqlLiteral,
   sqlSplitter,
   transactionEffect,
@@ -35,7 +36,7 @@ import { sqliteIntrospector } from "./introspect.js";
 
 const PLUGIN_ID = "sqlite";
 /** No `cancel`: node:sqlite runs a statement synchronously, so nothing could deliver the request. */
-const CAPABILITIES: readonly Capability[] = ["sql", "schemaTree", "transactions"];
+const CAPABILITIES: readonly Capability[] = ["sql", "schemaTree", "transactions", "ddl"];
 
 /** Trigger bodies are `BEGIN … END` and hold semicolons. */
 const DIALECT: SqlDialectOptions = { blockKeywords: ["BEGIN"] };
@@ -43,6 +44,11 @@ const DIALECT: SqlDialectOptions = { blockKeywords: ["BEGIN"] };
 const LITERALS: SqlLiteralOptions = { backslashEscapes: false, bytes: (hex) => `X'${hex}'` };
 
 const quoteIdentifier = quoteIdentifierWith('"');
+/** SQLite has no `DEFAULT` inside `SET`; `dflt_value` is the declared expression, valid SQL as written. */
+const updateDefault = (expression: string | null): string => expression ?? "NULL";
+
+const PLAIN_IDENTIFIER = /^[A-Za-z_][A-Za-z0-9_$]*$/;
+const KEYWORDS: readonly string[] = [...SQL_KEYWORDS, "GLOB", "PRAGMA"];
 
 const language: SqlLanguage = {
   split: sqlSplitter(DIALECT),
@@ -50,16 +56,16 @@ const language: SqlLanguage = {
   quoteIdentifier,
   literal: (value) => sqlLiteral(value, LITERALS),
   emptyInsert: defaultValuesInsert,
-  // SQLite has no `DEFAULT` inside `SET`; `dflt_value` is the declared expression, valid SQL as written.
-  updateDefault: (expression) => expression ?? "NULL",
+  updateDefault,
   ...sqlCompleter({
     dialect: DIALECT,
     identifierFolding: "none",
-    plainIdentifier: /^[A-Za-z_][A-Za-z0-9_$]*$/,
+    plainIdentifier: PLAIN_IDENTIFIER,
     quoteIdentifier,
-    keywords: [...SQL_KEYWORDS, "GLOB", "PRAGMA"],
+    keywords: KEYWORDS,
     functions: [...SQL_FUNCTIONS, "date", "datetime", "group_concat", "ifnull", "json_extract"],
   }),
+  ...sqlGenerator({ quoteIdentifier, updateDefault, plainIdentifier: PLAIN_IDENTIFIER, keywords: KEYWORDS }),
 };
 
 const BEGIN_SQL = "BEGIN";

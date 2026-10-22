@@ -2,8 +2,18 @@ import * as Dialog from "@radix-ui/react-dialog";
 import { useState } from "react";
 import { Button, CONTENT_CLASS, OVERLAY_CLASS, TextInput } from "@table-craft/desktop/renderer/dialogs/parts.js";
 import { useModal, type ModalItem, type ModalRequest } from "@table-craft/desktop/renderer/state/modal.js";
+import { SqlGenerator } from "@table-craft/desktop/renderer/dialogs/SqlGenerator.js";
 import { PreviewStatements } from "@table-craft/desktop/renderer/table/PreviewDialog.js";
 import { cn } from "@table-craft/desktop/renderer/ui/cn.js";
+
+const MODAL_WIDTHS: Readonly<Record<ModalRequest["kind"], string>> = {
+  confirm: "w-96",
+  text: "w-96",
+  notice: "w-96",
+  choice: "w-96",
+  statements: "w-[40rem]",
+  generator: "w-generator",
+};
 
 function Items({ items }: { readonly items: readonly ModalItem[] }) {
   return (
@@ -20,7 +30,7 @@ function Items({ items }: { readonly items: readonly ModalItem[] }) {
   );
 }
 
-function Body({ request }: { readonly request: ModalRequest }) {
+function Body({ request }: { readonly request: Exclude<ModalRequest, { kind: "generator" }> }) {
   const answer = useModal((state) => state.answer);
   const [text, setText] = useState(request.kind === "text" ? request.initial : "");
 
@@ -97,9 +107,13 @@ export function Modal() {
         <Dialog.Overlay className={OVERLAY_CLASS} />
         <Dialog.Content
           aria-describedby={undefined}
-          className={cn(CONTENT_CLASS, pending?.request.kind === "statements" ? "w-[40rem]" : "w-96", "max-w-[90vw]")}
+          className={cn(CONTENT_CLASS, MODAL_WIDTHS[pending?.request.kind ?? "confirm"], "max-w-[90vw]")}
         >
-          {pending === null ? null : <Body request={pending.request} />}
+          {pending === null ? null : pending.request.kind === "generator" ? (
+            <SqlGenerator request={pending.request} />
+          ) : (
+            <Body request={pending.request} />
+          )}
         </Dialog.Content>
       </Dialog.Portal>
     </Dialog.Root>

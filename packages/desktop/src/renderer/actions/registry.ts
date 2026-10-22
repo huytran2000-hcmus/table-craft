@@ -44,7 +44,10 @@ export type ActionIcon =
   | "filter"
   | "goTo"
   | "referencing"
-  | "table";
+  | "table"
+  | "ddl"
+  | "quickDoc"
+  | "generate";
 
 export interface Action<A = void> {
   readonly id: string;

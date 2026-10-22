@@ -1,11 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   CAPABILITIES,
+  DefinitionNotFoundError,
   isPluginError,
   z,
   type CompletionCatalog,
   type ConnectOptions,
   type DatasourcePlugin,
+  type GeneratedStatement,
   type PluginErrorCode,
   type PluginManifest,
   type Introspector,
@@ -52,6 +54,10 @@ export interface ContractFixture {
     readonly quoted: { readonly name: string; readonly qualified: string };
     /** `LINE_ITEMS_TABLE` as the dialect writes it in a statement, which completion must insert. */
     readonly lineItems: string;
+    /** The name `orders`' check constraint carries, which its definition must show. */
+    readonly ordersCheck: string;
+    /** `customers`' table comment; null where the dialect has no comments. */
+    readonly customersComment: string | null;
   };
 }
 
@@ -133,6 +139,10 @@ const EDIT_PROBE_DEFAULT_LABEL = "new";
 const MISSING_ROW_ID = -1;
 
 const MISSING_NAMESPACE = "table_craft_no_such_namespace";
+const MISSING_RELATION = "table_craft_no_such_relation";
+const ORDERS_INDEX = "orders_placed_at_idx";
+/** Created and dropped by the generated-DROP case. */
+const DROP_PROBE_TABLE = "table_craft_drop_probe";
 
 const PROBE_TABLE = "table_craft_contract_probe";
 const PROBE_ROWS = 2;
@@ -301,6 +311,15 @@ export function runPluginContract(plugin: DatasourcePlugin, fixture: ContractFix
     it("givenSession_whenInspected_thenHasIntrospectorExactlyWhenSchemaTreeDeclared", async () => {
       await withSession(plugin, fixture, (session) => {
         expect(session.introspector !== undefined).toBe(plugin.capabilities.includes("schemaTree"));
+        return Promise.resolve();
+      });
+    });
+
+    it("givenSession_whenInspected_thenHasDefinitionExactlyWhenDdlDeclared", async () => {
+      const ddl = plugin.capabilities.includes("ddl");
+      if (ddl) expect(plugin.capabilities).toContain("schemaTree");
+      await withSession(plugin, fixture, (session) => {
+        expect(session.introspector?.definition !== undefined).toBe(ddl);
         return Promise.resolve();
       });
     });
@@ -706,7 +725,7 @@ export function runPluginContract(plugin: DatasourcePlugin, fixture: ContractFix
       it("givenOrders_whenDescribed_thenIndexOrdersPlacedAtIdxIsListed", async () => {
         const orders = relation(await describeFixture(), "orders");
         expect(orders.indexes).toContainEqual({
-          name: "orders_placed_at_idx",
+          name: ORDERS_INDEX,
           columns: ["placed_at"],
           unique: false,
           primary: false,
@@ -715,6 +734,7 @@ export function runPluginContract(plugin: DatasourcePlugin, fixture: ContractFix
 
       it("givenCustomers_whenDescribed_thenIdIsPrimaryKeyAndEmailIsUnique", async () => {
         const customers = relation(await describeFixture(), "customers");
+        expect(customers.comment).toBe(catalogFixture().customersComment);
         expect(customers.primaryKey?.columns).toEqual(["id"]);
         expect(customers.uniqueKeys.map((key) => key.columns)).toEqual([["email"]]);
         expect(customers.columns.find((column) => column.name === "email")?.nullable).toBe(false);
@@ -827,6 +847,146 @@ export function runPluginContract(plugin: DatasourcePlugin, fixture: ContractFix
             const declaration = await language.resolve({ text, offset: text.indexOf("customers") + 2 }, catalog);
             expect(declaration).toEqual({ kind: "relation", path: expected.path, relation: "customers" });
           });
+        });
+      },
+    );
+
+    describe.runIf(plugin.capabilities.includes("ddl"))("ddl", () => {
+      function catalogFixture(): NonNullable<ContractFixture["catalog"]> {
+        if (fixture.catalog === undefined) throw new Error("A plugin that declares ddl needs fixture.catalog.");
+        return fixture.catalog;
+      }
+
+      async function definitionOf(name: string, path = catalogFixture().path): Promise<string> {
+        let definition = "";
+        await withSession(plugin, fixture, async (session) => {
+          const read = session.introspector?.definition?.bind(session.introspector);
+          if (read === undefined) throw new Error("A ddl session needs introspector.definition.");
+          definition = await read(path, name);
+        });
+        return definition;
+      }
+
+      it("givenTable_whenReadingDefinition_thenIncludesColumnsKeysAndCheck", async () => {
+        const definition = await definitionOf("orders");
+        for (const column of ["id", "customer_id", "total", "placed_at"]) expect(definition).toContain(column);
+        expect(definition).toMatch(/PRIMARY KEY/i);
+        expect(definition).toContain(catalogFixture().ordersCheck);
+        expect(definition).toMatch(/CHECK/i);
+        expect(definition).toContain(ORDERS_INDEX);
+        expect(definition.trimEnd().endsWith(";")).toBe(true);
+      });
+
+      it("givenTableWithForeignKey_whenReadingDefinition_thenNamesTarget", async () => {
+        expect(await definitionOf("orders")).toMatch(/REFERENCES\s+\S*customers\S*\s*\(\S*id\S*\)/i);
+      });
+
+      it("givenView_whenReadingDefinition_thenIncludesItsQuery", async () => {
+        const definition = await definitionOf("customer_totals");
+        expect(definition).toMatch(/CREATE\b[\s\S]*\bVIEW\b/i);
+        expect(definition).toMatch(/coalesce/i);
+        expect(definition).toMatch(/customers/);
+      });
+
+      it("givenCustomers_whenReadingDefinition_thenIncludesTheTableComment", async () => {
+        const comment = catalogFixture().customersComment;
+        const definition = await definitionOf("customers");
+        if (comment !== null) expect(definition).toContain(comment);
+        expect(definition).toContain("email");
+      });
+
+      it("givenUnknownRelation_whenReadingDefinition_thenDefinitionNotFound", async () => {
+        await withSession(plugin, fixture, async (session) => {
+          const pending = session.introspector?.definition?.(catalogFixture().path, MISSING_RELATION);
+          const failure: unknown = await pending?.catch((error: unknown) => error);
+          expect(isPluginError(failure) && failure.code).toBe("definitionNotFound");
+          expect(failure instanceof Error && failure.message).toContain(MISSING_RELATION);
+        });
+      });
+
+      it("givenDefinitionNotFoundError_whenConstructed_thenNamesPathAndRelation", () => {
+        const error = new DefinitionNotFoundError(catalogFixture().path, MISSING_RELATION);
+        expect(isPluginError(error)).toBe(true);
+        expect(error.message).toContain(catalogFixture().path.join("."));
+      });
+    });
+
+    describe.runIf(plugin.capabilities.includes("sql") && plugin.capabilities.includes("schemaTree"))(
+      "generate",
+      () => {
+        async function withGenerator(
+          use: (session: Session, generated: (statement: GeneratedStatement, name: string) => string) => Promise<void>,
+        ): Promise<void> {
+          const language = plugin.language;
+          if (language === undefined || fixture.catalog === undefined) {
+            throw new Error("A plugin that declares sql and schemaTree needs a language and fixture.catalog.");
+          }
+          const path = fixture.catalog.path;
+          await withSession(plugin, fixture, async (session) => {
+            const introspector = session.introspector;
+            if (introspector === undefined) throw new Error("A schemaTree session needs an introspector.");
+            const catalog = await introspector.describe(path);
+            await use(session, (statement, name) => {
+              const relation = catalog.relations.find((candidate) => candidate.name === name);
+              if (relation === undefined) throw new Error(`The fixture namespace has no relation ${name}.`);
+              const sql = language.generate(statement, relation, introspector.qualifiedName(path, name));
+              const spans = language.split(sql);
+              expect(spans).toHaveLength(1);
+              return spans[0]?.sql ?? "";
+            });
+          });
+        }
+
+        it("givenGeneratedSelect_whenExecuted_thenReturnsTheTablesColumns", async () => {
+          await withGenerator(async (session, generated) => {
+            const result = await session.execute(generated("select", LINE_ITEMS_TABLE));
+            await collect(result.rows);
+            expect(result.columns.map((column) => column.name)).toEqual(["id", "sku"]);
+          });
+        });
+
+        it("givenGeneratedUpdate_whenExecuted_thenAffectsNoRows", async () => {
+          await withGenerator(async (session, generated) => {
+            const sql = generated("update", "orders");
+            const result = await session.execute(sql);
+            await collect(result.rows);
+            expect(result.rowsAffected).toBe(0);
+          });
+        });
+
+        it.runIf(plugin.capabilities.includes("transactions"))(
+          "givenGeneratedInsert_whenExecutedInTransaction_thenInsertsOneRow",
+          async () => {
+            await withGenerator(async (session, generated) => {
+              const transactions = session.transactions;
+              if (transactions === undefined) throw new Error("A transactions session needs transactions.");
+              await transactions.setMode("manual");
+              try {
+                const result = await session.execute(generated("insert", EDIT_PROBE_TABLE));
+                await collect(result.rows);
+                expect(result.rowsAffected).toBe(1);
+              } finally {
+                await transactions.rollback();
+                await transactions.setMode("auto");
+              }
+            });
+          },
+        );
+
+        it("givenGeneratedDrop_whenExecuted_thenRelationGone", async () => {
+          await withSession(plugin, fixture, async (session) => {
+            await collect((await session.execute(`CREATE TABLE ${DROP_PROBE_TABLE} (id INTEGER)`)).rows);
+          });
+          try {
+            await withGenerator(async (session, generated) => {
+              await collect((await session.execute(generated("drop", DROP_PROBE_TABLE))).rows);
+              expect(await rejectionCode(session.execute(`SELECT * FROM ${DROP_PROBE_TABLE}`))).toBe("statementFailed");
+            });
+          } finally {
+            await withSession(plugin, fixture, async (session) => {
+              await collect((await session.execute(`DROP TABLE IF EXISTS ${DROP_PROBE_TABLE}`)).rows);
+            });
+          }
         });
       },
     );

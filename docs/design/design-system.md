@@ -172,6 +172,34 @@ and the datasource name · plugin name on the right. The database's message sits
 `text-ink-muted`) holds `3 pending changes`, the counted `12,345 rows`, and the last notice. The
 preview is a 40 rem modal listing the numbered statements in `font-editor`.
 
+## DDL and SQL generation
+
+Plan 010. A DDL tab carries the `DdlIcon` glyph (Phosphor `FileCode`, `size-icon`) where a console
+carries `Terminal` and a table tab `Table`, and the console's tint border. Its toolbar is an `h-tab`
+`bg-panel` strip with icon-only `ArrowsClockwise` Refresh, `CopySimple` Copy and `Plus` Open in
+Console, the qualified name in `text-ink-muted`, and the datasource name · plugin name on the right;
+an error sits under it in `text-danger` with the hint muted. The body is a read-only CodeMirror view
+(`ui/SqlView.tsx`) on `bg-canvas` with line numbers, the console's theme and syntax tokens, shared
+with the SQL Generator's preview.
+
+Quick Documentation (`Info`) is a `ui/Popover.tsx`: `bg-raised`, a `border-line` frame, `rounded`,
+`shadow-lg`, `text-ui`, below the anchor with a 4 px offset. Its header (`border-b border-line`)
+holds the kind in `text-ink-muted` and the qualified name and comment; section titles are
+`text-ink-muted`, names and types `font-grid text-grid`. Columns use the explorer's marks: a filled
+`KeyIcon` for the primary key, an outlined one for a foreign key, both `text-key-icon`, else a muted
+`ColumnIcon`; NOT NULL wears `NotNullIcon` (`Asterisk`). Foreign keys read `→` outgoing and `←` incoming. The
+body scrolls inside the popover's maximum.
+
+The SQL Generator (`Code`) is a modal like the others, wider: the statements are a segmented radio
+group in a `border-line` frame, the chosen one `bg-selection`, the rest `hover:bg-raised`; the
+preview is `h-60` on `bg-canvas`; Open in Console is the primary button.
+
+| Token (`appearance/tokens.ts`) | CSS variable           | Tailwind               | Dark / comfortable | Used by                              |
+| ------------------------------ | ---------------------- | ---------------------- | ------------------ | ------------------------------------ |
+| `density.popoverWidthPx`       | `--tc-popover-width`   | `max-w-popover`        | 480 px             | Quick Documentation's maximum width  |
+| `density.popoverHeightPx`      | `--tc-popover-height`  | `max-h-popover-height` | 360 px             | Quick Documentation's maximum height |
+| `density.generatorWidthPx`     | `--tc-generator-width` | `w-generator`          | 640 px             | The SQL Generator dialog             |
+
 ## Datasource colours
 
 Plan 004. A datasource stores its colour by name (decision 011); the theme gives the value. The

@@ -6,6 +6,7 @@ export const IDLE_CONTEXT: ActionContext = {
   activeTab: null,
   console: null,
   table: null,
+  ddl: null,
   result: null,
   datasources: [],
   selection: null,

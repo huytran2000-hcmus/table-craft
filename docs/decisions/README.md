@@ -39,3 +39,4 @@ started, not when it is merged.
 | 026 | [Table edits key on the primary key and submit as one transaction](026-table-edits-key-on-the-primary-key-and-submit-as-one-transaction.md)   |
 | 027 | [Actions scope to a tab kind, and chords clash only where they overlap](027-actions-scope-to-a-tab-kind-and-clash-only-where-they-overlap.md) |
 | 028 | [Completion asks the engine, which reads the cached catalog](028-completion-asks-the-engine-which-reads-the-cached-catalog.md)                |
+| 029 | [Object definitions come from the database, not from the cached catalog](029-object-definitions-come-from-the-database.md)                    |

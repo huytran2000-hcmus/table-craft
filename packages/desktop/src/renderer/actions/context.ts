@@ -7,6 +7,7 @@ import {
   type ConsoleSession,
   type ResultTab,
 } from "@table-craft/desktop/renderer/state/consoles.js";
+import { useDdl, type DdlTab } from "@table-craft/desktop/renderer/state/ddl.js";
 import { useDataSourcesDialog } from "@table-craft/desktop/renderer/state/dataSourcesDialog.js";
 import {
   capabilitiesOf,
@@ -46,6 +47,8 @@ export interface ActionContext {
   readonly console: ConsoleSession | null;
   /** The active tab's table, when the active tab shows one in the data editor. */
   readonly table: TableSession | null;
+  /** The active tab's relation definition, when the active tab is a DDL tab. */
+  readonly ddl: DdlTab | null;
   /** The grid's result: the active console's shown result tab, or the active table's rows. */
   readonly result: ResultTab | null;
   readonly datasources: readonly DatasourceView[];
@@ -55,7 +58,7 @@ export interface ActionContext {
    * focus, otherwise the active console's datasource, otherwise the tree's selection.
    */
   readonly datasource: DatasourceTarget | null;
-  /** The active console's or table's datasource's capabilities. */
+  /** The active console's, table's or DDL tab's datasource's capabilities. */
   readonly capabilities: readonly Capability[];
   readonly focus: FocusRegion;
   readonly toolWindows: Readonly<Record<ToolWindowId, boolean>>;
@@ -104,7 +107,8 @@ export function currentContext(): ActionContext {
   const datasources = useDatasources.getState();
   const console = active?.kind === "console" ? (consoles[active.id] ?? null) : null;
   const table = active?.kind === "table" ? (useTables.getState().tables[active.id] ?? null) : null;
-  const tabDatasourceId = console?.datasourceId ?? table?.datasourceId;
+  const ddl = active?.kind === "ddl" ? (useDdl.getState().ddls[active.id] ?? null) : null;
+  const tabDatasourceId = console?.datasourceId ?? table?.datasourceId ?? ddl?.datasourceId;
   const focus = focusedRegion();
   const selected = selectedDatasourceId(datasources.selection);
   const inTree = focus === "database" || (focus === "other" && lastRegion === "database");
@@ -115,6 +119,7 @@ export function currentContext(): ActionContext {
     activeTab: active,
     console,
     table,
+    ddl,
     result: console === null ? (table?.result ?? null) : (activeResultOf(console) ?? null),
     datasources: datasources.datasources,
     selection: datasources.selection,
