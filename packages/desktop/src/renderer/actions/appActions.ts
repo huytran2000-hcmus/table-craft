@@ -88,8 +88,8 @@ function selectedFolder(context: ActionContext): string | null {
 }
 const hasSeveralTabs = (context: ActionContext) => context.tabs.length > 1;
 const canRunConsole = (context: ActionContext) => context.console !== null && canRun(context.console.status);
-const hasTransactions = (context: ActionContext) =>
-  context.console !== null && context.capabilities.includes("transactions");
+const hasTransactionsCapability = (context: ActionContext) => context.capabilities.includes("transactions");
+const hasTransactions = (context: ActionContext) => context.console !== null && hasTransactionsCapability(context);
 /** Commit and Rollback are offered only while a transaction is open (decision 14). */
 const canEndTransaction = (context: ActionContext) =>
   hasTransactions(context) && context.console?.transactionOpen === true && context.console.status === "ready";
@@ -133,6 +133,7 @@ export const APP_ACTIONS: readonly AnyAction[] = [
     category: "Console",
     icon: "commit",
     shortcut: "Mod+Alt+Shift+Enter",
+    available: hasTransactionsCapability,
     when: canEndTransaction,
     run: async (context) => {
       if (context.activeTab !== null) await useConsoles.getState().commit(context.activeTab.id);
@@ -143,6 +144,7 @@ export const APP_ACTIONS: readonly AnyAction[] = [
     title: "Rollback",
     category: "Console",
     icon: "rollback",
+    available: hasTransactionsCapability,
     when: canEndTransaction,
     run: async (context) => {
       if (context.activeTab !== null) await useConsoles.getState().rollback(context.activeTab.id);
@@ -175,6 +177,7 @@ export const APP_ACTIONS: readonly AnyAction[] = [
     title: "Cancel",
     category: "Console",
     icon: "cancel",
+    available: (context) => context.capabilities.includes("cancel"),
     when: (context) => context.console?.status === "running" && context.capabilities.includes("cancel"),
     run: (context) => {
       if (context.activeTab !== null) void useConsoles.getState().cancel(context.activeTab.id);

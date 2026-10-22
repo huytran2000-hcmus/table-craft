@@ -30,6 +30,7 @@ import {
   paletteInput,
   paletteRows,
   pressChord,
+  rollbackButton,
   runAllButton,
   runStatement,
   SCENARIO_TIMEOUT_MS,
@@ -37,10 +38,10 @@ import {
   setWindowSize,
   sqlEditor,
   toolWindow,
-  waitUntilReady,
   type Datasource,
   type RunningApp,
   type SavedDatasource,
+  waitUntilReady,
 } from "./harness.js";
 
 const captureWindow = evidenceFor("012");
@@ -404,13 +405,13 @@ describe.runIf(DATABASES_ENABLED)("Explain Plan and Explain Analyse live test", 
       // The evidence shows the plan and the open transaction; what Rollback leaves is asserted below.
       await captureWindow(page, "analyse-rollback");
       await page.getByRole("button", { name: "Pin Plan (analysed)", exact: true }).click();
-      await page.getByRole("button", { name: "Rollback", exact: true }).click();
+      await rollbackButton(page).click();
       await expect.poll(() => transactionBadge(page).count()).toBe(0);
 
       await runStatement(page, ORDER_ONE_TOTAL);
       expect((await gridText(page)).cells).toEqual([ORDER_ONE_TOTAL_VALUE]);
       // In manual mode the SELECT opened a transaction of its own; end it before the evidence.
-      await page.getByRole("button", { name: "Rollback", exact: true }).click();
+      await rollbackButton(page).click();
       await expect.poll(() => transactionBadge(page).count()).toBe(0);
       expect(await firstCell(postgres, POSTGRES_CONFIG, ORDER_ONE_TOTAL)).toBe(ORDER_ONE_TOTAL_VALUE);
       expect(await resultTabs(page).allTextContents()).toEqual(["Output", "Plan (analysed)", "Result 1"]);

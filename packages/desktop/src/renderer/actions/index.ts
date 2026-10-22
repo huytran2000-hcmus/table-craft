@@ -12,6 +12,7 @@ import { useModal } from "@table-craft/desktop/renderer/state/modal.js";
 import { usePalette } from "@table-craft/desktop/renderer/state/palette.js";
 import { useSecretPrompt } from "@table-craft/desktop/renderer/state/secretPrompt.js";
 import { useTabs } from "@table-craft/desktop/renderer/state/tabs.js";
+import { useWindowState } from "@table-craft/desktop/renderer/state/windowState.js";
 
 /** The app's one registry. Everything that runs a command goes through `invoke` (decision 015). */
 export const registry = createActionRegistry(currentContext, (id, cause) => {
@@ -34,6 +35,7 @@ const STORES = [
   useDataSourcesDialog,
   useSecretPrompt,
   useModal,
+  useWindowState,
 ] as const;
 
 function subscribeToStores(listener: () => void): () => void {
@@ -44,4 +46,9 @@ function subscribeToStores(listener: () => void): () => void {
 /** Whether `id` can run now, re-read whenever a store it might depend on changes. */
 export function useActionEnabled(id: string): boolean {
   return useSyncExternalStore(subscribeToStores, () => registry.isEnabled(id));
+}
+
+/** Whether `id` exists for the active tab at all (its `available`), re-read like `useActionEnabled`. */
+export function useActionAvailable(id: string): boolean {
+  return useSyncExternalStore(subscribeToStores, () => registry.isAvailable(id));
 }

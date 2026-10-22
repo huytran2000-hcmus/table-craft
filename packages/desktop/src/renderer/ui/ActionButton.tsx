@@ -1,12 +1,14 @@
 import { currentPlatform, formatChord } from "@table-craft/desktop/renderer/actions/chords.js";
 import { invoke, registry, useActionEnabled } from "@table-craft/desktop/renderer/actions/index.js";
+import { cn } from "@table-craft/desktop/renderer/ui/cn.js";
 import { ACTION_ICONS } from "@table-craft/desktop/renderer/ui/icons.js";
 import { Tooltip } from "@table-craft/desktop/renderer/ui/Tooltip.js";
 
 /**
  * A toolbar button that is an action: its label, icon, tooltip and enabled state come from the
  * registry. `compact` draws the icon alone, the title moving to the tooltip; `reason` replaces the
- * tooltip while the button is off, saying why.
+ * tooltip while the button is off, saying why. A click never takes focus, so Run leaves the caret
+ * where it was (plan 015 decision 8); Tab still reaches the button.
  */
 export function ActionButton({
   actionId,
@@ -37,7 +39,8 @@ export function ActionButton({
         aria-pressed={pressed}
         // A disabled button gets no pointer events, so Radix never opens; the native tooltip still does.
         title={!enabled && reason != null ? reason : undefined}
-        className={
+        className={cn(
+          "app-no-drag",
           primary
             ? "flex h-row shrink-0 items-center gap-1 rounded bg-accent px-gap whitespace-nowrap text-accent-ink disabled:opacity-50"
             : compact && tone === "warning"
@@ -46,9 +49,10 @@ export function ActionButton({
                 ? "flex h-row shrink-0 items-center rounded px-1 text-ink hover:bg-raised disabled:opacity-50 aria-pressed:bg-selection"
                 : tone === "warning"
                   ? "flex h-row shrink-0 items-center gap-1 rounded border border-warning px-gap whitespace-nowrap text-warning disabled:opacity-50"
-                  : "flex h-row shrink-0 items-center gap-1 rounded border border-line px-gap whitespace-nowrap text-ink disabled:opacity-50"
-        }
+                  : "flex h-row shrink-0 items-center gap-1 rounded border border-line px-gap whitespace-nowrap text-ink disabled:opacity-50",
+        )}
         disabled={!enabled}
+        onMouseDown={(event) => event.preventDefault()}
         onClick={() => invoke(actionId)}
       >
         {Icon === null ? null : <Icon aria-hidden weight={compact ? "regular" : "fill"} className="size-icon" />}

@@ -9,6 +9,7 @@ import {
 import { currentPlatform, formatChord } from "@table-craft/desktop/renderer/actions/chords.js";
 import { registry } from "@table-craft/desktop/renderer/actions/index.js";
 import { SETTINGS_ACTION_IDS } from "@table-craft/desktop/renderer/actions/settingsActions.js";
+import { WINDOW_ACTION_IDS } from "@table-craft/desktop/renderer/actions/windowActions.js";
 import {
   Button,
   CONTENT_CLASS,
@@ -24,6 +25,8 @@ import {
   useSettingsDialog,
   type SettingsPage,
 } from "@table-craft/desktop/renderer/state/settingsDialog.js";
+import { useWindowState } from "@table-craft/desktop/renderer/state/windowState.js";
+import { ActionButton } from "@table-craft/desktop/renderer/ui/ActionButton.js";
 import { cn } from "@table-craft/desktop/renderer/ui/cn.js";
 import {
   DEFAULT_SETTINGS,
@@ -83,6 +86,7 @@ const RESTORE: Readonly<Record<SettingsPage, (current: Settings) => Settings>> =
       theme: DEFAULT_SETTINGS.appearance.theme,
       density: DEFAULT_SETTINGS.appearance.density,
       fonts: { ...current.appearance.fonts, ui: DEFAULT_SETTINGS.appearance.fonts.ui },
+      systemTitleBar: DEFAULT_SETTINGS.appearance.systemTitleBar,
     },
   }),
   editor: (current) => withFont(current, "editor", DEFAULT_SETTINGS.appearance.fonts.editor),
@@ -405,6 +409,38 @@ function AppearancePage() {
       </FieldRow>
       <SectionTitle>Font</SectionTitle>
       <FontFields role="ui" />
+      <SectionTitle>Window</SectionTitle>
+      <TitleBarField />
+    </>
+  );
+}
+
+/** Main reads the choice when it creates the window, so it waits for a restart (plan 015 decision 12). */
+function TitleBarField() {
+  const systemTitleBar = useSettings((state) => state.settings.appearance.systemTitleBar);
+  const customTitleBar = useWindowState((state) => state.customTitleBar);
+  const id = useId();
+  const pending = systemTitleBar === customTitleBar;
+  return (
+    <>
+      <FieldRow label="Title bar" htmlFor={id}>
+        <label className="flex items-center gap-cell">
+          <input
+            id={id}
+            type="checkbox"
+            checked={systemTitleBar}
+            onChange={(event) => {
+              const checked = event.target.checked;
+              update((current) => ({ ...current, appearance: { ...current.appearance, systemTitleBar: checked } }));
+            }}
+          />
+          Use system title bar
+        </label>
+      </FieldRow>
+      <div className="col-start-2 flex items-center gap-gap text-ink-muted">
+        Takes effect after restart.
+        {pending ? <ActionButton actionId={WINDOW_ACTION_IDS.relaunch} /> : null}
+      </div>
     </>
   );
 }

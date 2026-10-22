@@ -88,6 +88,8 @@ export interface DensityTokens {
   /** The tool-window stripes at either edge of the window. */
   readonly stripeWidthPx: number;
   readonly tabHeightPx: number;
+  /** The main toolbar, which is the window's title bar; the macOS traffic lights centre in it. */
+  readonly titleBarHeightPx: number;
   readonly statusBarHeightPx: number;
   readonly iconPx: number;
   readonly paletteWidthPx: number;
@@ -295,6 +297,7 @@ export const COMFORTABLE_DENSITY: DensityTokens = {
   consoleHeightPx: 128,
   stripeWidthPx: 36,
   tabHeightPx: 32,
+  titleBarHeightPx: 40,
   statusBarHeightPx: 24,
   iconPx: 16,
   paletteWidthPx: 576,
@@ -316,7 +319,11 @@ export const COMPACT_DENSITY: DensityTokens = {
   rowHeightPx: 20,
   cellPaddingPx: 6,
   gapPx: 6,
+  titleBarHeightPx: 32,
 };
+
+/** The width the macOS traffic lights take at x = 12 (they end near 72 px), plus a margin. */
+export const TRAFFIC_LIGHT_INSET_PX = 76;
 
 export type DensityId = "comfortable" | "compact";
 

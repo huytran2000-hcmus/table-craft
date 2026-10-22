@@ -8,7 +8,8 @@ Status: Accepted
 
 - Built-in plugins: PostgreSQL (`pg`), MySQL / MariaDB (`mysql2`), SQLite (`node:sqlite`)
 - App shell: tool-window strips, resizable panes, editor tabs, status bar, Find Action and Search
-  Everywhere, every command an action in one registry (decision 015)
+  Everywhere, every command an action in one registry (decision 015); a frameless window whose
+  title bar is the main toolbar, with native window controls (decision 034)
 - Connections: plugin-generated form, test connection, folders, `safeStorage` secrets, read-only
   and colour flags
 - Database explorer: lazy tree, speed search, manual refresh

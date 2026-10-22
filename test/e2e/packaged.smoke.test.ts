@@ -1,7 +1,9 @@
 /**
  * Plan 014's packaged-app suite: the unpacked app electron-builder produced, not the development
  * build, so the bundles in `app.asar`, the plugins in `<resources>/plugins` and the bundled drivers
- * are what run. Runs only when `TABLE_CRAFT_APP_EXECUTABLE` names that app:
+ * are what run. Plan 015 adds the title bar check CI runs on every platform, so Windows and Linux
+ * show the main-menu button and the caption-button overlay. Runs only when
+ * `TABLE_CRAFT_APP_EXECUTABLE` names that app:
  *
  *   bun run test:smoke:packaged        # SQLite only, as CI runs it
  *   TABLE_CRAFT_EVIDENCE_DIR=docs/evidence/014 bun run test:smoke:packaged:db
@@ -28,6 +30,8 @@ import {
   gridText,
   LAUNCH_TIMEOUT_MS,
   launchApp,
+  mainToolbar,
+  mainToolbarButton,
   newProfile,
   openConsoleOn,
   pressChord,
@@ -51,6 +55,23 @@ const BUILT_IN_KINDS = ["MySQL", "PostgreSQL", "SQLite"];
 const CHOSEN_THEME = "Dark";
 const CHOSEN_THEME_ID = "dark";
 const PASSWORD = POSTGRES_CONFIG.password;
+
+/** `windowChrome`'s position for the comfortable density's 40 px toolbar (plan 015). */
+const MAC_TRAFFIC_LIGHTS = { x: 12, y: 13 };
+
+interface TitleBarArea {
+  readonly visible: boolean;
+  readonly x: number;
+  readonly width: number;
+  readonly windowWidth: number;
+}
+
+/** A page expression, because this program has no DOM lib: where Windows and Linux leave the toolbar. */
+const TITLE_BAR_AREA = `(() => {
+  const overlay = navigator.windowControlsOverlay;
+  const rect = overlay?.getTitlebarAreaRect();
+  return { visible: overlay?.visible ?? false, x: rect?.x ?? 0, width: rect?.width ?? 0, windowWidth: innerWidth };
+})()`;
 
 const { password: _postgresPassword, ...POSTGRES_PLAIN } = POSTGRES_CONFIG;
 const { password: _mysqlPassword, ...MYSQL_PLAIN } = MYSQL_CONFIG;
@@ -191,6 +212,33 @@ describe.runIf(SMOKE_ENABLED && APP_EXECUTABLE !== undefined)("packaged app", ()
       await captureWindow(page, "packaged-relaunch");
     },
     SCENARIO_TIMEOUT_MS * 2,
+  );
+
+  it(
+    "givenPackagedApp_whenLaunched_thenMainToolbarIsTheTitleBarBesideTheNativeControls",
+    async () => {
+      const { app, page } = await launchSaved([savedSqlite()]);
+      await mainToolbar(page).waitFor({ timeout: LAUNCH_TIMEOUT_MS });
+
+      if (process.platform === "darwin") {
+        const lights = await app.evaluate(({ BrowserWindow }) =>
+          BrowserWindow.getAllWindows()[0]?.getWindowButtonPosition(),
+        );
+        expect(lights).toEqual(MAC_TRAFFIC_LIGHTS);
+        expect(await mainToolbarButton(page, "Main Menu").count()).toBe(0);
+        return;
+      }
+      await mainToolbarButton(page, "Main Menu").waitFor({ timeout: LAUNCH_TIMEOUT_MS });
+      const overlay = await page.evaluate<TitleBarArea>(TITLE_BAR_AREA);
+      expect(overlay.visible).toBe(true);
+      expect(overlay.width).toBeLessThan(overlay.windowWidth);
+      const settings = await mainToolbarButton(page, "Settings…").boundingBox();
+      expect((settings?.x ?? Infinity) + (settings?.width ?? 0)).toBeLessThanOrEqual(overlay.x + overlay.width);
+      expect(await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.isMenuBarVisible())).toBe(
+        false,
+      );
+    },
+    SCENARIO_TIMEOUT_MS,
   );
 
   it.runIf(DATABASES_ENABLED)(

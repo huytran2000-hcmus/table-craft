@@ -179,7 +179,10 @@ export async function setWindowSize(app: ElectronApplication, size: { width: num
   }, size);
 }
 
-/** The window's content size; evidence must match `EVIDENCE_WINDOW`, which excludes the title bar. */
+/**
+ * The window's content size; evidence must match `EVIDENCE_WINDOW`. With the main toolbar as the
+ * title bar (decision 034) it is the whole window; with "Use system title bar" it excludes the OS's.
+ */
 export async function contentSize(app: ElectronApplication): Promise<{ width: number; height: number }> {
   return app.evaluate(({ BrowserWindow }) => {
     const [width = 0, height = 0] = BrowserWindow.getAllWindows()[0]?.getContentSize() ?? [];
@@ -187,13 +190,40 @@ export async function contentSize(app: ElectronApplication): Promise<{ width: nu
   });
 }
 
+/** The active console's own toolbar; Run, Cancel, Commit and Rollback are also in the main one. */
+export function consoleToolbar(page: Page) {
+  return page.getByRole("toolbar", { name: "Console toolbar", exact: true }).filter({ visible: true });
+}
+
+/** The window's title bar (decision 034). */
+export function mainToolbar(page: Page) {
+  return page.getByRole("toolbar", { name: "Main toolbar", exact: true });
+}
+
+export function mainToolbarButton(page: Page, name: string) {
+  return mainToolbar(page).getByRole("button", { name, exact: true });
+}
+
+/** What the OS calls the window: Mission Control, the Dock menu, the taskbar. */
+export async function windowTitle(app: ElectronApplication): Promise<string> {
+  return app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]?.getTitle() ?? "");
+}
+
 /** Exact, because other controls' names contain "Run" (e.g. a palette row "Run ⌘↩"). */
 export function runButton(page: Page) {
-  return page.getByRole("button", { name: "Run", exact: true });
+  return consoleToolbar(page).getByRole("button", { name: "Run", exact: true });
 }
 
 export function cancelButton(page: Page) {
-  return page.getByRole("button", { name: "Cancel", exact: true });
+  return consoleToolbar(page).getByRole("button", { name: "Cancel", exact: true });
+}
+
+export function commitButton(page: Page) {
+  return consoleToolbar(page).getByRole("button", { name: "Commit", exact: true });
+}
+
+export function rollbackButton(page: Page) {
+  return consoleToolbar(page).getByRole("button", { name: "Rollback", exact: true });
 }
 
 /** Resolves once the session is open and Run is enabled. */
@@ -203,7 +233,7 @@ export async function waitUntilReady(page: Page): Promise<void> {
 }
 
 export function runAllButton(page: Page) {
-  return page.getByRole("button", { name: "Run All", exact: true });
+  return consoleToolbar(page).getByRole("button", { name: "Run All", exact: true });
 }
 
 /** The console's CodeMirror editor, by the accessible name its content carries. */

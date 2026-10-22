@@ -24,7 +24,8 @@ export interface StatusItem {
   readonly Component: ComponentType;
 }
 
-const DOT_CLASS = {
+/** The connection dot the status bar and the datasource widget draw. */
+export const DOT_CLASS = {
   disconnected: "border border-ink-muted",
   connecting: "bg-ink-muted",
   connected: "bg-success",
@@ -32,7 +33,7 @@ const DOT_CLASS = {
 } as const;
 
 /** The active console's datasource, or the tree's selection when no console is active. */
-function useActiveDatasourceId(): string | undefined {
+export function useActiveDatasourceId(): string | undefined {
   const activeId = useTabs((state) => activeTab(state)?.id ?? null);
   const consoleDatasource = useConsoles((state) =>
     activeId === null ? undefined : state.consoles[activeId]?.datasourceId,

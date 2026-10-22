@@ -30,6 +30,8 @@ export interface AppearanceSettings {
   readonly theme: ThemeChoice;
   readonly density: DensityId;
   readonly fonts: FontSettings;
+  /** Frame the window with the operating system's title bar; main reads it at window creation. */
+  readonly systemTitleBar: boolean;
 }
 
 export interface DataSettings {
@@ -73,6 +75,7 @@ export const DEFAULT_SETTINGS: Settings = {
       editor: { family: null, sizePx: 13 },
       grid: { family: null, sizePx: 12 },
     },
+    systemTitleBar: false,
   },
   data: {
     nullText: "<null>",
@@ -172,6 +175,8 @@ export function readSettings(input: unknown): Settings {
         editor: readFont(fonts.editor, defaults.appearance.fonts.editor),
         grid: readFont(fonts.grid, defaults.appearance.fonts.grid),
       },
+      systemTitleBar:
+        typeof appearance.systemTitleBar === "boolean" ? appearance.systemTitleBar : defaults.appearance.systemTitleBar,
     },
     data: {
       nullText:

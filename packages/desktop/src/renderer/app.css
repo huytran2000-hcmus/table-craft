@@ -46,6 +46,8 @@
   --spacing-console: var(--tc-console-height);
   --spacing-stripe: var(--tc-stripe-width);
   --spacing-tab: var(--tc-tab-height);
+  --spacing-title-bar: var(--tc-title-bar-height);
+  --spacing-traffic-lights: var(--tc-traffic-light-inset);
   --spacing-status-bar: var(--tc-status-bar-height);
   --spacing-icon: var(--tc-icon);
   --spacing-palette: var(--tc-palette-width);
@@ -74,4 +76,21 @@ body {
   color: var(--color-ink);
   font-family: var(--font-ui);
   font-size: var(--text-ui);
+}
+
+.app-drag {
+  app-region: drag;
+  -webkit-app-region: drag;
+  user-select: none;
+}
+
+.app-no-drag {
+  app-region: no-drag;
+  -webkit-app-region: no-drag;
+}
+
+/* Windows and Linux draw their caption buttons over the toolbar's right end; the titlebar area
+   variables say how much of the row is still ours, and are unset (so this is a gap) elsewhere. */
+.title-bar-overlay-inset {
+  padding-right: calc(100vw - env(titlebar-area-x, 0px) - env(titlebar-area-width, 100vw) + var(--tc-gap));
 }

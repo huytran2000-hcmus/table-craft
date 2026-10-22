@@ -1,5 +1,6 @@
 import {
   GearSix,
+  List,
   At,
   BracketsRound,
   Intersect,
@@ -85,6 +86,7 @@ export {
   Terminal as ConsoleIcon,
   X as CloseIcon,
   CaretDown as ExpandedIcon,
+  CaretDown as DropdownIcon,
   CaretRight as CollapsedIcon,
   FolderSimple as FolderIcon,
   Lock as ReadOnlyIcon,
@@ -167,4 +169,5 @@ export const ACTION_ICONS: Readonly<Record<ActionIcon, Icon>> = {
   history: ClockCounterClockwise,
   reopen: FolderOpen,
   settings: GearSix,
+  menu: List,
 };

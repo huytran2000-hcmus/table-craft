@@ -17,6 +17,7 @@ export const IDLE_CONTEXT: ActionContext = {
   toolWindows: { database: true, services: true },
   paletteOpen: false,
   speedSearching: false,
+  customTitleBar: true,
 };
 
 export interface FakeKey extends KeyEventLike {

@@ -3,6 +3,7 @@ import { ACTION_IDS } from "@table-craft/desktop/renderer/actions/appActions.js"
 import { DatabasePane } from "@table-craft/desktop/renderer/panes/DatabasePane.js";
 import { ServicesPane } from "@table-craft/desktop/renderer/panes/ServicesPane.js";
 import { EditorArea } from "@table-craft/desktop/renderer/shell/EditorArea.js";
+import { MainToolbar } from "@table-craft/desktop/renderer/shell/MainToolbar.js";
 import { StatusBar } from "@table-craft/desktop/renderer/shell/StatusBar.js";
 import { Stripe } from "@table-craft/desktop/renderer/shell/Stripe.js";
 import { ToolWindow } from "@table-craft/desktop/renderer/shell/ToolWindow.js";
@@ -27,12 +28,13 @@ function persistSize(id: ToolWindowId) {
 const persistDatabase = persistSize("database");
 const persistServices = persistSize("services");
 
-/** DataGrip's frame: stripes, Database left, editor tabs centre, Services bottom, status bar. */
+/** DataGrip's frame: the main toolbar, stripes, Database left, editor tabs centre, Services bottom, status bar. */
 export function Shell() {
   const visible = useLayout((state) => state.layout.visible);
   const sizes = useLayout((state) => state.layout.sizes);
   return (
     <main className="flex h-full flex-col bg-canvas text-ink">
+      <MainToolbar />
       <div className="flex min-h-0 flex-1">
         <Stripe side="left" top={LEFT_STRIPE_TOP} bottom={LEFT_STRIPE_BOTTOM} />
         <Group orientation="vertical" className="min-w-0 flex-1" onLayoutChanged={persistServices}>

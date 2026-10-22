@@ -10,6 +10,7 @@ import {
   type InvokeResult,
   type SettingsChanged,
   type TableCraftBridge,
+  type WindowState,
 } from "@table-craft/desktop/preload/bridge.js";
 
 /** Structural, because this program has no DOM lib and preload is the one place that needs it. */
@@ -72,6 +73,10 @@ const bridge: TableCraftBridge = {
   openThemesFolder: () => invoke(INVOKE_CHANNELS.openThemesFolder),
   appInfo: () => invoke(INVOKE_CHANNELS.appInfo),
   onSettingsChanged: (listener) => subscribe<SettingsChanged>(CHANNELS.settingsChanged, listener),
+  popupMenu: (point) => invoke(INVOKE_CHANNELS.popupMenu, point),
+  windowState: () => invoke(INVOKE_CHANNELS.windowState),
+  onWindowState: (listener) => subscribe<WindowState>(CHANNELS.windowState, listener),
+  relaunch: () => invoke(INVOKE_CHANNELS.relaunch),
 };
 
 contextBridge.exposeInMainWorld(BRIDGE_KEY, bridge);

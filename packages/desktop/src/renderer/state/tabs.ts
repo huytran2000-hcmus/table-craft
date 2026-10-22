@@ -49,7 +49,16 @@ export function cycled(strip: TabStrip, delta: number): TabStrip {
   return next === undefined ? strip : { ...strip, activeId: next.id };
 }
 
+/** `recent` with `activeId` first and the ids no longer in `tabs` gone: the strip's activation order. */
+export function recency(recent: readonly string[], strip: TabStrip): readonly string[] {
+  const open = new Set(strip.tabs.map((tab) => tab.id));
+  const rest = recent.filter((id) => id !== strip.activeId && open.has(id));
+  return strip.activeId === null ? rest : [strip.activeId, ...rest];
+}
+
 export interface TabsState extends TabStrip {
+  /** Open tab ids, most recently active first. */
+  readonly recent: readonly string[];
   readonly open: (tab: Tab) => void;
   readonly activate: (id: string) => void;
   /** Each returns the tabs it removed, so their owners can be released. */
@@ -63,11 +72,12 @@ export function createTabsStore() {
   return create<TabsState>()((set, get) => {
     function apply(next: TabStrip): readonly Tab[] {
       const before = get().tabs;
-      set({ tabs: next.tabs, activeId: next.activeId });
+      set({ tabs: next.tabs, activeId: next.activeId, recent: recency(get().recent, next) });
       return before.filter((tab) => !next.tabs.includes(tab));
     }
     return {
       ...EMPTY_STRIP,
+      recent: [],
       open: (tab) => void apply(opened(get(), tab)),
       activate: (id) => void apply(activated(get(), id)),
       close: (id) => apply(closed(get(), id)),

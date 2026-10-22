@@ -44,3 +44,4 @@ started, not when it is merged.
 | 031 | [Plans come from the plugin as one tree, and Explain Analyse runs on the console's session](031-plans-come-from-the-plugin-and-analyse-runs-on-the-console-session.md) |
 | 032 | [Settings live in main, and the renderer applies them](032-settings-live-in-main-and-the-renderer-applies-them.md)                                                     |
 | 033 | [The packaged app is `dist/` in asar, with the built-in plugins beside it](033-the-packaged-app-is-dist-in-asar-with-plugins-beside-it.md)                             |
+| 034 | [The window draws its own title bar, and keeps the native window controls](034-the-window-draws-its-own-title-bar-and-keeps-native-controls.md)                        |

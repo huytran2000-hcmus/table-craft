@@ -1,5 +1,5 @@
 import { DDL_ACTION_IDS } from "@table-craft/desktop/renderer/actions/ddlActions.js";
-import { ActionButton } from "@table-craft/desktop/renderer/console/ActionButton.js";
+import { ActionButton } from "@table-craft/desktop/renderer/ui/ActionButton.js";
 import { useConsoleDatasource } from "@table-craft/desktop/renderer/console/useConsoleDatasource.js";
 import { pluginOf, useDatasources } from "@table-craft/desktop/renderer/state/datasources.js";
 import { useDdl } from "@table-craft/desktop/renderer/state/ddl.js";

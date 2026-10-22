@@ -13,7 +13,9 @@ import {
   type BridgeFailure,
   type HistoryEntry,
   type InvokeResult,
+  type MenuPoint,
   type SaveDatasourceRequest,
+  type WindowState,
 } from "@table-craft/desktop/preload/bridge.js";
 
 const BUG_HINT = "This is a table-craft bug; restart the app and report it.";
@@ -57,6 +59,10 @@ const historyEntry = z.strictObject({
 const historySearchRequest = z.strictObject({ datasourceId: z.string().min(1), query: z.string() });
 const historyClearRequest = z.strictObject({ datasourceId: z.string().min(1) });
 const answerCloseRequest = z.strictObject({ proceed: z.boolean() });
+const menuPoint = z.strictObject({
+  x: z.number().int().nonnegative(),
+  y: z.number().int().nonnegative(),
+}) satisfies z.ZodType<MenuPoint>;
 const noRequest = z.undefined();
 
 /** The slice of `ipcMain` the handlers need; `sender` is the window that asked. */
@@ -76,6 +82,11 @@ export interface IpcOptions<Sender> {
   /** Creates `<userData>/themes/` if missing and shows it in the file manager. */
   readonly openThemesFolder: () => Promise<void>;
   readonly appInfo: () => AppInfo;
+  /** Pops the application menu in the sender's window (decision 034). */
+  readonly popupMenu: (sender: Sender, point: MenuPoint) => void;
+  readonly windowState: (sender: Sender) => WindowState;
+  /** Quits through the close guard and starts again. */
+  readonly relaunch: () => void;
   readonly log: (message: string, cause: unknown) => void;
 }
 
@@ -170,6 +181,15 @@ export function registerIpc<Sender>(ipc: InvokeRegistrar<Sender>, options: IpcOp
     return null;
   });
   handle(INVOKE_CHANNELS.appInfo, noRequest, () => options.appInfo());
+  handle(INVOKE_CHANNELS.popupMenu, menuPoint, (point, sender) => {
+    options.popupMenu(sender, point);
+    return null;
+  });
+  handle(INVOKE_CHANNELS.windowState, noRequest, (_request, sender) => options.windowState(sender));
+  handle(INVOKE_CHANNELS.relaunch, noRequest, () => {
+    options.relaunch();
+    return null;
+  });
 
   const { history } = options;
   handle(INVOKE_CHANNELS.historyRecord, historyEntry, (entry) => {

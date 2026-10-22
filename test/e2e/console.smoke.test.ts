@@ -16,6 +16,7 @@ import { seededSqliteFile } from "../support/sqliteFixture.js";
 import {
   activeEditorTab,
   closeApp,
+  commitButton,
   DATABASES_ENABLED,
   editorTabs,
   enginePids,
@@ -28,6 +29,7 @@ import {
   openConsoleOn,
   pressChord,
   readProfileFile,
+  rollbackButton,
   runAllButton,
   SCENARIO_TIMEOUT_MS,
   seedDatasources,
@@ -35,10 +37,10 @@ import {
   sqlEditor,
   toolWindow,
   treeNode,
-  waitUntilReady,
   type Datasource,
   type LaunchOptions,
   type RunningApp,
+  waitUntilReady,
 } from "./harness.js";
 
 const captureWindow = evidenceFor("006");
@@ -314,12 +316,12 @@ describe.runIf(DATABASES_ENABLED)("SQL console live test", () => {
       await typeScript(page, INSERT_PROBE_ORDER);
       await runAll(page);
       await expect.poll(() => transactionBadge(page).count()).toBe(1);
-      await page.getByRole("button", { name: "Rollback", exact: true }).click();
+      await rollbackButton(page).click();
 
       await expect.poll(() => transactionBadge(page).count()).toBe(0);
       expect((await query(page, COUNT_PROBE_ORDER)).cells).toEqual(["0"]);
       // In manual mode the SELECT opened a transaction of its own; end it before the evidence.
-      await page.getByRole("button", { name: "Rollback", exact: true }).click();
+      await rollbackButton(page).click();
       await expect.poll(() => transactionBadge(page).count()).toBe(0);
       await resultTab(page, "Output").click();
       expect(await outputEntries(page).allTextContents()).toEqual([
@@ -347,7 +349,7 @@ describe.runIf(DATABASES_ENABLED)("SQL console live test", () => {
       await waitUntilReady(page);
       expect((await query(page, COUNT_PROBE_ORDER)).cells).toEqual(["0"]);
       await editorTabs(page).first().click();
-      await page.getByRole("button", { name: "Commit", exact: true }).click();
+      await commitButton(page).click();
       await expect.poll(() => transactionBadge(page).count()).toBe(0);
       await editorTabs(page).nth(1).click();
 

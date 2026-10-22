@@ -25,6 +25,7 @@ import { usePalette } from "@table-craft/desktop/renderer/state/palette.js";
 import { useSecretPrompt } from "@table-craft/desktop/renderer/state/secretPrompt.js";
 import { activeTab, useTabs, type Tab } from "@table-craft/desktop/renderer/state/tabs.js";
 import { useTables, type TableSession } from "@table-craft/desktop/renderer/state/tables.js";
+import { useWindowState } from "@table-craft/desktop/renderer/state/windowState.js";
 
 /** The regions focus can be in; each is a `data-region` attribute on its container. */
 export type FocusRegion = "editor" | "tableEditor" | "grid" | "valuePanel" | "database" | "services" | "other";
@@ -69,6 +70,8 @@ export interface ActionContext {
   readonly paletteOpen: boolean;
   /** The Database pane's speed search field is open; Escape closes it rather than leaving the pane. */
   readonly speedSearching: boolean;
+  /** The main toolbar is the window's title bar (decision 034), rather than the system's. */
+  readonly customTitleBar: boolean;
 }
 
 function regionOf(element: Element | null | undefined): FocusRegion {
@@ -144,5 +147,6 @@ export function currentContext(): ActionContext {
     toolWindows: useLayout.getState().layout.visible,
     paletteOpen: modalOpen(),
     speedSearching: useCatalog.getState().speedSearch !== null,
+    customTitleBar: useWindowState.getState().customTitleBar,
   };
 }

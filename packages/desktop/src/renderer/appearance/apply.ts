@@ -1,4 +1,8 @@
-import type { Appearance, ColorScheme } from "@table-craft/desktop/renderer/appearance/tokens.js";
+import {
+  TRAFFIC_LIGHT_INSET_PX,
+  type Appearance,
+  type ColorScheme,
+} from "@table-craft/desktop/renderer/appearance/tokens.js";
 
 function kebab(name: string): string {
   return name.replace(/[A-Z]/g, (letter) => `-${letter.toLowerCase()}`);
@@ -47,6 +51,8 @@ export function appearanceVariables(appearance: Appearance): Readonly<Record<str
     "--tc-console-height": `${density.consoleHeightPx}px`,
     "--tc-stripe-width": `${density.stripeWidthPx}px`,
     "--tc-tab-height": `${density.tabHeightPx}px`,
+    "--tc-title-bar-height": `${density.titleBarHeightPx}px`,
+    "--tc-traffic-light-inset": `${TRAFFIC_LIGHT_INSET_PX}px`,
     "--tc-status-bar-height": `${density.statusBarHeightPx}px`,
     "--tc-icon": `${density.iconPx}px`,
     "--tc-palette-width": `${density.paletteWidthPx}px`,

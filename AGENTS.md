@@ -98,14 +98,18 @@ packages/desktop/          @table-craft/desktop, the Electron app
                            history (opened at launch, written by the renderer over the
                            `history.*` channels), `settings.json` and the user themes
                            in `<userData>/themes/` (`settings.ts`, `themes.ts`, decision
-                           032), the invoke channels (`ipc.ts`)
+                           032), the invoke channels (`ipc.ts`); the window chrome per
+                           platform, theme and density (`chrome.ts`, decision 034) and
+                           the menu popup with its lone-Alt watcher (`menuPopup.ts`)
   src/preload/             contextBridge; hands the engine port to the renderer and relays
                            menu clicks. `menu.ts` declares the native menu as data
   src/engine/              the utilityProcess; `protocol.ts` is the only module the
                            engine and renderer share
   src/renderer/            React 19, Zustand, Tailwind v4, CodeMirror 6; a pure view.
                            `actions/` is the one command registry and keymap; `shell/`,
-                           `panes/`, `palette/` the DataGrip-shaped window; `console/`
+                           `panes/`, `palette/` the DataGrip-shaped window, whose title
+                           bar is `shell/MainToolbar.tsx`; `ui/` shared controls such
+                           as `ActionButton.tsx`; `console/`
                            the SQL console: editor, its completion source, result tabs,
                            Output, transactions, the plan view (`PlanView.tsx`, its tree
                            from `model/planTree.ts`);

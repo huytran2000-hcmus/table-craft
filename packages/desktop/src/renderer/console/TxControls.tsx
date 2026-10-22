@@ -1,7 +1,7 @@
 import type { TransactionMode } from "@table-craft/desktop/engine/protocol.js";
 import { ACTION_IDS } from "@table-craft/desktop/renderer/actions/appActions.js";
 import { invoke, useActionEnabled } from "@table-craft/desktop/renderer/actions/index.js";
-import { ActionButton } from "@table-craft/desktop/renderer/console/ActionButton.js";
+import { ActionButton } from "@table-craft/desktop/renderer/ui/ActionButton.js";
 import type { ConsoleSession } from "@table-craft/desktop/renderer/state/consoles.js";
 
 const MODE_LABEL: Readonly<Record<TransactionMode, string>> = { auto: "Tx: Auto", manual: "Tx: Manual" };

@@ -20,6 +20,8 @@ export const CHANNELS = {
   closeRequested: "table-craft:window.close-requested",
   /** Main to every window: settings were saved or the themes reread; the payload is a `SettingsChanged`. */
   settingsChanged: "table-craft:settings.changed",
+  /** Main to a window: it entered or left full screen; the payload is its `WindowState`. */
+  windowState: "table-craft:window.state-changed",
 } as const;
 
 /** Renderer to main, through `ipcRenderer.invoke`; each answers with an `InvokeResult`. */
@@ -46,6 +48,9 @@ export const INVOKE_CHANNELS = {
   reloadThemes: "table-craft:themes.reload",
   openThemesFolder: "table-craft:themes.open-folder",
   appInfo: "table-craft:app.info",
+  popupMenu: "table-craft:menu.popup",
+  windowState: "table-craft:window.state",
+  relaunch: "table-craft:app.relaunch",
 } as const;
 
 /** The `window.postMessage` kind preload uses to hand a port on; contextBridge cannot carry one. */
@@ -210,6 +215,19 @@ export interface AppInfo {
   readonly chromium: string;
 }
 
+/** The window's frame (decision 034), fixed at creation, and whether it is full screen now. */
+export interface WindowState {
+  readonly fullScreen: boolean;
+  /** The main toolbar is the title bar; false when "Use system title bar" was on at creation. */
+  readonly customTitleBar: boolean;
+}
+
+/** A point in the window's content, in CSS pixels. */
+export interface MenuPoint {
+  readonly x: number;
+  readonly y: number;
+}
+
 export interface TableCraftBridge {
   listDatasources(): Promise<InvokeResult<DatasourceList>>;
   saveDatasource(request: SaveDatasourceRequest): Promise<InvokeResult<DatasourceView>>;
@@ -257,4 +275,10 @@ export interface TableCraftBridge {
   /** Creates the themes folder if missing and opens it in the file manager. */
   openThemesFolder(): Promise<InvokeResult<null>>;
   onSettingsChanged(listener: (changed: SettingsChanged) => void): () => void;
+  /** Pops the application menu at `point` in this window (Windows and Linux, decision 034). */
+  popupMenu(point: MenuPoint): Promise<InvokeResult<null>>;
+  windowState(): Promise<InvokeResult<WindowState>>;
+  onWindowState(listener: (state: WindowState) => void): () => void;
+  /** Quits through the close guard (decision 024) and starts the app again; a refused close stays. */
+  relaunch(): Promise<InvokeResult<null>>;
 }

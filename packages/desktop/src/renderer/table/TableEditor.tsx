@@ -2,7 +2,7 @@ import { currentPlatform, formatChord } from "@table-craft/desktop/renderer/acti
 import { REGION_ATTRIBUTE } from "@table-craft/desktop/renderer/actions/context.js";
 import { invoke, registry } from "@table-craft/desktop/renderer/actions/index.js";
 import { TABLE_ACTION_IDS, TABLE_CELL_MENU } from "@table-craft/desktop/renderer/actions/tableActions.js";
-import { ActionButton } from "@table-craft/desktop/renderer/console/ActionButton.js";
+import { ActionButton } from "@table-craft/desktop/renderer/ui/ActionButton.js";
 import { useConsoleDatasource } from "@table-craft/desktop/renderer/console/useConsoleDatasource.js";
 import { ResultGrid, type GridEdits } from "@table-craft/desktop/renderer/grid/ResultGrid.js";
 import { ValueEditor, ValuePanel } from "@table-craft/desktop/renderer/grid/ValuePanel.js";

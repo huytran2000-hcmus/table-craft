@@ -6,7 +6,7 @@ import {
   GRID_ACTION_IDS,
 } from "@table-craft/desktop/renderer/actions/gridActions.js";
 import { invoke } from "@table-craft/desktop/renderer/actions/index.js";
-import { ActionButton } from "@table-craft/desktop/renderer/console/ActionButton.js";
+import { ActionButton } from "@table-craft/desktop/renderer/ui/ActionButton.js";
 import { resultStateText } from "@table-craft/desktop/renderer/model/format.js";
 import type { ResultTab } from "@table-craft/desktop/renderer/state/resultTab.js";
 import { useLayout } from "@table-craft/desktop/renderer/state/layout.js";

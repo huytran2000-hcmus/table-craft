@@ -386,8 +386,8 @@ was unreadable. `hint` says what to do next.
 
 ## Shell and actions
 
-One window (decision 010), laid out the way DataGrip is (`datagrip-inventory.md` §1): a left
-stripe and the Database tool window, the editor's tabs in the middle, the Services tool window at
+One window, laid out the way DataGrip is (`datagrip-inventory.md` §1): the main toolbar as its
+title bar (see Window and main toolbar), a left stripe and the Database tool window, the editor's tabs in the middle, the Services tool window at
 the bottom, an empty right stripe, and a status bar. Which tool windows are open and their sizes
 persist in the renderer's `localStorage` under `table-craft.layout.v1`; a value that does not parse
 falls back to the default layout.
@@ -447,6 +447,7 @@ run either.
 | `palette.searchEverywhere`               | Search Everywhere                     | `⇧⇧`     | Double Shift           |
 | `datasource.new`                         | New Data Source…                      | `⌘N` ¹   | `Ctrl+N` ¹             |
 | `datasource.properties`                  | Data Source Properties…               | `⌘;`     | `Ctrl+;`               |
+| `datasource.switchTo`                    | Switch to Data Source                 |          |                        |
 | `datasource.duplicate`                   | Duplicate Data Source                 | `⌘D` ¹   | `Ctrl+D` ¹             |
 | `datasource.delete`                      | Delete Data Source                    | `⌦` ¹    | `Delete` ¹             |
 | `datasource.connect`                     | Connect                               |          |                        |
@@ -469,6 +470,8 @@ run either.
 | `editor.zoomIn`                          | Increase Editor Font Size             | `⌘=` ³   | `Ctrl+=` ³             |
 | `editor.zoomOut`                         | Decrease Editor Font Size             | `⌘-` ³   | `Ctrl+-` ³             |
 | `editor.zoomReset`                       | Reset Editor Font Size                | `⌘0` ³   | `Ctrl+0` ³             |
+| `app.mainMenu`                           | Main Menu                             |          | Alt alone ⁴            |
+| `app.relaunch`                           | Restart Now                           |          |                        |
 
 ¹ Only with focus in the Database tool window (`shortcutRegion`); elsewhere the key reaches the
 focused element. ² Only with focus in a result grid (region `grid`); in the editor and
@@ -476,6 +479,8 @@ the value panel ⌘C and ⌘A stay native. The datasource actions act on the sel
 tool window, else on the active console's datasource. `console.new` opens on that datasource too.
 ³ Only with focus in the SQL editor (region `editor`), so `⌘-` in the Database tool window is still
 Collapse All (decision 027).
+⁴ Not a keymap chord: main watches a lone Alt press in `before-input-event` and pops the menu
+itself. Main Menu is available on Windows and Linux with the custom title bar only.
 
 Shortcuts are declared as platform-neutral chords (`Mod+Shift+A`, `Shift Shift`) and dispatched by
 one capture-phase `keydown` listener on the window. A chord whose action is disabled reaches the
@@ -502,6 +507,57 @@ table-craft on Windows and Linux only, which shows the name, version, Electron a
 has the standard About panel with the same version). An item shows its
 action's accelerator with `registerAccelerator: false` and, when clicked, sends the action id to
 the renderer on `table-craft:invoke-action`; main never decides whether an action is enabled.
+On Windows and Linux the menu bar is hidden while the window draws its own title bar; the same menu
+pops up under the main-menu button (`app.mainMenu`, which asks main over `table-craft:menu.popup`
+with the button's bottom-left corner) or when Alt is pressed and released alone (`createLoneAlt` in
+`main/menuPopup.ts`, anchored under the button). With the system title bar the menu bar is back.
+
+### Window and main toolbar
+
+The window has no system title bar (decision 034). The main toolbar, `renderer/shell/MainToolbar.tsx`,
+is its title bar: a `role="toolbar"` strip named "Main toolbar", `titleBarHeightPx` high (40 px
+comfortable, 32 px compact) in the panel colour with a bottom border. Left to right it holds:
+
+- on macOS, an empty inset of `TRAFFIC_LIGHT_INSET_PX` (76 px) for the traffic lights, dropped in
+  full screen; on Windows and Linux, the main-menu button (`app.mainMenu`);
+- the datasource widget (`shell/DatasourceWidget.tsx`): the active datasource's tint swatch, name
+  and status dot, or "No data source". It opens a popover, "Switch data source", listing every
+  datasource with its swatch and connected state, then New Data Source… and Data Sources…. Choosing
+  one runs `datasource.switchTo`, which activates that datasource's most recently active console or
+  table tab, else opens a console on it;
+- the window title, centred, muted and truncating: the active tab's caption, `console [pg]`;
+- the run widget: Run, Cancel, Commit and Rollback, icon-only with tooltips. Cancel needs the
+  `cancel` capability and Commit and Rollback the `transactions` one; an action that is not
+  available (`available(context)` false) is not drawn;
+- Search Everywhere and Settings….
+
+Every button is an action button (`ui/ActionButton.tsx`) that invokes its action and keeps focus
+where it was (`mousedown` is prevented), so Run from the toolbar runs the statement at the caret.
+The console toolbar keeps its own Run, Cancel, Commit and Rollback; it is named "Console toolbar".
+`document.title` is `windowTitle(tab, datasource)` (`model/windowTitle.ts`), `console [pg] —
+table-craft` or `table-craft`, which Electron mirrors to the window's title for the Dock, the
+taskbar and the window switcher.
+
+Main builds the window chrome in one pure function, `windowChrome({platform, theme, density,
+systemTitleBar})` in `main/chrome.ts`:
+
+| Platform         | Window options                               | Native controls                                               |
+| ---------------- | -------------------------------------------- | ------------------------------------------------------------- |
+| macOS            | `titleBarStyle: "hiddenInset"`               | traffic lights at `{x: 12, y: (height − 14) / 2}`             |
+| Windows, Linux   | `titleBarStyle: "hidden"`, `titleBarOverlay` | caption buttons on `{color: panel, symbolColor: ink, height}` |
+| system title bar | none                                         | the platform's frame                                          |
+
+`applyWindowAppearance` re-applies the overlay (`setTitleBarOverlay`) and the traffic lights
+(`setWindowButtonPosition`) with the background whenever the theme or density changes. On Windows
+and Linux the toolbar's right padding keeps its controls clear of the overlay
+(`env(titlebar-area-width)`). The toolbar is the window's drag region (`.app-drag`); every control
+in it is `.app-no-drag`, and double-click is left to the system. Main sends
+`table-craft:window.state-changed` with `{fullScreen, customTitleBar}` on entering and leaving full
+screen and answers `table-craft:window.state` at startup (`state/windowState.ts`).
+
+With Use system title bar (see Settings and appearance), read once when the window is created, the
+window keeps its platform frame: the toolbar still shows, with no inset, main-menu button or drag
+region, and Windows and Linux show their menu bar.
 
 ## SQL console
 
@@ -1130,6 +1186,7 @@ Plan 013, decisions 012 and 032. Preferences are `<userData>/settings.json`, own
   "appearance": {
     "theme": "system",
     "density": "comfortable",
+    "systemTitleBar": false,
     "fonts": {
       "ui": { "family": null, "sizePx": 13 },
       "editor": { "family": null, "sizePx": 13 },
@@ -1140,15 +1197,16 @@ Plan 013, decisions 012 and 032. Preferences are `<userData>/settings.json`, own
 }
 ```
 
-| Field                | Values                                                                   | Default       |
-| -------------------- | ------------------------------------------------------------------------ | ------------- |
-| `appearance.theme`   | `system`, `dark`, `light`, `highContrast`, `user:<file stem>`            | `system`      |
-| `appearance.density` | `comfortable`, `compact`                                                 | `comfortable` |
-| `appearance.fonts.*` | `{ family: string \| null, sizePx: 8–32 }`; `null` is the built-in stack | 13, 13, 12    |
-| `data.nullText`      | 1–16 characters                                                          | `<null>`      |
-| `data.groupDigits`   | boolean                                                                  | `false`       |
-| `data.pageRows`      | 10–10,000                                                                | 500           |
-| `data.fetchAllCap`   | 1,000–1,000,000, at least `pageRows`                                     | 100,000       |
+| Field                       | Values                                                                   | Default       |
+| --------------------------- | ------------------------------------------------------------------------ | ------------- |
+| `appearance.theme`          | `system`, `dark`, `light`, `highContrast`, `user:<file stem>`            | `system`      |
+| `appearance.density`        | `comfortable`, `compact`                                                 | `comfortable` |
+| `appearance.systemTitleBar` | boolean; read once when the window is created                            | `false`       |
+| `appearance.fonts.*`        | `{ family: string \| null, sizePx: 8–32 }`; `null` is the built-in stack | 13, 13, 12    |
+| `data.nullText`             | 1–16 characters                                                          | `<null>`      |
+| `data.groupDigits`          | boolean                                                                  | `false`       |
+| `data.pageRows`             | 10–10,000                                                                | 500           |
+| `data.fetchAllCap`          | 1,000–1,000,000, at least `pageRows`                                     | 100,000       |
 
 Each field is read on its own: a missing or out-of-range one takes its default and the rest stand.
 A file that is not JSON, not an object or from a newer version is renamed to
@@ -1173,15 +1231,19 @@ notice. Reload Themes rereads the folder; nothing watches it.
 
 The UI, editor and grid fonts each have a family and a size; the family list comes from
 `queryLocalFonts()`, monospace families first for the editor and grid, with a free-text field when
-the list is unavailable. Compact density makes rows 20 px instead of 24 and the cell padding and
-gap 6 px instead of 8. In the SQL editor `⌘=`, `⌘-` and `⌘0` change the saved editor font size by
+the list is unavailable. Compact density makes rows 20 px instead of 24, the cell padding and
+gap 6 px instead of 8, and the main toolbar 32 px instead of 40, which main applies to the native
+window controls at once. In the SQL editor `⌘=`, `⌘-` and `⌘0` change the saved editor font size by
 1 px and reset it to 13.
 
 NULL text and Group digits change what the grid draws and measures, nothing else (decision 032).
 The page size and Fetch All limit travel with each request (see Renderer to engine).
 
 The Settings dialog (`⌘,`; the macOS app menu's Settings…, File → Settings… elsewhere) has three
-pages: Appearance (theme, Reload Themes, Open Themes Folder, density, UI font), Editor (editor
+pages: Appearance (theme, Reload Themes, Open Themes Folder, density, UI font, and under Window,
+Use system title bar with "Takes effect after restart." and a Restart Now button, `app.relaunch`,
+shown while the choice differs from the running window; it asks to close dirty tabs first, as Quit
+does, then relaunches), Editor (editor
 font, the zoom chords) and Data Editor (grid font, NULL text, Group digits, page size, Fetch All
 limit). Each page has Restore Defaults; a value outside its range is refused inline and not saved.
 Keymap editing and date and time formats are not settings in v1.

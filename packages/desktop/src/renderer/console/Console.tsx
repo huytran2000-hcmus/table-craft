@@ -1,6 +1,6 @@
 import { ACTION_IDS } from "@table-craft/desktop/renderer/actions/appActions.js";
 import { EXPLAIN_ACTION_IDS } from "@table-craft/desktop/renderer/actions/explainActions.js";
-import { ActionButton } from "@table-craft/desktop/renderer/console/ActionButton.js";
+import { ActionButton } from "@table-craft/desktop/renderer/ui/ActionButton.js";
 import { Editor } from "@table-craft/desktop/renderer/console/Editor.js";
 import { ResultTabs } from "@table-craft/desktop/renderer/console/ResultTabs.js";
 import { TxControls } from "@table-craft/desktop/renderer/console/TxControls.js";
@@ -32,7 +32,11 @@ export function Console({ consoleId }: { readonly consoleId: string }) {
 
   return (
     <div data-testid="console" data-color={color ?? undefined} className="flex min-h-0 flex-1 flex-col">
-      <div className="flex items-center gap-gap border-b border-line bg-panel p-gap">
+      <div
+        role="toolbar"
+        aria-label="Console toolbar"
+        className="flex items-center gap-gap border-b border-line bg-panel p-gap"
+      >
         <ActionButton actionId={ACTION_IDS.run} primary />
         <ActionButton actionId={ACTION_IDS.runAll} />
         {capabilities.includes("explain") ? <ActionButton actionId={EXPLAIN_ACTION_IDS.explain} compact /> : null}

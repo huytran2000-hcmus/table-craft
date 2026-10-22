@@ -7,6 +7,7 @@ import { EXPLORER_ACTIONS } from "@table-craft/desktop/renderer/actions/explorer
 import { NAVIGATION_ACTIONS } from "@table-craft/desktop/renderer/actions/navigationActions.js";
 import type { AnyAction } from "@table-craft/desktop/renderer/actions/registry.js";
 import { SETTINGS_ACTIONS } from "@table-craft/desktop/renderer/actions/settingsActions.js";
+import { WINDOW_ACTIONS } from "@table-craft/desktop/renderer/actions/windowActions.js";
 import { TABLE_ACTIONS } from "@table-craft/desktop/renderer/actions/tableActions.js";
 
 /** Every action the app registers; the keymap and menu tests check this list. */
@@ -20,4 +21,5 @@ export const ALL_ACTIONS: readonly AnyAction[] = [
   ...HISTORY_ACTIONS,
   ...EXPLAIN_ACTIONS,
   ...SETTINGS_ACTIONS,
+  ...WINDOW_ACTIONS,
 ];

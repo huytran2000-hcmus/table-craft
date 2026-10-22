@@ -1,7 +1,7 @@
 import { useMemo, useRef, type KeyboardEvent } from "react";
 import { EXPLAIN_ACTION_IDS } from "@table-craft/desktop/renderer/actions/explainActions.js";
 import { invoke } from "@table-craft/desktop/renderer/actions/index.js";
-import { ActionButton } from "@table-craft/desktop/renderer/console/ActionButton.js";
+import { ActionButton } from "@table-craft/desktop/renderer/ui/ActionButton.js";
 import {
   movedInPlan,
   planNodeAt,

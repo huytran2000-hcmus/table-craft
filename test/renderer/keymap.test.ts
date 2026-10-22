@@ -3,6 +3,7 @@ import { ALL_ACTIONS } from "@table-craft/desktop/renderer/actions/allActions.js
 import type { FocusRegion } from "@table-craft/desktop/renderer/actions/context.js";
 import { createKeyDispatcher, findClashes, findReservedClashes } from "@table-craft/desktop/renderer/actions/keymap.js";
 import { createActionRegistry, defineAction } from "@table-craft/desktop/renderer/actions/registry.js";
+import { WINDOW_ACTION_IDS } from "@table-craft/desktop/renderer/actions/windowActions.js";
 import { EDITOR_CHORDS } from "@table-craft/desktop/renderer/console/editorKeys.js";
 import { IDLE_CONTEXT, keydown } from "./support.js";
 
@@ -28,6 +29,14 @@ function dispatcherWith(enabled: boolean, paletteOpen = false) {
 describe("keymap", () => {
   it("givenRegisteredActions_whenShortcutsCompared_thenNoTwoShareAChord", () => {
     expect(findClashes(ALL_ACTIONS)).toEqual([]);
+  });
+
+  it("givenWindowActions_whenRegistered_thenEachHasNoChord", () => {
+    const ids: readonly string[] = Object.values(WINDOW_ACTION_IDS);
+    const registered = ALL_ACTIONS.filter((action) => ids.includes(action.id));
+
+    expect(registered.map((action) => action.id).sort()).toEqual([...ids].sort());
+    expect(registered.filter((action) => action.shortcut !== undefined)).toEqual([]);
   });
 
   it("givenEditorChords_whenComparedWithKeymap_thenNoClash", () => {

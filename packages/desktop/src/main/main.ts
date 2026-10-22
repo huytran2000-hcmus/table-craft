@@ -6,6 +6,7 @@ import {
   BrowserWindow,
   dialog,
   ipcMain,
+  Menu,
   MessageChannelMain,
   nativeTheme,
   safeStorage,
@@ -17,6 +18,7 @@ import {
   type WebContents,
 } from "electron";
 import { openQueryHistory } from "@table-craft/core";
+import { windowChrome } from "@table-craft/desktop/main/chrome.js";
 import { createCloseGuard } from "@table-craft/desktop/main/closeGuard.js";
 import { createConsoleFiles, type DirectoryFileSystem } from "@table-craft/desktop/main/consoleFiles.js";
 import { datasourceFromEnvironment } from "@table-craft/desktop/main/datasource.js";
@@ -24,6 +26,7 @@ import { createDatasourceStore } from "@table-craft/desktop/main/datasources.js"
 import { createHostRegistry, type EngineProcess } from "@table-craft/desktop/main/hosts.js";
 import { registerIpc } from "@table-craft/desktop/main/ipc.js";
 import { installApplicationMenu } from "@table-craft/desktop/main/menu.js";
+import { createLoneAlt, menuButtonAnchor, popupApplicationMenu } from "@table-craft/desktop/main/menuPopup.js";
 import { appPaths } from "@table-craft/desktop/main/paths.js";
 import { listPlugins } from "@table-craft/desktop/main/plugins.js";
 import { createSecretStore, type Cipher } from "@table-craft/desktop/main/secrets.js";
@@ -34,7 +37,7 @@ import {
   type SettingsService,
 } from "@table-craft/desktop/main/settings.js";
 import { createThemeFolder } from "@table-craft/desktop/main/themes.js";
-import { resolveTheme, type Theme } from "@table-craft/desktop/appearance/themes.js";
+import { DENSITIES, resolveTheme, type DensityTokens, type Theme } from "@table-craft/desktop/appearance/themes.js";
 import { ENGINE_PORT_MESSAGE } from "@table-craft/desktop/engine/protocol.js";
 import {
   CHANNELS,
@@ -42,6 +45,7 @@ import {
   type DatasourceList,
   type EngineExited,
   type SettingsChanged,
+  type WindowState,
 } from "@table-craft/desktop/preload/bridge.js";
 
 const APP_NAME = "table-craft";
@@ -143,13 +147,25 @@ const hosts = createHostRegistry<WebContents>({
 });
 
 const closeGuard = createCloseGuard<BrowserWindow>({ quit: () => app.quit() });
+/** Windows created with the main toolbar as their title bar; the setting is read once, at creation. */
+const customTitleBars = new WeakSet<BrowserWindow>();
+/** Restart Now asked to quit; `will-quit` turns it into a relaunch, a refused close cancels it. */
+let relaunchRequested = false;
+
+function densityOf(settings: SettingsService): DensityTokens {
+  return DENSITIES[settings.snapshot().settings.appearance.density];
+}
+
+function windowStateOf(window: BrowserWindow): WindowState {
+  return { fullScreen: window.isFullScreen(), customTitleBar: customTitleBars.has(window) };
+}
 
 /**
  * The theme the settings name, made concrete, after pointing `nativeTheme` at its scheme so menus,
  * dialogs and the renderer's `prefers-color-scheme` agree (plan 013 decision 8). Only a `"system"`
  * choice reads the OS, which is why `themeSource` is set first.
  */
-function applyNativeTheme(settings: SettingsService): Theme {
+function applyWindowAppearance(settings: SettingsService): Theme {
   const { settings: current, themes } = settings.snapshot();
   const choice = current.appearance.theme;
   // Assigning `themeSource` emits `updated`, which calls back here; only a real change assigns.
@@ -163,18 +179,33 @@ function applyNativeTheme(settings: SettingsService): Theme {
   };
   const { theme } = resolveTheme(choice, system, themes);
   if (choice !== "system") pointAt(theme.colorScheme);
-  for (const window of BrowserWindow.getAllWindows()) window.setBackgroundColor(theme.colors.canvas);
+  const chrome = windowChrome({
+    platform: process.platform,
+    theme,
+    density: densityOf(settings),
+    systemTitleBar: false,
+  });
+  for (const window of BrowserWindow.getAllWindows()) {
+    window.setBackgroundColor(theme.colors.canvas);
+    if (!customTitleBars.has(window)) continue;
+    if (chrome.overlay !== null) window.setTitleBarOverlay(chrome.overlay);
+    if (chrome.trafficLights !== null) window.setWindowButtonPosition(chrome.trafficLights);
+  }
   return theme;
 }
 
 function createWindow(settings: SettingsService): void {
+  const theme = applyWindowAppearance(settings);
+  const { systemTitleBar } = settings.snapshot().settings.appearance;
+  const chrome = windowChrome({ platform: process.platform, theme, density: densityOf(settings), systemTitleBar });
   const window = new BrowserWindow({
     title: APP_NAME,
     width: WINDOW_WIDTH,
     height: WINDOW_HEIGHT,
     show: false,
     // The first frame, before the renderer's bundle runs, is already the theme's canvas.
-    backgroundColor: applyNativeTheme(settings).colors.canvas,
+    backgroundColor: theme.colors.canvas,
+    ...chrome.options,
     // macOS takes the window's icon from the app bundle, or the dock in development.
     ...(process.platform === MAC_PLATFORM ? {} : { icon: paths.icon }),
     webPreferences: {
@@ -184,6 +215,21 @@ function createWindow(settings: SettingsService): void {
       nodeIntegration: false,
     },
   });
+  if (!systemTitleBar) customTitleBars.add(window);
+  if (!systemTitleBar && process.platform !== MAC_PLATFORM) {
+    window.setMenuBarVisibility(false);
+    const loneAlt = createLoneAlt();
+    window.webContents.on("before-input-event", (event, input) => {
+      if (input.type !== "keyDown" && input.type !== "keyUp") return;
+      if (!loneAlt.input({ type: input.type, key: input.key })) return;
+      event.preventDefault();
+      popupApplicationMenu(Menu.getApplicationMenu(), window, menuButtonAnchor(densityOf(settings)));
+    });
+    window.on("blur", () => loneAlt.reset());
+  }
+  const sendState = () => window.webContents.send(CHANNELS.windowState, windowStateOf(window));
+  window.on("enter-full-screen", sendState);
+  window.on("leave-full-screen", sendState);
   window.once("ready-to-show", () => window.show());
   closeGuard.guard(window);
   void window.loadFile(paths.rendererIndex);
@@ -231,13 +277,13 @@ void app.whenReady().then(async () => {
     store: createSettingsStore({ directory, files }),
     themes,
     onChanged(changed) {
-      applyNativeTheme(settings);
+      applyWindowAppearance(settings);
       broadcast(CHANNELS.settingsChanged, changed);
     },
   });
   if (settings.snapshot().warning !== null) console.error(`table-craft: ${String(settings.snapshot().warning)}`);
   nativeTheme.on("updated", () => {
-    if (settings.snapshot().settings.appearance.theme === "system") applyNativeTheme(settings);
+    if (settings.snapshot().settings.appearance.theme === "system") applyWindowAppearance(settings);
   });
   registerIpc<WebContents>(ipcMain, {
     service,
@@ -253,9 +299,22 @@ void app.whenReady().then(async () => {
     saveFile,
     answerClose(sender, proceed) {
       const window = BrowserWindow.fromWebContents(sender);
+      if (!proceed) relaunchRequested = false;
       if (window !== null) closeGuard.answer(window, proceed);
     },
     appInfo: () => appInfo,
+    popupMenu(sender, point) {
+      const window = BrowserWindow.fromWebContents(sender);
+      if (window !== null) popupApplicationMenu(Menu.getApplicationMenu(), window, point);
+    },
+    windowState(sender) {
+      const window = BrowserWindow.fromWebContents(sender);
+      return window === null ? { fullScreen: false, customTitleBar: false } : windowStateOf(window);
+    },
+    relaunch() {
+      relaunchRequested = true;
+      app.quit();
+    },
     log: (message, cause) => console.error(`table-craft: ${message}`, cause),
   });
   installApplicationMenu(() => BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0] ?? null);
@@ -271,4 +330,8 @@ app.on("window-all-closed", () => {
 
 app.on("before-quit", () => closeGuard.beforeQuit());
 
-app.on("will-quit", () => hosts.closeAll());
+app.on("will-quit", () => {
+  hosts.closeAll();
+  // Scheduled only now that every window has agreed to close, so a refused close never relaunches later.
+  if (relaunchRequested) app.relaunch();
+});

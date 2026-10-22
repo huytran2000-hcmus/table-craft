@@ -24,6 +24,7 @@ const CHOSEN: Settings = {
       editor: { family: "Fira Code", sizePx: 15 },
       grid: { family: "Menlo", sizePx: 11 },
     },
+    systemTitleBar: true,
   },
   data: { nullText: "∅", groupDigits: true, pageRows: 100, fetchAllCap: 2_000 },
 };
@@ -108,6 +109,16 @@ describe("settings document", () => {
     expect(read.appearance.density).toBe("compact");
     expect(read.appearance.fonts.editor).toEqual({ family: null, sizePx: 13 });
     expect(read.data).toEqual({ nullText: "<null>", groupDigits: false, pageRows: 200, fetchAllCap: 100_000 });
+  });
+
+  it("givenNoSystemTitleBarField_whenRead_thenFalse", () => {
+    const { systemTitleBar: _omitted, ...appearance } = CHOSEN.appearance;
+
+    expect(readSettings({ ...CHOSEN, appearance }).appearance.systemTitleBar).toBe(false);
+    expect(
+      readSettings({ ...CHOSEN, appearance: { ...appearance, systemTitleBar: "yes" } }).appearance.systemTitleBar,
+    ).toBe(false);
+    expect(readSettings(CHOSEN).appearance.systemTitleBar).toBe(true);
   });
 
   it("givenWriteRequest_whenAnyValueOutOfRange_thenRefused", () => {
