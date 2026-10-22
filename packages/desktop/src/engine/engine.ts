@@ -48,6 +48,8 @@ import type {
   EngineMethod,
   EngineResponse,
   ExecutedStatement,
+  Explainability,
+  ExplainedStatement,
   ExportedResult,
   GeneratorStatement,
   ProbeResult,
@@ -126,6 +128,28 @@ function statementFailed(cause: unknown, readOnly: boolean): EngineFailure {
     message: messageOf(cause),
     hint: readOnly ? READ_ONLY_STATEMENT_HINT : STATEMENT_HINT,
   });
+}
+
+function explainFailed(cause: unknown, readOnly: boolean): EngineFailure {
+  if (isPluginError(cause) && cause.code === "explainUnsupported") {
+    return new EngineFailure({
+      code: "explainUnsupported",
+      message: cause.message,
+      hint: "Put the caret in a statement this database can explain.",
+    });
+  }
+  return statementFailed(cause, readOnly);
+}
+
+function explainabilityOf(language: SqlLanguage, sql: string, analyze: boolean): Explainability {
+  if (language.explainable === undefined) {
+    throw new EngineFailure({
+      code: "invalidRequest",
+      message: "This datasource's plugin does not declare the explain capability.",
+      hint: BUG_HINT,
+    });
+  }
+  return language.explainable(sql, { analyze });
 }
 
 const INTROSPECTION_HINT = "Check that this user may read the schema, then choose Synchronize (⌥⌘Y) to try again.";
@@ -559,6 +583,29 @@ export function createEngine(options: EngineOptions, now: () => number = Date.no
       }
     }
 
+    async function explainStatement(request: RequestOf<"statement.explain">): Promise<ExplainedStatement> {
+      const open = sessionFor(request.sessionId);
+      const needed: Capability = request.analyze ? "explainAnalyze" : "explain";
+      if (!open.capabilities.includes(needed) || open.session.explain === undefined) {
+        throw new EngineFailure({
+          code: "invalidRequest",
+          message: `This datasource's plugin does not declare the ${needed} capability.`,
+          hint: BUG_HINT,
+        });
+      }
+      open.running += 1;
+      try {
+        if (cursors.has(request.sessionId)) await closeCursorOf(request.sessionId);
+        const plan = await open.session.explain(request.sql, { analyze: request.analyze }).catch((cause: unknown) => {
+          throw explainFailed(cause, options.datasource.readOnly);
+        });
+        sessionFor(request.sessionId);
+        return { plan, transactionOpen: open.session.transactions?.open ?? false };
+      } finally {
+        open.running -= 1;
+      }
+    }
+
     async function queryTable(request: RequestOf<"table.query">): Promise<TableQuery> {
       const open = sessionFor(request.sessionId);
       const { relation, qualified } = await relationOf(request.path, request.relation);
@@ -702,6 +749,8 @@ export function createEngine(options: EngineOptions, now: () => number = Date.no
         return null;
       },
       "script.split": ({ text }) => Promise.resolve(splitScript(text)),
+      "sql.explainable": ({ sql, analyze }) => Promise.resolve(explainabilityOf(sqlLanguage(), sql, analyze)),
+      "statement.explain": (request) => explainStatement(request),
       "transaction.setMode": ({ sessionId, mode }) =>
         transact(sessionId, (transactions) => transactions.setMode(mode), OPEN_TRANSACTION_HINT),
       "transaction.commit": ({ sessionId }) =>

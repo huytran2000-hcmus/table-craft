@@ -10,6 +10,8 @@ import {
   type ConnectOptions,
   type DatasourcePlugin,
   type ExecuteResult,
+  type ExplainedPlan,
+  type ExplainOptions,
   type Introspector,
   type Row,
   type PluginErrorCode,
@@ -22,10 +24,13 @@ import {
 import {
   classifyTokens,
   defaultKeyword,
+  explainedVerb,
+  planText,
   quoteIdentifierWith,
   SQL_FUNCTIONS,
   SQL_KEYWORDS,
   sqlCompleter,
+  sqlExplainable,
   sqlGenerator,
   sqlLiteral,
   sqlSplitter,
@@ -33,10 +38,19 @@ import {
   type SqlDialectOptions,
   type SqlLiteralOptions,
 } from "@table-craft/plugin-api/sql";
+import { ANALYZE_VERBS, EXPLAIN_VERBS, explainStatement, planFormat, readJson, readTree } from "./explain.js";
 import { mysqlIntrospector } from "./introspect.js";
 
 const PLUGIN_ID = "mysql";
-const CAPABILITIES: readonly Capability[] = ["sql", "cancel", "schemaTree", "transactions", "ddl"];
+const CAPABILITIES: readonly Capability[] = [
+  "sql",
+  "cancel",
+  "schemaTree",
+  "transactions",
+  "ddl",
+  "explain",
+  "explainAnalyze",
+];
 
 /** What the mysql client accepts: `'\''`, `# comments`, `DELIMITER //` and `BEGIN … END` routine bodies. */
 const DIALECT: SqlDialectOptions = {
@@ -52,6 +66,13 @@ const quoteIdentifier = quoteIdentifierWith("`");
 
 const PLAIN_IDENTIFIER = /^[A-Za-z_][A-Za-z0-9_$]*$/;
 const KEYWORDS: readonly string[] = [...SQL_KEYWORDS, "STRAIGHT_JOIN", "REPLACE"];
+
+const { explainable } = sqlExplainable({
+  dialect: DIALECT,
+  name: "MySQL",
+  verbs: EXPLAIN_VERBS,
+  analyzeVerbs: ANALYZE_VERBS,
+});
 
 const language: SqlLanguage = {
   split: sqlSplitter(DIALECT),
@@ -74,6 +95,7 @@ const language: SqlLanguage = {
     plainIdentifier: PLAIN_IDENTIFIER,
     keywords: KEYWORDS,
   }),
+  explainable,
 };
 
 /** Manual mode is autocommit off: the server opens a transaction with the next statement. */
@@ -360,6 +382,17 @@ class MysqlSession implements Session {
       this.#running = null;
       throw this.#failure(cause, running);
     }
+  }
+
+  async explain(sql: string, options: ExplainOptions): Promise<ExplainedPlan> {
+    const verdict = explainable(sql, options);
+    if (!verdict.ok) throw new PluginError("explainUnsupported", verdict.reason);
+    const format = planFormat(explainedVerb(sql, DIALECT));
+    const statement = explainStatement(sql, options.analyze, format);
+    const rows: Row[] = [];
+    for await (const row of (await this.execute(statement)).rows) rows.push(row);
+    const raw = planText(rows);
+    return format === "json" ? readJson(raw, statement) : readTree(raw, statement, options.analyze);
   }
 
   async *#rows(

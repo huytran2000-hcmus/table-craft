@@ -225,7 +225,7 @@ describe("console runs", () => {
       ["Result 3", false],
     ]);
     expect(session().results[0]?.id).toBe(first?.id);
-    expect(released).toEqual([second?.handle]);
+    expect(released).toEqual([second?.kind === "rows" ? second.handle : null]);
     expect(session().activeResult).toBe(session().results[2]?.id);
   });
 

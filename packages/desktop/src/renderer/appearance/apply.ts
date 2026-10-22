@@ -29,6 +29,8 @@ export function appearanceVariables(appearance: Appearance): Readonly<Record<str
     "--tc-key-icon": colors.keyIcon,
     "--tc-warning": colors.warning,
     "--tc-statement-flash": colors.statementFlash,
+    "--tc-plan-bar": colors.planBar,
+    "--tc-analysed-banner": colors.analysedBanner,
     ...Object.fromEntries(Object.entries(colors.datasource).map(([name, value]) => [`--tc-ds-${name}`, value])),
     ...Object.fromEntries(Object.entries(colors.syntax).map(([name, value]) => [`--tc-syntax-${kebab(name)}`, value])),
     "--tc-font-ui": fonts.ui.family,
@@ -56,6 +58,8 @@ export function appearanceVariables(appearance: Appearance): Readonly<Record<str
     "--tc-generator-width": `${density.generatorWidthPx}px`,
     "--tc-picker-width": `${density.pickerWidthPx}px`,
     "--tc-picker-list-height": `${density.pickerListHeightPx}px`,
+    "--tc-plan-details-width": `${density.planDetailsWidthPx}px`,
+    "--tc-plan-bar-height": `${density.planBarHeightPx}px`,
   };
 }
 

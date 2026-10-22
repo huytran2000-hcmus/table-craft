@@ -13,7 +13,10 @@
       "@table-craft/desktop/*": ["packages/desktop/src/*"],
       "@table-craft/plugin-sqlite": ["plugins/sqlite/src/index.ts"],
       "@table-craft/plugin-postgres": ["plugins/postgres/src/index.ts"],
-      "@table-craft/plugin-mysql": ["plugins/mysql/src/index.ts"]
+      "@table-craft/plugin-mysql": ["plugins/mysql/src/index.ts"],
+      "@table-craft/plugin-sqlite/explain": ["plugins/sqlite/src/explain.ts"],
+      "@table-craft/plugin-postgres/explain": ["plugins/postgres/src/explain.ts"],
+      "@table-craft/plugin-mysql/explain": ["plugins/mysql/src/explain.ts"]
     },
     "types": ["node"],
     "strict": true,

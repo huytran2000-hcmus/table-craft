@@ -11,7 +11,8 @@ Status: Accepted
   (`SET SESSION CHARACTERISTICS AS TRANSACTION READ ONLY`, `PRAGMA query_only`) and in the UI, and a
   `color` that tints its tabs and console border.
 - Statements the plugin classifies as destructive (`UPDATE` or `DELETE` without `WHERE`, `DROP`,
-  `TRUNCATE`) require confirmation before they run.
+  `TRUNCATE`) require confirmation before they run. `EXPLAIN ANALYZE` of one of them is destructive
+  too, because it runs the statement; a plain `EXPLAIN` is not (decision 031).
 - Table editor submits always run as one transaction, whatever the console mode, and roll back
   entirely on error.
 

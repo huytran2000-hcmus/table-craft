@@ -14,6 +14,11 @@ export default defineConfig({
       { find: "@table-craft/plugin-api", replacement: resolve(WORKSPACE_ROOT, "packages/plugin-api/src") },
       { find: "@table-craft/core", replacement: resolve(WORKSPACE_ROOT, "packages/core/src") },
       { find: "@table-craft/desktop", replacement: resolve(WORKSPACE_ROOT, "packages/desktop/src") },
+      // The plan readers, which the plan-reader tests feed captured EXPLAIN output (plan 012).
+      {
+        find: /^@table-craft\/plugin-(sqlite|postgres|mysql)\/explain$/,
+        replacement: resolve(WORKSPACE_ROOT, "plugins/$1/src/explain.ts"),
+      },
       { find: "@table-craft/plugin-sqlite", replacement: resolve(WORKSPACE_ROOT, "plugins/sqlite/src/index.ts") },
       { find: "@table-craft/plugin-postgres", replacement: resolve(WORKSPACE_ROOT, "plugins/postgres/src/index.ts") },
       { find: "@table-craft/plugin-mysql", replacement: resolve(WORKSPACE_ROOT, "plugins/mysql/src/index.ts") },

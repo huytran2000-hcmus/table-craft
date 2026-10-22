@@ -63,6 +63,15 @@ export const pluginManifestSchema = z
   .refine((manifest) => !manifest.capabilities.includes("ddl") || manifest.capabilities.includes("schemaTree"), {
     message: "the ddl capability requires schemaTree",
     path: ["capabilities"],
-  });
+  })
+  // A plan is of a statement, and Analyse is Explain that also runs it (decision 031).
+  .refine((manifest) => !manifest.capabilities.includes("explain") || manifest.capabilities.includes("sql"), {
+    message: "the explain capability requires sql",
+    path: ["capabilities"],
+  })
+  .refine(
+    (manifest) => !manifest.capabilities.includes("explainAnalyze") || manifest.capabilities.includes("explain"),
+    { message: "the explainAnalyze capability requires explain", path: ["capabilities"] },
+  );
 
 export type PluginManifest = z.infer<typeof pluginManifestSchema>;

@@ -5,6 +5,8 @@ export const PLUGIN_ERROR_CODES = [
   "statementFailed",
   "introspectionFailed",
   "definitionNotFound",
+  /** `Session.explain` refused the statement; the message says why and what to explain instead. */
+  "explainUnsupported",
 ] as const;
 
 export type PluginErrorCode = (typeof PLUGIN_ERROR_CODES)[number];

@@ -35,6 +35,10 @@ export interface ColorTokens {
   readonly warning: string;
   /** Behind the statement the console just ran, fading out (plan 006 decision 7). */
   readonly statementFlash: string;
+  /** A plan node's share of its root's cost or time, as a thin bar in its cell (plan 012 decision 11). */
+  readonly planBar: string;
+  /** Behind the banner an analysed plan opens with: the statement ran (plan 012 decision 12). */
+  readonly analysedBanner: string;
   /** The tints a datasource can carry (decision 011): its swatch, tab and console border. */
   readonly datasource: Readonly<Record<DatasourceTint, string>>;
   readonly syntax: SyntaxColorTokens;
@@ -93,6 +97,10 @@ export interface DensityTokens {
   readonly pickerWidthPx: number;
   /** The picker's list; the preview takes the same again. */
   readonly pickerListHeightPx: number;
+  /** The plan view's details strip, beside its tree. */
+  readonly planDetailsWidthPx: number;
+  /** The plan bar's thickness under a Cost or Time cell. */
+  readonly planBarHeightPx: number;
 }
 
 export interface Appearance {
@@ -127,6 +135,8 @@ export const DARK_COLORS: ColorTokens = {
   keyIcon: "#d9a343",
   warning: "#e0a84a",
   statementFlash: "#3d4a2e",
+  planBar: "#4f80c9",
+  analysedBanner: "#4a3d22",
   datasource: {
     red: "#c75450",
     orange: "#d08b46",
@@ -173,6 +183,8 @@ export const COMFORTABLE_DENSITY: DensityTokens = {
   generatorWidthPx: 640,
   pickerWidthPx: 720,
   pickerListHeightPx: 220,
+  planDetailsWidthPx: 320,
+  planBarHeightPx: 3,
 };
 
 export const DEFAULT_APPEARANCE: Appearance = {

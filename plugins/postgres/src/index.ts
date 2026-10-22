@@ -10,6 +10,8 @@ import {
   type ConnectOptions,
   type DatasourcePlugin,
   type ExecuteResult,
+  type ExplainedPlan,
+  type ExplainOptions,
   type Introspector,
   type Row,
   type Session,
@@ -22,10 +24,12 @@ import {
   classifyTokens,
   defaultKeyword,
   defaultValuesInsert,
+  planText,
   quoteIdentifierWith,
   SQL_FUNCTIONS,
   SQL_KEYWORDS,
   sqlCompleter,
+  sqlExplainable,
   sqlGenerator,
   sqlLiteral,
   sqlSplitter,
@@ -33,10 +37,19 @@ import {
   type SqlDialectOptions,
   type SqlLiteralOptions,
 } from "@table-craft/plugin-api/sql";
+import { EXPLAIN_VERBS, explainStatement, readPlan } from "./explain.js";
 import { postgresIntrospector } from "./introspect.js";
 
 const PLUGIN_ID = "postgres";
-const CAPABILITIES: readonly Capability[] = ["sql", "cancel", "schemaTree", "transactions", "ddl"];
+const CAPABILITIES: readonly Capability[] = [
+  "sql",
+  "cancel",
+  "schemaTree",
+  "transactions",
+  "ddl",
+  "explain",
+  "explainAnalyze",
+];
 
 /** Function bodies live in dollar quotes; `BEGIN ATOMIC … END` holds a SQL-standard body. */
 const DIALECT: SqlDialectOptions = { dollarQuotes: true, nestedBlockComments: true, blockKeywords: ["BEGIN"] };
@@ -48,6 +61,13 @@ const quoteIdentifier = quoteIdentifierWith('"');
 /** An upper-case letter would fold away unquoted, so only lower case reads back as written. */
 const PLAIN_IDENTIFIER = /^[a-z_][a-z0-9_$]*$/;
 const KEYWORDS: readonly string[] = [...SQL_KEYWORDS, "ILIKE", "LATERAL", "RETURNING"];
+
+const { explainable } = sqlExplainable({
+  dialect: DIALECT,
+  name: "PostgreSQL",
+  verbs: EXPLAIN_VERBS,
+  analyzeVerbs: EXPLAIN_VERBS,
+});
 
 const language: SqlLanguage = {
   split: sqlSplitter(DIALECT),
@@ -70,6 +90,7 @@ const language: SqlLanguage = {
     plainIdentifier: PLAIN_IDENTIFIER,
     keywords: KEYWORDS,
   }),
+  explainable,
 };
 
 const BEGIN_SQL = "BEGIN";
@@ -329,6 +350,15 @@ class PostgresSession implements Session {
       this.#running = null;
       throw this.#failure(cause, running);
     }
+  }
+
+  async explain(sql: string, options: ExplainOptions): Promise<ExplainedPlan> {
+    const verdict = explainable(sql, options);
+    if (!verdict.ok) throw new PluginError("explainUnsupported", verdict.reason);
+    const statement = explainStatement(sql, options.analyze);
+    const rows: Row[] = [];
+    for await (const row of (await this.execute(statement)).rows) rows.push(row);
+    return readPlan(planText(rows), statement, options.analyze);
   }
 
   async *#rows(

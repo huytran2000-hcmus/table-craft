@@ -7,7 +7,9 @@ import {
   type CompletionCatalog,
   type ConnectOptions,
   type DatasourcePlugin,
+  type ExplainedPlan,
   type GeneratedStatement,
+  type PlanNode,
   type PluginErrorCode,
   type PluginManifest,
   type Introspector,
@@ -88,6 +90,10 @@ const DESTRUCTIVE_CASES: readonly (readonly [string, boolean])[] = [
   ["DROP TABLE orders", true],
   ["TRUNCATE TABLE orders", true],
   ["SELECT * FROM orders", false],
+  // Plain EXPLAIN only plans; ANALYZE runs the statement, so it is as destructive as it (decision 031).
+  ["EXPLAIN DELETE FROM orders", false],
+  ["EXPLAIN ANALYZE DELETE FROM orders", true],
+  ["EXPLAIN ANALYZE DELETE FROM orders WHERE id = 1", false],
 ];
 
 /** A row the transaction cases add to `orders` and always remove, so the fixture's counts hold. */
@@ -143,6 +149,20 @@ const MISSING_RELATION = "table_craft_no_such_relation";
 const ORDERS_INDEX = "orders_placed_at_idx";
 /** Created and dropped by the generated-DROP case. */
 const DROP_PROBE_TABLE = "table_craft_drop_probe";
+
+/** A join every fixture database plans with more than one step. */
+const EXPLAIN_JOIN = "SELECT o.id, c.name FROM orders o JOIN customers c ON c.id = o.customer_id WHERE o.total > 10";
+const EXPLAIN_DELETE_ALL = "DELETE FROM orders";
+const EXPLAIN_UPDATE = "UPDATE orders SET total = total WHERE id = 1";
+/** The `orders` rows every fixture database is seeded with. */
+const ORDERS_ROWS = 3;
+const ANALYSED_ORDER_ID = 1;
+const ANALYSED_UPDATE = `UPDATE orders SET total = 0 WHERE id = ${ANALYSED_ORDER_ID}`;
+const ANALYSED_TOTAL = `SELECT total FROM orders WHERE id = ${ANALYSED_ORDER_ID}`;
+
+function planNodes(roots: readonly PlanNode[]): PlanNode[] {
+  return roots.flatMap((node) => [node, ...planNodes(node.children)]);
+}
 
 const PROBE_TABLE = "table_craft_contract_probe";
 const PROBE_ROWS = 2;
@@ -320,6 +340,17 @@ export function runPluginContract(plugin: DatasourcePlugin, fixture: ContractFix
       if (ddl) expect(plugin.capabilities).toContain("schemaTree");
       await withSession(plugin, fixture, (session) => {
         expect(session.introspector?.definition !== undefined).toBe(ddl);
+        return Promise.resolve();
+      });
+    });
+
+    it("givenPlugin_whenInspected_thenHasExplainableAndExplainExactlyWhenExplainDeclared", async () => {
+      const explain = plugin.capabilities.includes("explain");
+      if (explain) expect(plugin.capabilities).toContain("sql");
+      if (plugin.capabilities.includes("explainAnalyze")) expect(plugin.capabilities).toContain("explain");
+      expect(plugin.language?.explainable !== undefined).toBe(explain);
+      await withSession(plugin, fixture, (session) => {
+        expect(session.explain !== undefined).toBe(explain);
         return Promise.resolve();
       });
     });
@@ -990,6 +1021,121 @@ export function runPluginContract(plugin: DatasourcePlugin, fixture: ContractFix
         });
       },
     );
+
+    describe.runIf(plugin.capabilities.includes("explain"))("explain", () => {
+      function explainable(): NonNullable<SqlLanguage["explainable"]> {
+        const language = plugin.language;
+        if (language?.explainable === undefined) {
+          throw new Error("A plugin that declares explain needs language.explainable.");
+        }
+        return (sql, options) => language.explainable?.(sql, options) ?? { ok: false, reason: "" };
+      }
+
+      async function explained(session: Session, sql: string, analyze: boolean): Promise<ExplainedPlan> {
+        if (session.explain === undefined) throw new Error("An explain session needs explain.");
+        return session.explain(sql, { analyze });
+      }
+
+      async function ordersRows(session: Session): Promise<number> {
+        return (await collect((await session.execute("SELECT id FROM orders")).rows)).length;
+      }
+
+      it("givenSelect_whenExplained_thenTreeWithAnOperation", async () => {
+        await withSession(plugin, fixture, async (session) => {
+          const plan = await explained(session, EXPLAIN_JOIN, false);
+          expect(plan.analyzed).toBe(false);
+          expect(plan.statement).toMatch(/^EXPLAIN\b/i);
+          expect(plan.statement).toContain(EXPLAIN_JOIN);
+          expect(plan.raw).toMatch(/\S/);
+          const nodes = planNodes(plan.roots);
+          expect(nodes.length).toBeGreaterThan(1);
+          for (const node of nodes) {
+            expect(node.operation).toMatch(/\S/);
+            expect([node.actualRows, node.actualTimeMs, node.loops]).toEqual([null, null, null]);
+          }
+          expect(await ordersRows(session)).toBe(ORDERS_ROWS);
+        });
+      });
+
+      it("givenDeleteWithoutWhere_whenExplained_thenNothingRuns", async () => {
+        await withSession(plugin, fixture, async (session) => {
+          const plan = await explained(session, EXPLAIN_DELETE_ALL, false);
+          expect(plan.roots.length).toBeGreaterThan(0);
+          expect(await ordersRows(session)).toBe(ORDERS_ROWS);
+        });
+      });
+
+      it("givenDdl_whenExplainable_thenRefusedWithReason", async () => {
+        const verdict = explainable()("CREATE TABLE t (id INTEGER)", { analyze: false });
+        expect(verdict.ok).toBe(false);
+        expect(verdict.ok ? "" : verdict.reason).toMatch(/\S/);
+        await withSession(plugin, fixture, async (session) => {
+          expect(await rejectionCode(explained(session, "CREATE TABLE t (id INTEGER)", false))).toBe(
+            "explainUnsupported",
+          );
+          expect(await ordersRows(session)).toBe(ORDERS_ROWS);
+        });
+      });
+
+      it("givenTwoStatements_whenExplainable_thenRefused", () => {
+        expect(explainable()("SELECT 1; SELECT 2", { analyze: false }).ok).toBe(false);
+        expect(explainable()("  -- nothing\n", { analyze: false }).ok).toBe(false);
+      });
+
+      it("givenExplainStatement_whenExplainable_thenRefused", () => {
+        expect(explainable()(`EXPLAIN ${EXPLAIN_JOIN}`, { analyze: false }).ok).toBe(false);
+      });
+
+      it("givenReadAndWrite_whenExplainable_thenWritesOnlyForTheWrite", () => {
+        expect(explainable()(EXPLAIN_JOIN, { analyze: false })).toEqual({ ok: true, writes: false });
+        expect(explainable()(EXPLAIN_UPDATE, { analyze: false })).toEqual({ ok: true, writes: true });
+      });
+
+      it.runIf(!plugin.capabilities.includes("explainAnalyze"))(
+        "givenNoExplainAnalyze_whenAnalyseExplainable_thenRefused",
+        () => {
+          expect(explainable()(EXPLAIN_JOIN, { analyze: true }).ok).toBe(false);
+        },
+      );
+    });
+
+    describe.runIf(plugin.capabilities.includes("explainAnalyze"))("explainAnalyze", () => {
+      async function analysed(session: Session, sql: string): Promise<ExplainedPlan> {
+        if (session.explain === undefined) throw new Error("An explain session needs explain.");
+        return session.explain(sql, { analyze: true });
+      }
+
+      it("givenSelect_whenAnalysed_thenActualRowsPresent", async () => {
+        await withSession(plugin, fixture, async (session) => {
+          const plan = await analysed(session, EXPLAIN_JOIN);
+          expect(plan.analyzed).toBe(true);
+          expect(planNodes(plan.roots).some((node) => node.actualRows !== null && node.loops !== null)).toBe(true);
+        });
+      });
+
+      it.runIf(
+        plugin.capabilities.includes("transactions") &&
+          plugin.language?.explainable?.(ANALYSED_UPDATE, { analyze: true }).ok === true,
+      )("givenUpdateInManualTransaction_whenAnalysed_thenRolledBackLeavesRows", async () => {
+        await withSession(plugin, fixture, async (session) => {
+          const transactions = session.transactions;
+          if (transactions === undefined) throw new Error("A transactions session needs transactions.");
+          const total = async (): Promise<Row[]> => collect((await session.execute(ANALYSED_TOTAL)).rows);
+          const before = await total();
+          await transactions.setMode("manual");
+          try {
+            const plan = await analysed(session, ANALYSED_UPDATE);
+            expect(plan.analyzed).toBe(true);
+            expect(transactions.open).toBe(true);
+            expect(await total()).not.toEqual(before);
+          } finally {
+            await transactions.rollback();
+            await transactions.setMode("auto");
+          }
+          expect(await total()).toEqual(before);
+        });
+      });
+    });
 
     describe.runIf(plugin.capabilities.includes("cancel"))("cancel", () => {
       function sleepSql(): string {

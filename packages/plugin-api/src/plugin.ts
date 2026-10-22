@@ -7,13 +7,22 @@ import type {
   Declaration,
   ResolveRequest,
 } from "./completion.js";
+import type { ExplainedPlan, Explainability, ExplainOptions } from "./explain.js";
 import type { WireValue } from "./values.js";
 
 /**
  * What a plugin can do. The UI branches on these, never on a plugin id (decision 007), and a
  * capability without contract-suite coverage cannot be declared (decision 013).
  */
-export const CAPABILITIES = ["sql", "cancel", "schemaTree", "transactions", "ddl"] as const;
+export const CAPABILITIES = [
+  "sql",
+  "cancel",
+  "schemaTree",
+  "transactions",
+  "ddl",
+  "explain",
+  "explainAnalyze",
+] as const;
 
 export type Capability = (typeof CAPABILITIES)[number];
 
@@ -54,6 +63,14 @@ export interface Session {
   readonly introspector?: Introspector;
   /** Present exactly when the plugin declares `transactions`. A new session starts in `auto`. */
   readonly transactions?: Transactions;
+  /**
+   * Present exactly when the plugin declares `explain` (decision 031). Checks `sql` with
+   * `SqlLanguage.explainable` and rejects with `explainUnsupported` and its reason when refused;
+   * otherwise sends the dialect's EXPLAIN on this session, like `execute`, and reads the whole plan.
+   * With `analyze`, which needs `explainAnalyze`, the statement runs, in this session's transaction.
+   * `cancel` interrupts it as it does `execute`.
+   */
+  explain?(sql: string, options: ExplainOptions): Promise<ExplainedPlan>;
   close(): Promise<void>;
   /** What the server reports about itself, such as `17.4`; null when it reports nothing. */
   readonly serverVersion: string | null;
@@ -118,6 +135,12 @@ export interface SqlLanguage {
    * `@table-craft/plugin-api/sql` implements it.
    */
   generate(statement: GeneratedStatement, relation: Relation, qualifiedName: string): string;
+  /**
+   * Present exactly when the plugin declares `explain` (decision 031): whether `sql`, one statement
+   * without its delimiter, can be explained (with `analyze`, analysed) in this dialect, and whether it
+   * writes. Pure; `sqlExplainable` in `@table-craft/plugin-api/sql` implements it.
+   */
+  explainable?(sql: string, options: ExplainOptions): Explainability;
 }
 
 export const TRANSACTION_MODES = ["auto", "manual"] as const;

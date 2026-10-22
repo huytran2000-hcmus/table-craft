@@ -2,12 +2,14 @@ import type { ReactNode } from "react";
 import { ACTION_IDS } from "@table-craft/desktop/renderer/actions/appActions.js";
 import { invoke } from "@table-craft/desktop/renderer/actions/index.js";
 import { OutputLog } from "@table-craft/desktop/renderer/console/OutputLog.js";
+import { PlanView } from "@table-craft/desktop/renderer/console/PlanView.js";
 import { ResultGrid } from "@table-craft/desktop/renderer/grid/ResultGrid.js";
 import {
-  activeResultOf,
+  activeTabOf,
   OUTPUT_TAB,
   useConsoles,
   type ConsoleSession,
+  type ConsoleTab,
 } from "@table-craft/desktop/renderer/state/consoles.js";
 import { cn } from "@table-craft/desktop/renderer/ui/cn.js";
 import { ACTION_ICONS } from "@table-craft/desktop/renderer/ui/icons.js";
@@ -18,12 +20,14 @@ const PinIcon = ACTION_ICONS.pin;
 function TabButton({
   selected,
   title,
+  kind,
   tooltip,
   onSelect,
   children,
 }: {
   readonly selected: boolean;
   readonly title: string;
+  readonly kind?: ConsoleTab["kind"];
   readonly tooltip?: string;
   readonly onSelect: () => void;
   readonly children?: ReactNode;
@@ -32,6 +36,7 @@ function TabButton({
     <div
       role="tab"
       aria-selected={selected}
+      data-kind={kind}
       tabIndex={selected ? 0 : -1}
       title={tooltip}
       className={cn(
@@ -51,11 +56,12 @@ function TabButton({
 
 /**
  * The console's lower half (plan 006 decision 10): `Output`, then a tab per row-returning
- * statement of the last run plus any pinned ones, each with its statement as tooltip.
+ * statement of the last run, or the plan of the last explain, plus any pinned ones, each with its
+ * statement as tooltip.
  */
 export function ResultTabs({ consoleId, session }: { readonly consoleId: string; readonly session: ConsoleSession }) {
   const showResult = useConsoles((state) => state.showResult);
-  const active = activeResultOf(session);
+  const active = activeTabOf(session);
   return (
     <div className="flex min-h-0 flex-1 basis-1/2 flex-col">
       <div
@@ -69,6 +75,7 @@ export function ResultTabs({ consoleId, session }: { readonly consoleId: string;
             key={result.id}
             selected={active?.id === result.id}
             title={result.title}
+            kind={result.kind}
             tooltip={result.sql}
             onSelect={() => showResult(consoleId, result.id)}
           >
@@ -95,6 +102,8 @@ export function ResultTabs({ consoleId, session }: { readonly consoleId: string;
       <div role="tabpanel" className="flex min-h-0 flex-1 flex-col">
         {active === null ? (
           <OutputLog entries={session.output} />
+        ) : active.kind === "plan" ? (
+          <PlanView key={active.id} consoleId={consoleId} plan={active} />
         ) : (
           <ResultGrid key={active.id} ownerId={consoleId} result={active} host={useConsoles.getState} />
         )}

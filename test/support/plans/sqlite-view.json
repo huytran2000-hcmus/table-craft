@@ -1,0 +1,40 @@
+{
+  "columns": [
+    "id",
+    "parent",
+    "notused",
+    "detail"
+  ],
+  "rows": [
+    [
+      2,
+      0,
+      0,
+      "CO-ROUTINE customer_totals"
+    ],
+    [
+      9,
+      2,
+      216,
+      "SCAN c"
+    ],
+    [
+      13,
+      2,
+      0,
+      "BLOOM FILTER ON o (customer_id=?)"
+    ],
+    [
+      23,
+      2,
+      53,
+      "SEARCH o USING AUTOMATIC COVERING INDEX (customer_id=?) LEFT-JOIN"
+    ],
+    [
+      66,
+      0,
+      82,
+      "SCAN customer_totals"
+    ]
+  ]
+}

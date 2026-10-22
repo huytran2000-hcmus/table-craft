@@ -39,6 +39,11 @@ export function executedText(
   return `${rows(summary.rowCount)} retrieved ${took}`;
 }
 
+/** The Output line an explain leaves: `Explained in 4 ms`, or `Analysed in 12 ms` when it ran. */
+export function explainedText(analyzed: boolean, ms: number): string {
+  return `${analyzed ? "Analysed" : "Explained"} in ${formatDuration(ms)}`;
+}
+
 const COUNT_FORMAT = new Intl.NumberFormat("en-US");
 
 /** `50,000`: grouped the way the grid's row count reads. */

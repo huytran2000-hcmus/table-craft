@@ -32,8 +32,12 @@ import {
   type CompletionResult,
   type CompletionScope,
   type Declaration,
+  type Explainability,
+  type ExplainedPlan,
   type Namespace,
   type NamespaceCatalog,
+  type PlanNode,
+  type PlanProperty,
   type PluginErrorCode,
   type StatementClass,
   type StatementSpan,
@@ -112,6 +116,13 @@ describe("engine protocol", () => {
     expectTypeOf<protocol.CompletionResult>().toEqualTypeOf<CompletionResult>();
     expectTypeOf<protocol.Declaration>().toEqualTypeOf<Declaration>();
     expect(protocol.COMPLETION_KINDS).toEqual(COMPLETION_KINDS);
+  });
+
+  it("givenExplainTypes_whenComparedWithPluginApi_thenIdentical", () => {
+    expectTypeOf<protocol.Explainability>().toEqualTypeOf<Explainability>();
+    expectTypeOf<protocol.PlanProperty>().toEqualTypeOf<PlanProperty>();
+    expectTypeOf<protocol.PlanNode>().toEqualTypeOf<PlanNode>();
+    expectTypeOf<protocol.ExplainedPlan>().toEqualTypeOf<ExplainedPlan>();
   });
 
   it("givenCoreErrorCodes_whenComparedWithEngineErrorCodes_thenEveryOneIsCovered", () => {

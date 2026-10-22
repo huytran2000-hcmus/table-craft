@@ -32,6 +32,13 @@ export {
   type PluginErrorCode,
 } from "./errors.js";
 export {
+  type ExplainedPlan,
+  type Explainability,
+  type ExplainOptions,
+  type PlanNode,
+  type PlanProperty,
+} from "./explain.js";
+export {
   CONNECTION_FIELD_GROUPS,
   CONNECTION_FIELD_KINDS,
   connectionFieldSchema,

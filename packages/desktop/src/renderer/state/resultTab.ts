@@ -2,6 +2,7 @@ import {
   RESULT_WINDOW_ROWS,
   type Column,
   type ExecutedStatement,
+  type ExplainedPlan,
   type ResultState,
   type Row,
   type SortKey,
@@ -19,6 +20,7 @@ export type ResultFetch = "page" | "all" | "export";
  * layout, sort and selection live here and die with the tab (plan 007 decision 8).
  */
 export interface ResultTab extends ResultState {
+  readonly kind: "rows";
   readonly id: string;
   /** `Result 1`, `Result 2`…, the first number no pinned tab holds. */
   readonly title: string;
@@ -39,6 +41,54 @@ export interface ResultTab extends ResultState {
   readonly stale: boolean;
   /** A pinned tab survives the next run; the others are replaced and their handles released. */
   readonly pinned: boolean;
+}
+
+/** What an analysed statement did to the data, for the plan's banner (plan 012 decision 12). */
+export type AnalysedEffect = "none" | "committed" | "inTransaction";
+
+export type PlanView = "tree" | "raw";
+
+/**
+ * A plan tab (plan 012 decision 10): one explained statement's plan, held whole in the renderer
+ * because a plan is a few dozen nodes, not rows behind a handle.
+ */
+export interface PlanTab {
+  readonly kind: "plan";
+  readonly id: string;
+  /** `Plan` or `Plan (analysed)`. */
+  readonly title: string;
+  /** The statement explained, without the EXPLAIN the plugin wrapped it in. */
+  readonly sql: string;
+  readonly analyzed: boolean;
+  readonly effect: AnalysedEffect;
+  readonly plan: ExplainedPlan;
+  readonly view: PlanView;
+  /** The selected node's path key (`0.1.2`), or null. */
+  readonly selected: string | null;
+  readonly collapsed: readonly string[];
+  readonly pinned: boolean;
+}
+
+/** A console's result tabs hold rows or a plan. */
+export type ConsoleTab = ResultTab | PlanTab;
+
+export const PLAN_TITLE = "Plan";
+export const ANALYSED_PLAN_TITLE = "Plan (analysed)";
+
+export function planTabOf(id: string, sql: string, plan: ExplainedPlan, effect: AnalysedEffect): PlanTab {
+  return {
+    kind: "plan",
+    id,
+    title: plan.analyzed ? ANALYSED_PLAN_TITLE : PLAN_TITLE,
+    sql,
+    analyzed: plan.analyzed,
+    effect,
+    plan,
+    view: "tree",
+    selected: plan.roots.length > 0 ? "0" : null,
+    collapsed: [],
+    pinned: false,
+  };
 }
 
 /** The window offset that holds row `index`. */
@@ -78,6 +128,7 @@ export function resultTabOf(
   const { firstWindow, ...summary } = executed;
   return {
     ...summary,
+    kind: "rows",
     ...ids,
     sql,
     windows: { [firstWindow.offset]: firstWindow.rows },

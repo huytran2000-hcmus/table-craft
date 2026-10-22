@@ -9,6 +9,8 @@ import {
   type ConnectOptions,
   type DatasourcePlugin,
   type ExecuteResult,
+  type ExplainedPlan,
+  type ExplainOptions,
   type Introspector,
   type PluginErrorCode,
   type Row,
@@ -25,6 +27,7 @@ import {
   SQL_FUNCTIONS,
   SQL_KEYWORDS,
   sqlCompleter,
+  sqlExplainable,
   sqlGenerator,
   sqlLiteral,
   sqlSplitter,
@@ -32,11 +35,12 @@ import {
   type SqlDialectOptions,
   type SqlLiteralOptions,
 } from "@table-craft/plugin-api/sql";
+import { EXPLAIN_VERBS, explainStatement, readPlanRows } from "./explain.js";
 import { sqliteIntrospector } from "./introspect.js";
 
 const PLUGIN_ID = "sqlite";
 /** No `cancel`: node:sqlite runs a statement synchronously, so nothing could deliver the request. */
-const CAPABILITIES: readonly Capability[] = ["sql", "schemaTree", "transactions", "ddl"];
+const CAPABILITIES: readonly Capability[] = ["sql", "schemaTree", "transactions", "ddl", "explain"];
 
 /** Trigger bodies are `BEGIN … END` and hold semicolons. */
 const DIALECT: SqlDialectOptions = { blockKeywords: ["BEGIN"] };
@@ -49,6 +53,9 @@ const updateDefault = (expression: string | null): string => expression ?? "NULL
 
 const PLAIN_IDENTIFIER = /^[A-Za-z_][A-Za-z0-9_$]*$/;
 const KEYWORDS: readonly string[] = [...SQL_KEYWORDS, "GLOB", "PRAGMA"];
+
+/** No `explainAnalyze`: SQLite's `EXPLAIN QUERY PLAN` only plans, and nothing else reports run times. */
+const { explainable } = sqlExplainable({ dialect: DIALECT, name: "SQLite", verbs: EXPLAIN_VERBS, analyzeVerbs: [] });
 
 const language: SqlLanguage = {
   split: sqlSplitter(DIALECT),
@@ -66,6 +73,7 @@ const language: SqlLanguage = {
     functions: [...SQL_FUNCTIONS, "date", "datetime", "group_concat", "ifnull", "json_extract"],
   }),
   ...sqlGenerator({ quoteIdentifier, updateDefault, plainIdentifier: PLAIN_IDENTIFIER, keywords: KEYWORDS }),
+  explainable,
 };
 
 const BEGIN_SQL = "BEGIN";
@@ -188,6 +196,15 @@ class SqliteSession implements Session {
       statement.setReturnArrays(true);
       return { columns, rows: readRows(statement.iterate(), columns.map(cellFor)), rowsAffected: null };
     });
+  }
+
+  async explain(sql: string, options: ExplainOptions): Promise<ExplainedPlan> {
+    const verdict = explainable(sql, options);
+    if (!verdict.ok) throw new PluginError("explainUnsupported", verdict.reason);
+    const statement = explainStatement(sql);
+    const rows: Row[] = [];
+    for await (const row of (await this.execute(statement)).rows) rows.push(row);
+    return readPlanRows(rows, statement);
   }
 
   #end(sql: string): Promise<void> {

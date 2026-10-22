@@ -53,8 +53,9 @@ packages/plugin-api/       @table-craft/plugin-api: the plugin contract and noth
                            Types, Zod schemas, API_VERSION, capability names, and the
                            contract test suite under `testing/`. `sql/` (subpath
                            `@table-craft/plugin-api/sql`) is the shared splitter,
-                           classifier, literal helpers and `sqlCompleter` (scope analysis,
-                           completion, resolve) plugins build `language` from.
+                           classifier, literal helpers, `sqlCompleter` (scope analysis,
+                           completion, resolve) and `sqlExplainable` plugins build
+                           `language` from.
                            Depends only on zod
 packages/core/             @table-craft/core: plugin loader, session manager, result-set
                            store with open cursors and local sort (`results/`), the copy
@@ -77,7 +78,8 @@ packages/desktop/          @table-craft/desktop, the Electron app
                            `actions/` is the one command registry and keymap; `shell/`,
                            `panes/`, `palette/` the DataGrip-shaped window; `console/`
                            the SQL console: editor, its completion source, result tabs,
-                           Output, transactions;
+                           Output, transactions, the plan view (`PlanView.tsx`, its tree
+                           from `model/planTree.ts`);
                            `grid/` the result grid, its toolbar and value panel;
                            `table/` the table data editor: WHERE/ORDER BY bars and the
                            preview; its pending changes are `model/editBuffer.ts`;
@@ -86,12 +88,14 @@ packages/desktop/          @table-craft/desktop, the Electron app
 plugins/<id>/              built-in plugins (@table-craft/plugin-<id>): postgres, mysql,
                            sqlite. Each depends on plugin-api and its driver alone, and
                            ships a `table-craft-plugin.json` beside `src/`; its
-                           `introspect.ts` answers `schemaTree`
+                           `introspect.ts` answers `schemaTree`, its `explain.ts` builds
+                           the EXPLAIN statement and reads the plan (subpath `./explain`)
 test/                      Vitest suites, `givenX_whenY_thenZ`
   db/                      compose.yml, the fixture schema per dialect, contract runs per database
   e2e/                     Playwright `_electron` suites and the shared harness
   renderer/                renderer unit tests, typechecked with the DOM lib; no jsdom
-  support/                 fixtures shared across suites (type_probe rows, seeded SQLite, configs)
+  support/                 fixtures shared across suites (type_probe rows, seeded SQLite, configs);
+                           `plans/` holds real EXPLAIN outputs, byte-exact (prettier skips it)
 docs/design/               specification.md, design-system.md
 docs/decisions/            one numbered file per durable decision
 docs/plans/                one plan per feature, committed with its Live test section

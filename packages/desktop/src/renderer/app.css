@@ -22,6 +22,8 @@
   --color-search-match: var(--tc-search-match);
   --color-key-icon: var(--tc-key-icon);
   --color-warning: var(--tc-warning);
+  --color-plan-bar: var(--tc-plan-bar);
+  --color-analysed-banner: var(--tc-analysed-banner);
   --color-ds-red: var(--tc-ds-red);
   --color-ds-orange: var(--tc-ds-orange);
   --color-ds-yellow: var(--tc-ds-yellow);
@@ -55,6 +57,8 @@
   --spacing-generator: var(--tc-generator-width);
   --spacing-picker: var(--tc-picker-width);
   --spacing-picker-list: var(--tc-picker-list-height);
+  --spacing-plan-details: var(--tc-plan-details-width);
+  --spacing-plan-bar: var(--tc-plan-bar-height);
 }
 
 html,

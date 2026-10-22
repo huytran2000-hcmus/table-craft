@@ -7,7 +7,10 @@ export type { SearchItem, SearchProvider } from "@table-craft/desktop/renderer/m
 export const ACTIONS_PROVIDER_ID = "actions";
 const ACTION_KEY_PREFIX = "action:";
 
-/** Every registered action, disabled ones included so the user sees why nothing would happen. */
+/**
+ * Every registered action that is available, disabled ones included so the user sees why nothing
+ * would happen.
+ */
 export function actionsProvider(registry: ActionRegistry): SearchProvider {
   return {
     id: ACTIONS_PROVIDER_ID,
@@ -15,7 +18,7 @@ export function actionsProvider(registry: ActionRegistry): SearchProvider {
     search(query) {
       return registry.all().flatMap((action): SearchItem[] => {
         const matched = score(query, action.title);
-        if (matched === null) return [];
+        if (matched === null || !registry.isAvailable(action.id)) return [];
         return [
           {
             key: `${ACTION_KEY_PREFIX}${action.id}`,

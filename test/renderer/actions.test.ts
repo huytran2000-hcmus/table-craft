@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { createActionRegistry, defineAction } from "@table-craft/desktop/renderer/actions/registry.js";
+import { actionsProvider } from "@table-craft/desktop/renderer/palette/providers.js";
 import { IDLE_CONTEXT } from "./support.js";
 
 describe("action registry", () => {
@@ -47,5 +48,29 @@ describe("action registry", () => {
 
     expect(registry.invoke("boom")).toBe("ran");
     await vi.waitFor(() => expect(reported).toHaveBeenCalledWith("boom", expect.any(Error)));
+  });
+
+  it("givenUnavailableAction_whenSearchedAndInvoked_thenLeftOutOfThePaletteAndDisabled", () => {
+    const run = vi.fn();
+    const registry = createActionRegistry(() => IDLE_CONTEXT);
+    registry.register([
+      defineAction({
+        id: "console.explainAnalyze",
+        title: "Explain Analyse",
+        category: "Console",
+        available: (context) => context.capabilities.includes("explainAnalyze"),
+        run,
+      }),
+      defineAction({ id: "console.explain", title: "Explain Plan", category: "Console", when: () => false, run }),
+    ]);
+
+    const titles = actionsProvider(registry)
+      .search("explain")
+      .map((item) => [item.title, item.enabled]);
+
+    expect(titles).toEqual([["Explain Plan", false]]);
+    expect(registry.isAvailable("console.explainAnalyze")).toBe(false);
+    expect(registry.invoke("console.explainAnalyze")).toBe("disabled");
+    expect(run).not.toHaveBeenCalled();
   });
 });

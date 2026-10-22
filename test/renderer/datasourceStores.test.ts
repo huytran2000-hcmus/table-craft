@@ -11,7 +11,11 @@ import {
   type EngineClient,
   type EngineConnection,
 } from "@table-craft/desktop/renderer/engine/client.js";
-import { createConsolesStore } from "@table-craft/desktop/renderer/state/consoles.js";
+import {
+  activeResultOf,
+  createConsolesStore,
+  type ConsoleSession,
+} from "@table-craft/desktop/renderer/state/consoles.js";
 import {
   createDatasourcesStore,
   type DatasourcesDependencies,
@@ -126,10 +130,11 @@ describe("datasource and console stores", () => {
     await Promise.all(["c1", "c2", "c3"].map((id) => consoles.getState().run(id, "all")));
 
     const { c1, c2, c3 } = consoles.getState().consoles;
-    expect(c1?.results[0]?.columns[0]?.name).toBe("pg");
-    expect(c1?.results[0]?.windows[0]).toEqual([["SELECT 'pg'"]]);
-    expect(c2?.results[0]?.columns[0]?.name).toBe("lite");
-    expect(c3?.results[0]?.windows[0]).toEqual([["SELECT 'lite again'"]]);
+    const rows = (session: ConsoleSession | undefined) => (session === undefined ? null : activeResultOf(session));
+    expect(rows(c1)?.columns[0]?.name).toBe("pg");
+    expect(rows(c1)?.windows[0]).toEqual([["SELECT 'pg'"]]);
+    expect(rows(c2)?.columns[0]?.name).toBe("lite");
+    expect(rows(c3)?.windows[0]).toEqual([["SELECT 'lite again'"]]);
     expect(connectEngine.mock.calls.filter(([id]) => id === "lite")).toHaveLength(1);
   });
 

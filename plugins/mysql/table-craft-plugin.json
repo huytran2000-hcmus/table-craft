@@ -2,9 +2,9 @@
   "id": "mysql",
   "name": "MySQL",
   "version": "0.0.0",
-  "apiVersion": "0.9.0",
+  "apiVersion": "0.10.0",
   "entry": "index.js",
-  "capabilities": ["sql", "cancel", "schemaTree", "transactions", "ddl"],
+  "capabilities": ["sql", "cancel", "schemaTree", "transactions", "ddl", "explain", "explainAnalyze"],
   "highlight": "mysql",
   "connection": {
     "fields": [

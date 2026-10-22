@@ -2,6 +2,46 @@ import { classifyTokens, transactionEffect } from "@table-craft/plugin-api/sql";
 import { describe, expect, it } from "vitest";
 
 describe("classifyTokens", () => {
+  it("givenExplainAnalyzeDeleteWithoutWhere_whenClassified_thenDestructive", () => {
+    expect(classifyTokens("EXPLAIN ANALYZE DELETE FROM orders")).toEqual({
+      kind: "write",
+      destructive: "EXPLAIN ANALYZE runs it: DELETE without WHERE",
+    });
+    expect(classifyTokens("explain analyse verbose update orders set total = 0").destructive).toBe(
+      "EXPLAIN ANALYZE runs it: UPDATE without WHERE",
+    );
+    expect(classifyTokens("EXPLAIN ANALYZE FORMAT=TREE DELETE FROM orders").kind).toBe("write");
+    expect(classifyTokens("DESC ANALYZE DELETE FROM orders").destructive).toMatch(/^EXPLAIN ANALYZE runs it/);
+    expect(classifyTokens("EXPLAIN ANALYZE DELETE FROM orders WHERE id = 1")).toEqual({
+      kind: "write",
+      destructive: null,
+    });
+  });
+
+  it("givenExplainDeleteWithoutWhere_whenClassified_thenReadNotDestructive", () => {
+    expect(classifyTokens("EXPLAIN DELETE FROM orders")).toEqual({ kind: "read", destructive: null });
+    expect(classifyTokens("EXPLAIN FORMAT=JSON DROP TABLE orders")).toEqual({ kind: "read", destructive: null });
+    expect(classifyTokens("EXPLAIN QUERY PLAN DELETE FROM orders")).toEqual({ kind: "read", destructive: null });
+    expect(classifyTokens("DESC orders")).toEqual({ kind: "read", destructive: null });
+  });
+
+  it("givenExplainParenthesisedAnalyze_whenClassified_thenInnerKind", () => {
+    expect(classifyTokens("EXPLAIN (ANALYZE, FORMAT JSON) DELETE FROM orders").destructive).toBe(
+      "EXPLAIN ANALYZE runs it: DELETE without WHERE",
+    );
+    expect(classifyTokens("EXPLAIN (FORMAT JSON, ANALYZE) UPDATE orders SET total = 0").kind).toBe("write");
+    expect(classifyTokens("EXPLAIN (ANALYZE TRUE) SELECT 1")).toEqual({ kind: "read", destructive: null });
+    expect(classifyTokens("EXPLAIN (ANALYZE on, BUFFERS) TRUNCATE orders").destructive).toBe(
+      "EXPLAIN ANALYZE runs it: TRUNCATE",
+    );
+  });
+
+  it("givenExplainAnalyzeFalse_whenClassified_thenRead", () => {
+    expect(classifyTokens("EXPLAIN (ANALYZE FALSE) DELETE FROM orders")).toEqual({ kind: "read", destructive: null });
+    expect(classifyTokens("EXPLAIN (ANALYZE off, FORMAT JSON) DELETE FROM orders").kind).toBe("read");
+    expect(classifyTokens("EXPLAIN (ANALYZE 0) DELETE FROM orders").kind).toBe("read");
+  });
+
   it("givenSelect_whenClassified_thenReadAndNotDestructive", () => {
     expect(classifyTokens("select * from orders where id = 1")).toEqual({ kind: "read", destructive: null });
   });

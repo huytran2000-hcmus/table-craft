@@ -92,7 +92,7 @@ async function ranQuery() {
   await store.getState().run("c1", "all");
   const result = (): ResultTab => {
     const found = store.getState().consoles.c1?.results[0];
-    if (found === undefined) throw new Error("no result tab");
+    if (found?.kind !== "rows") throw new Error("no result tab");
     return found;
   };
   const calls = (type: string) => engine.call.mock.calls.filter(([name]) => name === type);

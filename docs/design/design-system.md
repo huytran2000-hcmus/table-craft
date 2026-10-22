@@ -88,14 +88,18 @@ colours are their own tokens, read by the `HighlightStyle` through the CSS varia
 | `colors.statementFlash`        | `--tc-statement-flash`      |                              | `#3d4a2e` | The statement just run, for 900 ms                       |
 | `colors.warning`               | `--tc-warning`              | `text-warning`, `bg-warning` | `#e0a84a` | Output warnings (skipped, cancelled), `transaction open` |
 
-The toolbar reads left to right: Run (primary), Run All, Cancel when the plugin can cancel, then
-the transaction controls when it declares `transactions`: a `Tx: Auto` / `Tx: Manual` select,
-Commit (`Check`), Rollback (`ArrowCounterClockwise`) and the `transaction open` badge in
-`bg-warning text-canvas`. Run All is `FastForward`. Toolbar buttons never wrap (`shrink-0
-whitespace-nowrap`); a long error gives way instead.
+The toolbar reads left to right: Run (primary), Run All, Explain Plan and Explain Analyse when the
+plugin declares them (plan 012), Cancel when the plugin can cancel, then the transaction controls
+when it declares `transactions`: a `Tx: Auto` / `Tx: Manual` select, Commit (`Check`), Rollback
+(`ArrowCounterClockwise`) and the `transaction open` badge in `bg-warning text-canvas`. Run All is
+`FastForward`. The two explain buttons are `compact`, the icon alone with the title and chord in the
+tooltip, so a manual-mode toolbar still fits a 1200 px window: Explain Plan `TreeView`, Explain
+Analyse `Gauge` with `tone="warning"`, a `border-warning` frame and `text-warning`, because it runs
+the statement. Toolbar buttons never wrap (`shrink-0 whitespace-nowrap`); a long error gives way
+instead, and so does the datasource name · plugin name at the end, truncated with an ellipsis.
 
-Below the editor, the result strip holds `Output` and then `Result 1`, `Result 2`…, each with a
-`PushPin` that fills when pinned. The Output log is `font-editor`: the time and the statement's
+Below the editor, the result strip holds `Output` and then `Result 1`, `Result 2`… or `Plan`,
+`Plan (analysed)`, each with a `PushPin` that fills when pinned. The Output log is `font-editor`: the time and the statement's
 first line in `text-ink-muted`, then the message: `text-ink` for results and notes, `text-warning`
 for warnings, `text-danger` for errors, with the hint muted after it.
 
@@ -236,6 +240,34 @@ aligned. An execution row is its `OutcomeGlyph`, the label in `font-editor text-
 error message as its tooltip, then rows, duration (elapsed while running) and start time right
 aligned in `text-ink-muted tabular-nums`. The session's context menu is the tab context menu's
 `bg-raised` panel.
+
+## Plan view
+
+Plan 012. A plan tab (`console/PlanView.tsx`) fills the result area. An analysed plan starts with
+a banner: `bg-analysed-banner`, a `border-line` rule under it, a filled `WarningIcon` in
+`text-warning`, then the text in `text-ink`. Under it an `h-row` toolbar on `bg-panel`: a segmented
+Tree / Raw group in a `border-line` frame (the shown view `bg-selection`), icon-only
+`ArrowClockwise` Explain Again and `CopySimple` Copy Raw Plan, then the summary (`Planning Time: 1.0 ms ·
+Execution Time: 0.1 ms`) in `text-ink-muted`, truncated.
+
+The tree is a `<table role="treegrid">` on `bg-canvas` in `font-grid text-grid`, rows `h-row`, a
+sticky `bg-panel` header in `text-ink-muted`. The Operation column takes the room left over and
+truncates, with the whole text as the tooltip; it indents 16 px per level with the Database pane's
+`CaretDown`/`CaretRight` and shows the target in `text-ink-muted`. The number columns are as narrow
+as their content, right-aligned, empty for a value the database did not give. The Cost cell, or
+the Time cell when analysed, carries an `h-plan-bar` `bg-plan-bar` bar along its bottom edge, as
+wide as the node's share of the root's. The selected row is `bg-selection`, the rest
+`hover:bg-raised`. To the right a `w-plan-details` strip on `bg-panel` behind a `border-line` edge
+lists the selected node: the operation in semibold with its target muted, then `Detail` and each
+property as a two-column list, names in `text-ink-muted`, values in `font-grid`, wrapping. Raw is
+the read-only `ui/SqlView.tsx` on `bg-canvas`, unhighlighted.
+
+| Token (`appearance/tokens.ts`) | CSS variable              | Tailwind             | Dark / comfortable | Used by                                       |
+| ------------------------------ | ------------------------- | -------------------- | ------------------ | --------------------------------------------- |
+| `colors.planBar`               | `--tc-plan-bar`           | `bg-plan-bar`        | `#4f80c9`          | The share bar in the Cost or Time cell        |
+| `colors.analysedBanner`        | `--tc-analysed-banner`    | `bg-analysed-banner` | `#4a3d22`          | The `Explain Analyse ran this statement.` bar |
+| `density.planDetailsWidthPx`   | `--tc-plan-details-width` | `w-plan-details`     | 320 px             | The node details strip                        |
+| `density.planBarHeightPx`      | `--tc-plan-bar-height`    | `h-plan-bar`         | 3 px               | The share bar's thickness                     |
 
 ## Datasource colours
 

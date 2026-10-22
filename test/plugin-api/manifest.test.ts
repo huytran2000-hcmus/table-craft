@@ -44,6 +44,15 @@ describe("pluginManifestSchema", () => {
     ).toBe(true);
   });
 
+  it("givenExplainAnalyzeWithoutExplain_whenParsed_thenFails", () => {
+    const parses = (capabilities: string[]): boolean =>
+      pluginManifestSchema.safeParse({ ...VALID_MANIFEST, capabilities }).success;
+    expect(parses(["sql", "explainAnalyze"])).toBe(false);
+    expect(parses(["explain"])).toBe(false);
+    expect(parses(["sql", "explain"])).toBe(true);
+    expect(parses(["sql", "explain", "explainAnalyze"])).toBe(true);
+  });
+
   it("givenNonSemverApiVersion_whenParsed_thenFails", () => {
     const result = pluginManifestSchema.safeParse({ ...VALID_MANIFEST, apiVersion: "latest" });
     expect(result.success).toBe(false);

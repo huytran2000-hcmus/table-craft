@@ -19,7 +19,7 @@ its own MessagePort (decision 002).
 
 A plugin is a directory with `table-craft-plugin.json` and an ESM entry exporting a
 `DatasourcePlugin` (decisions 005 to 008). The contract lives in `@table-craft/plugin-api`.
-`API_VERSION` is `0.9.0`; while it is `0.x` the contract is unstable and every minor is a break.
+`API_VERSION` is `0.10.0`; while it is `0.x` the contract is unstable and every minor is a break.
 
 ### Discovery
 
@@ -67,13 +67,15 @@ dialog lists every plugin, an unavailable one with its reason. A connection fiel
 
 ### Capabilities
 
-| Capability     | Promises                                                                        | Contract cases                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
-| -------------- | ------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `sql`          | `Session.execute` runs one statement; the plugin exports `language`             | select literals, statement without rows, rows affected, invalid SQL rejects `statementFailed`, session usable after a failure, `type_probe` cells, unshifted timestamps, early return; `language` splits the shared and fixture scripts into the expected statements, each of which executes, and classifies kinds and the destructive cases; an awkward identifier quotes and reads back, and each `type_probe` row written as `INSERT` literals into `type_probe_copy` reads back equal |
-| `transactions` | `Session.transactions` switches auto and manual commit, commits, rolls back     | manual insert then rollback leaves no row and `open` false, manual insert then commit is visible to a second session only after the commit, auto mode tracks an explicit `BEGIN`, switching to auto while open rejects `statementFailed` and stays open, commit and rollback with nothing open are no-ops                                                                                                                                                                                 |
-| `cancel`       | `Session.cancel` stops the running statement from another call                  | idle cancel is a no-op, a sleeping statement rejects `cancelled` well before it ends, the session runs the next statement                                                                                                                                                                                                                                                                                                                                                                 |
-| `schemaTree`   | `Session.introspector` lists namespaces, describes one, quotes a qualified name | the current namespace is marked, the fixture's tables and `customer_totals` view are described, `orders` has its foreign key and `orders_placed_at_idx`, `customers` has its primary and unique keys, an unknown namespace rejects `introspectionFailed`, `qualifiedName` quotes an awkward identifier, the session runs statements after introspecting                                                                                                                                   |
-| `ddl`          | `Introspector.definition` reads a relation's definition; requires `schemaTree`  | `definition` exists exactly when `ddl` is declared; `orders` has its columns, primary key, `orders_total_nonnegative` check and the foreign key naming `customers`; `customer_totals` has its query; `customers` carries its comment where the dialect has one; an unknown relation rejects `definitionNotFound` naming the path and relation                                                                                                                                             |
+| Capability       | Promises                                                                                                               | Contract cases                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| ---------------- | ---------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `sql`            | `Session.execute` runs one statement; the plugin exports `language`                                                    | select literals, statement without rows, rows affected, invalid SQL rejects `statementFailed`, session usable after a failure, `type_probe` cells, unshifted timestamps, early return; `language` splits the shared and fixture scripts into the expected statements, each of which executes, and classifies kinds and the destructive cases; an awkward identifier quotes and reads back, and each `type_probe` row written as `INSERT` literals into `type_probe_copy` reads back equal |
+| `transactions`   | `Session.transactions` switches auto and manual commit, commits, rolls back                                            | manual insert then rollback leaves no row and `open` false, manual insert then commit is visible to a second session only after the commit, auto mode tracks an explicit `BEGIN`, switching to auto while open rejects `statementFailed` and stays open, commit and rollback with nothing open are no-ops                                                                                                                                                                                 |
+| `cancel`         | `Session.cancel` stops the running statement from another call                                                         | idle cancel is a no-op, a sleeping statement rejects `cancelled` well before it ends, the session runs the next statement                                                                                                                                                                                                                                                                                                                                                                 |
+| `schemaTree`     | `Session.introspector` lists namespaces, describes one, quotes a qualified name                                        | the current namespace is marked, the fixture's tables and `customer_totals` view are described, `orders` has its foreign key and `orders_placed_at_idx`, `customers` has its primary and unique keys, an unknown namespace rejects `introspectionFailed`, `qualifiedName` quotes an awkward identifier, the session runs statements after introspecting                                                                                                                                   |
+| `ddl`            | `Introspector.definition` reads a relation's definition; requires `schemaTree`                                         | `definition` exists exactly when `ddl` is declared; `orders` has its columns, primary key, `orders_total_nonnegative` check and the foreign key naming `customers`; `customer_totals` has its query; `customers` carries its comment where the dialect has one; an unknown relation rejects `definitionNotFound` naming the path and relation                                                                                                                                             |
+| `explain`        | `Session.explain` returns a plan without running the statement; `SqlLanguage.explainable` checks first; requires `sql` | `explainable` and `explain` exist exactly when `explain` is declared; a join explains to a tree with an operation; explaining `DELETE FROM orders` leaves its three rows; DDL, two statements and an `EXPLAIN …` are refused with a reason and `explain` rejects `explainUnsupported`; only a write `writes`; without `explainAnalyze`, Analyse is refused                                                                                                                                |
+| `explainAnalyze` | `Session.explain(sql, { analyze: true })` runs the statement and returns actual rows and times; requires `explain`     | a read analyses with actual rows on its nodes; where the dialect analyses a write and has `transactions`, an `UPDATE` analysed in manual mode then rolled back leaves `orders` unchanged                                                                                                                                                                                                                                                                                                  |
 
 Every plugin, whatever it declares, is checked for a valid schema; for its manifest's connection
 fields agreeing with `connectionSchema` (each field a key the schema accepts, every required key
@@ -115,7 +117,14 @@ interface SqlLanguage {
   emptyInsert(qualifiedTable: string): string; // a row of defaults: DEFAULT VALUES or () VALUES ()
   updateDefault(defaultExpression: string | null): string; // SET col = <this>: DEFAULT, or SQLite's expression
   generate(statement: GeneratedStatement, relation: Relation, qualifiedName: string): string; // sqlGenerator
+  explainable?(sql: string, options: ExplainOptions): Explainability; // present exactly when `explain` is declared
 }
+
+interface ExplainOptions {
+  readonly analyze: boolean;
+}
+
+type Explainability = { ok: true; writes: boolean } | { ok: false; reason: string };
 
 type GeneratedStatement = "drop" | "select" | "insert" | "update";
 
@@ -129,6 +138,7 @@ interface Session {
   cancel?(): Promise<void>; // present exactly when `cancel` is declared; no-op when idle
   readonly introspector?: Introspector; // present exactly when `schemaTree` is declared
   readonly transactions?: Transactions; // present exactly when `transactions` is declared
+  explain?(sql: string, options: ExplainOptions): Promise<ExplainedPlan>; // present exactly when `explain` is declared
   close(): Promise<void>;
 }
 
@@ -148,7 +158,13 @@ interface Introspector {
 }
 
 class PluginError extends Error {
-  readonly code: "cancelled" | "connectionFailed" | "statementFailed" | "introspectionFailed" | "definitionNotFound";
+  readonly code:
+    | "cancelled"
+    | "connectionFailed"
+    | "statementFailed"
+    | "introspectionFailed"
+    | "definitionNotFound"
+    | "explainUnsupported";
 }
 
 class DefinitionNotFoundError extends PluginError {
@@ -196,6 +212,10 @@ A span runs from the statement's first token to its last, so comments around it 
 `read`, `write`, `ddl`, `transaction` or `other`, and names a destructive statement's reason:
 `UPDATE without WHERE`, `DELETE without WHERE`, `DELETE without WHERE (LIMIT does not choose the
 rows)`, `DROP TABLE` (or whatever is dropped) and `TRUNCATE`. Only a top-level `WHERE` counts.
+`EXPLAIN`, `DESCRIBE` or `DESC` before a statement is `read` and never destructive, unless it
+analyses (`ANALYZE`/`ANALYSE` bare or among the parenthesised options, not `FALSE`/`OFF`): then the
+kind and reason are the inner statement's, the reason prefixed `EXPLAIN ANALYZE runs it: `, so Run
+asks before `EXPLAIN ANALYZE DELETE FROM orders` (decision 031).
 
 In manual mode the plugin opens a transaction before the first statement that is not itself a
 transaction statement: `BEGIN` on PostgreSQL and SQLite, `SET autocommit = 0` on MySQL. In either
@@ -286,6 +306,8 @@ handles belong to the port that created them and are released when it closes.
 | `session.open`          | none                                                     | `{ sessionId, pluginName, capabilities, serverVersion }`                                                       |
 | `script.split`          | `text`                                                   | `ClassifiedStatement[]`: `{ from, to, sql, kind, destructive }`                                                |
 | `statement.execute`     | `sessionId`, `sql`                                       | `{ handle, columns, typeClasses, rowCount, complete, cursorOpen, rowsAffected, firstWindow, transactionOpen }` |
+| `sql.explainable`       | `sql`, `analyze`                                         | `Explainability`: `{ ok: true, writes }` or `{ ok: false, reason }`; no session; needs `explain`               |
+| `statement.explain`     | `sessionId`, `sql`, `analyze`                            | `{ plan: ExplainedPlan, transactionOpen }`; needs `explain`, or `explainAnalyze` to analyse; see Explain       |
 | `transaction.setMode`   | `sessionId`, `mode`                                      | `{ mode, transactionOpen }`                                                                                    |
 | `transaction.commit`    | `sessionId`                                              | `{ mode, transactionOpen }`; a no-op when nothing is open                                                      |
 | `transaction.rollback`  | `sessionId`                                              | `{ mode, transactionOpen }`; a no-op when nothing is open                                                      |
@@ -351,6 +373,7 @@ was unreadable. `hint` says what to do next.
 | `cancelled`           | `statement.cancel` stopped the statement                                |
 | `introspectionFailed` | The database refused to describe a namespace; the hint says Synchronize |
 | `definitionNotFound`  | `catalog.definition` named a relation the database no longer has        |
+| `explainUnsupported`  | `statement.explain` got a statement the plugin cannot explain; why      |
 | `timedOut`            | Test Connection got no answer within `PROBE_TIMEOUT_MS`                 |
 | `editRejected`        | Submit rolled back; `statementIndex` names the failing statement        |
 | `invalidRequest`      | The request did not parse, or asks a plugin for a capability it lacks   |
@@ -376,13 +399,19 @@ indicator on the right; later plans add items to its slot list (`renderer/shell/
 Every command is an action in one registry (decision 015, `renderer/actions/`). Buttons, the
 keymap, the palette and the native menu all call `invoke(id, args?)`, which answers `ran`,
 `disabled` or `unknown`. An action's `when(context)` decides whether it is enabled from a snapshot
-of the stores; a disabled action shows greyed and does not run.
+of the stores; a disabled action shows greyed and does not run. An action whose `available(context)`
+is false, because the plugin lacks the capability it needs, is left out of the palette and does not
+run either.
 
 | Action id                                | Title                                 | macOS    | Windows / Linux        |
 | ---------------------------------------- | ------------------------------------- | -------- | ---------------------- |
 | `console.run`                            | Run                                   | `⌘↩`     | `Ctrl+Enter`           |
 | `console.runAll`                         | Run All                               | `⇧⌘↩`    | `Ctrl+Shift+Enter`     |
 | `console.cancel`                         | Cancel                                |          |                        |
+| `console.explain`                        | Explain Plan                          | `⇧⌘E`    | `Ctrl+Shift+E`         |
+| `console.explainAnalyze`                 | Explain Analyse                       |          |                        |
+| `plan.rerun`, `plan.copy`                | Explain Again, Copy Raw Plan          |          |                        |
+| `plan.showTree`, `plan.showRaw`          | Show Plan Tree, Show Raw Plan         |          |                        |
 | `console.new`                            | New Console                           | `⇧⌘L`    | `Ctrl+Shift+L`         |
 | `transaction.commit`                     | Commit                                | `⌥⇧⌘↩`   | `Ctrl+Alt+Shift+Enter` |
 | `transaction.rollback`                   | Rollback                              |          |                        |
@@ -495,7 +524,8 @@ Under the editor sit `Output` and one tab per statement that returned rows, `Res
 `Result 2`…, with the SQL as the tooltip; each holds a `ResultGrid` over its own handle. A new run
 releases the unpinned result tabs and numbers new ones after the pinned; the pin on a tab
 (`result.pin`) keeps it across runs. The last tab a run opens is shown, or `Output` when the run
-failed.
+failed. An explain opens a plan tab instead (see Explain); result and plan tabs share the strip,
+the pin and the replacement rule.
 
 Output is a log per console, in memory and capped at `OUTPUT_LIMIT = 500` entries: the time, the
 first line of the SQL, then `2 rows retrieved in 38 ms` (`500+ rows retrieved` while the cursor has
@@ -579,6 +609,86 @@ A successful `ddl` statement re-describes the datasource's cached namespaces whe
 open; in an open transaction it waits for the commit, and a rollback drops it. Dragging a relation,
 view or column from the Database tool window into the editor inserts its `catalog.qualifiedName`
 at the drop point.
+
+### Explain
+
+Plan 012, decision 031. Explain Plan shows the optimiser's plan without running the statement;
+Explain Analyse runs it and shows what happened. Each is a capability: PostgreSQL and MySQL declare
+`explain` and `explainAnalyze`, SQLite `explain` alone, and a console shows only the buttons and
+palette entries its plugin declares (an action's `available`, decision 007). The buttons follow Run
+All in the console toolbar as icons (title in the tooltip), Explain Analyse in the warning tone;
+the datasource name at the toolbar's end truncates when they leave it too little room.
+
+| Action                   | Title           | macOS | Windows / Linux | Scope   |
+| ------------------------ | --------------- | ----- | --------------- | ------- |
+| `console.explain`        | Explain Plan    | `⇧⌘E` | `Ctrl+Shift+E`  | console |
+| `console.explainAnalyze` | Explain Analyse |       |                 | console |
+| `plan.rerun`             | Explain Again   |       |                 | console |
+| `plan.copy`              | Copy Raw Plan   |       |                 | console |
+| `plan.showTree`          | Show Plan Tree  |       |                 | console |
+| `plan.showRaw`           | Show Raw Plan   |       |                 | console |
+
+Explain Analyse has no chord, deliberately. Both take the statement at the caret or the selection,
+as Run does; a selection holding several statements is refused in Output with
+`Explain one statement at a time.`. The flow:
+
+1. `script.split`, then `sql.explainable { sql, analyze }`: the plugin refuses empty input, several
+   statements, a statement that is already `EXPLAIN`/`DESCRIBE`/`DESC`, and kinds the dialect cannot
+   explain, with a reason; MySQL analyses only `SELECT` and `TABLE`. A refusal is an Output warning
+   and nothing runs.
+2. Analyse of a write asks first, in a destructive dialog titled
+   `Explain Analyse runs this statement`: the statement's first line, its destructive reason if any,
+   and `Its changes will be committed.` (auto) or
+   `Its changes stay in the open transaction until you commit or roll back.` (manual);
+   `Run and Explain` or Cancel, which runs and records nothing. Explain Plan, and Analyse of a read,
+   never ask.
+3. `statement.explain { sessionId, sql, analyze }` runs on the console's session: it closes the open
+   cursor first, holds the session so Cancel works, and answers the plan and `transactionOpen`.
+
+The plugin sends PostgreSQL `EXPLAIN (FORMAT JSON) …` or `EXPLAIN (ANALYZE, FORMAT JSON) …`; MySQL
+`EXPLAIN FORMAT=TREE …` or `EXPLAIN ANALYZE FORMAT=TREE …`, but `EXPLAIN FORMAT=JSON …` for a
+single-table `UPDATE` or `DELETE`, which `TREE` prints as `<not executable by iterator executor>`;
+SQLite `EXPLAIN QUERY PLAN …`. It reads the answer into an `ExplainedPlan`:
+
+```ts
+interface PlanNode {
+  readonly operation: string; // "Seq Scan", "Nested loop inner join", "SCAN o"
+  readonly target: string | null; // "orders o"
+  readonly detail: string | null; // "using customers_pkey", a MySQL filter
+  readonly estimatedRows: number | null;
+  readonly estimatedCost: number | null;
+  readonly actualRows: number | null; // analysed only
+  readonly actualTimeMs: number | null; // analysed only, the node's total time
+  readonly loops: number | null; // analysed only
+  readonly properties: readonly { name: string; value: string }[]; // every other key, in order
+  readonly children: readonly PlanNode[];
+}
+
+interface ExplainedPlan {
+  readonly statement: string; // the EXPLAIN text sent
+  readonly analyzed: boolean;
+  readonly roots: readonly PlanNode[];
+  readonly summary: readonly { name: string; value: string }[]; // Planning Time, Execution Time
+  readonly raw: string; // what the database printed
+}
+```
+
+The plan opens in a plan tab, `Plan` or `Plan (analysed)`, which pins and is replaced like a result
+tab; Output logs `Explained in N ms` or `Analysed in N ms`. `console/PlanView.tsx` draws a toolbar
+(a Tree / Raw toggle, Explain Again, which explains again in the same mode and asks again when
+Analyse writes, Copy Raw Plan, then the summary), and under it a tree-table (`role="treegrid"`,
+the Services keyboard model, every node expanded): Operation (indented, with its target, truncated
+with a tooltip), Rows (est.), Cost (est.), and when analysed Actual Rows, Time (ms) and Loops, empty
+where the database gave nothing. A bar under the Cost cell, or under Time when analysed, shows the
+node's share of the root's. The selected node's detail and properties fill a strip on the right.
+Raw shows `raw` in a read-only editor. An analysed plan opens with a warning banner,
+`Explain Analyse ran this statement.`, adding `Its changes were committed.` or
+`Its changes are in the open transaction.` when it wrote.
+
+History records the EXPLAIN text sent with its outcome and duration (the user's statement when the
+explain failed); Services lists the execution as `Explain: <first line>` or
+`Explain Analyse: <first line>`. An `EXPLAIN …` typed and run with Run is still rows in the grid;
+only the classifier treats it differently (SQL language and transactions).
 
 ### Console files
 

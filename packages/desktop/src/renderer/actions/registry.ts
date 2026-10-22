@@ -49,7 +49,9 @@ export type ActionIcon =
   | "quickDoc"
   | "generate"
   | "history"
-  | "reopen";
+  | "reopen"
+  | "explain"
+  | "explainAnalyze";
 
 export interface Action<A = void> {
   readonly id: string;
@@ -64,6 +66,11 @@ export interface Action<A = void> {
    * console and Submit in a table tab (plan 008).
    */
   readonly tabKind?: TabKind;
+  /**
+   * Whether the action exists for the active tab at all, as when its datasource's plugin lacks the
+   * capability (decision 007); absent means always. Unavailable actions leave the palette and never run.
+   */
+  readonly available?: (context: ActionContext) => boolean;
   /** Whether the action can run now; absent means always. */
   readonly when?: (context: ActionContext) => boolean;
   readonly run: (context: ActionContext, args: A) => void | Promise<void>;
@@ -83,6 +90,8 @@ export interface ActionRegistry {
   /** The only way anything runs a command. */
   invoke(id: string, args?: unknown): InvokeOutcome;
   isEnabled(id: string, context?: ActionContext): boolean;
+  /** False when the action's `available` says it does not apply now. */
+  isAvailable(id: string, context?: ActionContext): boolean;
   get(id: string): AnyAction | undefined;
   all(): readonly AnyAction[];
   /** Called after every action that ran, with its id. */
@@ -98,6 +107,7 @@ export function createActionRegistry(
 
   function enabled(action: AnyAction, context: ActionContext): boolean {
     if (action.tabKind !== undefined && context.activeTab?.kind !== action.tabKind) return false;
+    if (action.available?.(context) === false) return false;
     return action.when?.(context) ?? true;
   }
 
@@ -129,6 +139,10 @@ export function createActionRegistry(
     isEnabled(id, context = contextOf()) {
       const action = actions.get(id);
       return action !== undefined && enabled(action, context);
+    },
+    isAvailable(id, context = contextOf()) {
+      const action = actions.get(id);
+      return action !== undefined && (action.available?.(context) ?? true);
     },
     get: (id) => actions.get(id),
     all: () => [...actions.values()],

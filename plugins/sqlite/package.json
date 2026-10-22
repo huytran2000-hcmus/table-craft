@@ -6,7 +6,8 @@
   "license": "MIT",
   "type": "module",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./explain": "./src/explain.ts"
   },
   "dependencies": {
     "@table-craft/plugin-api": "workspace:*"

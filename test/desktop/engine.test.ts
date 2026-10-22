@@ -12,6 +12,8 @@ import type {
   DescribedCatalog,
   EngineResponse,
   ExecutedStatement,
+  Explainability,
+  ExplainedStatement,
   Namespace,
   ExportedResult,
   ResultState,
@@ -203,7 +205,7 @@ describe("engine", () => {
 
     expect(resultOf(response)).toMatchObject({
       pluginName: "SQLite",
-      capabilities: ["sql", "schemaTree", "transactions", "ddl"],
+      capabilities: ["sql", "schemaTree", "transactions", "ddl", "explain"],
     });
   });
 
@@ -578,6 +580,81 @@ describe("engine scripts and transactions", () => {
 
     expect(response).toMatchObject({ type: "engine.error", error: { code: "statementFailed" } });
     expect(resultOf<TransactionState>(committed)).toEqual({ mode: "manual", transactionOpen: false });
+  });
+});
+
+describe("engine explain", () => {
+  it("givenStatements_whenExplainableAskedWithoutSession_thenPluginVerdicts", async () => {
+    const connection = connected();
+
+    const select = await connection.handle({ id: 1, type: "sql.explainable", sql: "SELECT 1", analyze: false });
+    const ddl = await connection.handle({
+      id: 2,
+      type: "sql.explainable",
+      sql: "CREATE TABLE t (n int)",
+      analyze: false,
+    });
+    const analyse = await connection.handle({ id: 3, type: "sql.explainable", sql: "SELECT 1", analyze: true });
+
+    expect(resultOf<Explainability>(select)).toEqual({ ok: true, writes: false });
+    const refused = resultOf<Explainability>(ddl);
+    expect(refused.ok ? null : refused.reason).toContain("CREATE");
+    expect(resultOf<Explainability>(analyse)).toMatchObject({ ok: false });
+  });
+
+  it("givenOpenCursor_whenExplained_thenPlanAndTheCursorClosed", async () => {
+    const connection = connected();
+    const sessionId = await openSession(connection);
+    const { handle, cursorOpen } = resultOf<ExecutedStatement>(
+      await connection.handle({ id: 2, type: "statement.execute", sessionId, sql: ROWS_1200 }),
+    );
+
+    const response = await connection.handle({
+      id: 3,
+      type: "statement.explain",
+      sessionId,
+      sql: ROWS_1200,
+      analyze: false,
+    });
+    const fetched = await connection.handle({ id: 4, type: "result.fetchMore", handle, all: false });
+
+    const explained = resultOf<ExplainedStatement>(response);
+    expect(cursorOpen).toBe(true);
+    expect(explained.plan.statement).toBe(`EXPLAIN QUERY PLAN ${ROWS_1200}`);
+    expect(explained.plan.roots.length).toBeGreaterThan(0);
+    expect(explained.transactionOpen).toBe(false);
+    expect(resultOf<ResultState>(fetched).cursorOpen).toBe(false);
+  });
+
+  it("givenDdl_whenExplained_thenExplainUnsupportedWithTheReason", async () => {
+    const connection = connected();
+    const sessionId = await openSession(connection);
+
+    const response = await connection.handle({
+      id: 2,
+      type: "statement.explain",
+      sessionId,
+      sql: "CREATE TABLE t (n int)",
+      analyze: false,
+    });
+
+    expect(response).toMatchObject({ type: "engine.error", error: { code: "explainUnsupported" } });
+    expect(response.type === "engine.error" ? response.error.message : null).toContain("CREATE");
+  });
+
+  it("givenPluginWithoutExplainAnalyze_whenAnalysed_thenInvalidRequest", async () => {
+    const connection = connected();
+    const sessionId = await openSession(connection);
+
+    const response = await connection.handle({
+      id: 2,
+      type: "statement.explain",
+      sessionId,
+      sql: "SELECT 1",
+      analyze: true,
+    });
+
+    expect(response).toMatchObject({ type: "engine.error", error: { code: "invalidRequest" } });
   });
 });
 

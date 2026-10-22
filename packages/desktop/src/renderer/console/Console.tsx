@@ -1,4 +1,5 @@
 import { ACTION_IDS } from "@table-craft/desktop/renderer/actions/appActions.js";
+import { EXPLAIN_ACTION_IDS } from "@table-craft/desktop/renderer/actions/explainActions.js";
 import { ActionButton } from "@table-craft/desktop/renderer/console/ActionButton.js";
 import { Editor } from "@table-craft/desktop/renderer/console/Editor.js";
 import { ResultTabs } from "@table-craft/desktop/renderer/console/ResultTabs.js";
@@ -33,6 +34,10 @@ export function Console({ consoleId }: { readonly consoleId: string }) {
       <div className="flex items-center gap-gap border-b border-line bg-panel p-gap">
         <ActionButton actionId={ACTION_IDS.run} primary />
         <ActionButton actionId={ACTION_IDS.runAll} />
+        {capabilities.includes("explain") ? <ActionButton actionId={EXPLAIN_ACTION_IDS.explain} compact /> : null}
+        {capabilities.includes("explainAnalyze") ? (
+          <ActionButton actionId={EXPLAIN_ACTION_IDS.explainAnalyze} compact tone="warning" />
+        ) : null}
         {capabilities.includes("cancel") ? <ActionButton actionId={ACTION_IDS.cancel} /> : null}
         {capabilities.includes("transactions") ? <TxControls session={session} /> : null}
         <span className="shrink-0 text-ink-muted">{STATUS_TEXT[status]}</span>
@@ -42,11 +47,13 @@ export function Console({ consoleId }: { readonly consoleId: string }) {
           </span>
         )}
         {datasource === undefined ? null : (
-          <span className="ml-auto flex shrink-0 items-center gap-1 text-ink-muted">
-            {datasource.readOnly ? <ReadOnlyIcon aria-hidden className="size-icon" /> : null}
-            {datasource.readOnly ? "read-only · " : ""}
-            {datasource.name}
-            {plugin === undefined ? "" : ` · ${plugin.name}`}
+          <span data-testid="console-datasource" className="ml-auto flex min-w-0 items-center gap-1 text-ink-muted">
+            {datasource.readOnly ? <ReadOnlyIcon aria-hidden className="size-icon shrink-0" /> : null}
+            <span className="truncate">
+              {datasource.readOnly ? "read-only · " : ""}
+              {datasource.name}
+              {plugin === undefined ? "" : ` · ${plugin.name}`}
+            </span>
           </span>
         )}
       </div>

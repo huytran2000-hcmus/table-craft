@@ -40,7 +40,7 @@ export interface Column {
 }
 
 /** Mirrors `Capability` in plugin-api. The renderer branches on these, never on a plugin id (decision 007). */
-export type Capability = "sql" | "cancel" | "schemaTree" | "transactions" | "ddl";
+export type Capability = "sql" | "cancel" | "schemaTree" | "transactions" | "ddl" | "explain" | "explainAnalyze";
 
 /** What the SQL Generator writes: `create` is the relation's definition, the rest mirror `GeneratedStatement` in plugin-api. */
 export type GeneratorStatement = "create" | "drop" | "select" | "insert" | "update";
@@ -347,6 +347,47 @@ export type Declaration =
   | { readonly kind: "relation"; readonly path: readonly string[]; readonly relation: string }
   | { readonly kind: "column"; readonly path: readonly string[]; readonly relation: string; readonly column: string };
 
+/** Mirrors `Explainability` in plugin-api. */
+export type Explainability =
+  { readonly ok: true; readonly writes: boolean } | { readonly ok: false; readonly reason: string };
+
+/** Mirrors `PlanProperty` in plugin-api. */
+export interface PlanProperty {
+  readonly name: string;
+  readonly value: string;
+}
+
+/** Mirrors `PlanNode` in plugin-api: one operator of the plan, numbers or null where the dialect says nothing. */
+export interface PlanNode {
+  readonly operation: string;
+  readonly target: string | null;
+  readonly detail: string | null;
+  readonly estimatedRows: number | null;
+  readonly estimatedCost: number | null;
+  readonly actualRows: number | null;
+  readonly actualTimeMs: number | null;
+  readonly loops: number | null;
+  readonly properties: readonly PlanProperty[];
+  readonly children: readonly PlanNode[];
+}
+
+/** Mirrors `ExplainedPlan` in plugin-api. */
+export interface ExplainedPlan {
+  /** The EXPLAIN statement the plugin sent. */
+  readonly statement: string;
+  readonly analyzed: boolean;
+  readonly roots: readonly PlanNode[];
+  readonly summary: readonly PlanProperty[];
+  /** What the database printed, for the Raw view. */
+  readonly raw: string;
+}
+
+export interface ExplainedStatement {
+  readonly plan: ExplainedPlan;
+  /** Whether the session's transaction is open after the explain, as `ExecutedStatement` reports it. */
+  readonly transactionOpen: boolean;
+}
+
 export interface OpenedSession {
   readonly sessionId: string;
   /** The datasource's plugin, by its manifest name, for display only. */
@@ -366,6 +407,19 @@ export interface EngineCalls {
   "statement.cancel": { params: { readonly sessionId: string }; result: null };
   /** Splits and classifies `text` with the datasource plugin's language; needs no session. */
   "script.split": { params: { readonly text: string }; result: readonly ClassifiedStatement[] };
+  /** Whether the plugin's language can explain `sql` (one statement), and whether it writes; needs no session. Needs `explain`. */
+  "sql.explainable": {
+    params: { readonly sql: string; readonly analyze: boolean };
+    result: Explainability;
+  };
+  /**
+   * Explains `sql` on the session, closing its open cursor first; with `analyze` the statement runs
+   * (decision 031) and `statement.cancel` stops it. Needs `explain`, and `explainAnalyze` for `analyze`.
+   */
+  "statement.explain": {
+    params: { readonly sessionId: string; readonly sql: string; readonly analyze: boolean };
+    result: ExplainedStatement;
+  };
   /** Switching to `auto` while a transaction is open fails with `statementFailed`. Needs `transactions`. */
   "transaction.setMode": {
     params: { readonly sessionId: string; readonly mode: TransactionMode };
@@ -514,6 +568,7 @@ export type EngineErrorCode =
   | "cancelled"
   | "introspectionFailed"
   | "definitionNotFound"
+  | "explainUnsupported"
   | "invalidRequest"
   | "editRejected"
   | "timedOut"

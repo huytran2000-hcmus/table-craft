@@ -40,6 +40,14 @@ export const engineRequestSchema = z.discriminatedUnion("type", [
   }),
   z.strictObject({ id: requestId, type: z.literal("statement.cancel"), sessionId }),
   z.strictObject({ id: requestId, type: z.literal("script.split"), text: z.string() }),
+  z.strictObject({ id: requestId, type: z.literal("sql.explainable"), sql: z.string(), analyze: z.boolean() }),
+  z.strictObject({
+    id: requestId,
+    type: z.literal("statement.explain"),
+    sessionId,
+    sql: z.string(),
+    analyze: z.boolean(),
+  }),
   z.strictObject({
     id: requestId,
     type: z.literal("transaction.setMode"),

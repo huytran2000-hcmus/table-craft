@@ -1,5 +1,6 @@
 import type { StatementClass, StatementKind } from "@table-craft/plugin-api";
-import { significantTokens, wordOf, type SqlDialectOptions, type Token } from "./tokens.js";
+import { significantTokens, type SqlDialectOptions } from "./tokens.js";
+import { explainPrefix, mainVerb, words, type Word } from "./words.js";
 
 const KINDS: ReadonlyMap<string, StatementKind> = new Map<string, StatementKind>([
   ...["SELECT", "SHOW", "EXPLAIN", "DESCRIBE", "DESC", "VALUES", "TABLE"].map((word) => [word, "read"] as const),
@@ -12,42 +13,13 @@ const KINDS: ReadonlyMap<string, StatementKind> = new Map<string, StatementKind>
   ),
 ]);
 
-const WITH = "WITH";
 const START = "START";
 const TRANSACTION = "TRANSACTION";
 const WHERE = "WHERE";
 const LIMIT = "LIMIT";
-const MAIN_VERBS = new Set(["SELECT", "INSERT", "UPDATE", "DELETE", "MERGE"]);
-const OPEN_PAREN = "(";
-const CLOSE_PAREN = ")";
-
-interface Word {
-  readonly word: string;
-  /** Parentheses around it; 0 is the statement's own level. */
-  readonly depth: number;
-}
-
-function words(sql: string, tokens: readonly Token[]): Word[] {
-  const found: Word[] = [];
-  let depth = 0;
-  for (const token of tokens) {
-    if (token.kind === "symbol") {
-      const char = sql.charAt(token.from);
-      if (char === OPEN_PAREN) depth += 1;
-      else if (char === CLOSE_PAREN) depth = Math.max(0, depth - 1);
-    } else if (token.kind === "word") {
-      found.push({ word: wordOf(sql, token), depth });
-    }
-  }
-  return found;
-}
-
-/** The verb that decides what a `WITH …` statement does: the first one outside the CTEs' parentheses. */
-function mainVerb(list: readonly Word[]): number {
-  if (list[0]?.word !== WITH) return 0;
-  const index = list.findIndex((entry, at) => at > 0 && entry.depth === 0 && MAIN_VERBS.has(entry.word));
-  return index < 0 ? 0 : index;
-}
+const WITH = "WITH";
+/** Prefixes the explained statement's destructive reason, so the confirmation says why it matters. */
+export const EXPLAIN_ANALYZE_REASON_PREFIX = "EXPLAIN ANALYZE runs it: ";
 
 function hasTopLevel(list: readonly Word[], from: number, word: string): boolean {
   return list.some((entry, at) => at > from && entry.depth === 0 && entry.word === word);
@@ -77,14 +49,28 @@ function destructiveReason(list: readonly Word[], verbAt: number): string | null
 /**
  * A token-level classifier plugins may build `SqlLanguage.classify` on (decision 023). The first
  * keyword picks the kind; `UPDATE` or `DELETE` without a top-level `WHERE`, `DROP` and `TRUNCATE`
- * are destructive (decision 011). It never parses, so it never rejects a statement.
+ * are destructive (decision 011). `EXPLAIN` is a read unless it analyses, which runs the statement,
+ * so `EXPLAIN ANALYZE` takes the statement's kind and destructive reason (decision 031). It never
+ * parses, so it never rejects a statement.
  */
 export function classifyTokens(sql: string, options: SqlDialectOptions = {}): StatementClass {
-  const list = words(sql, significantTokens(sql, options));
+  return classifyWords(words(sql, significantTokens(sql, options)));
+}
+
+function classifyWords(list: readonly Word[]): StatementClass {
   const first = list[0]?.word;
   if (first === undefined) return { kind: "other", destructive: null };
   if (first === START) {
     return { kind: list[1]?.word === TRANSACTION ? "transaction" : "other", destructive: null };
+  }
+  const explain = explainPrefix(list);
+  if (explain !== null) {
+    if (!explain.analyze) return { kind: "read", destructive: null };
+    const inner = classifyWords(list.slice(explain.statementAt));
+    return {
+      kind: inner.kind,
+      destructive: inner.destructive === null ? null : `${EXPLAIN_ANALYZE_REASON_PREFIX}${inner.destructive}`,
+    };
   }
   const verbAt = mainVerb(list);
   const verb = list[verbAt]?.word ?? first;

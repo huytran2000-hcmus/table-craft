@@ -14,12 +14,15 @@ export function ActionButton({
   compact = false,
   pressed,
   reason,
+  tone,
 }: {
   readonly actionId: string;
   readonly primary?: boolean;
   readonly compact?: boolean;
   readonly pressed?: boolean;
   readonly reason?: string | null;
+  /** `warning` marks an action that does more than it looks, as Explain Analyse runs its statement. */
+  readonly tone?: "warning";
 }) {
   const enabled = useActionEnabled(actionId);
   const action = registry.get(actionId);
@@ -37,9 +40,13 @@ export function ActionButton({
         className={
           primary
             ? "flex h-row shrink-0 items-center gap-1 rounded bg-accent px-gap whitespace-nowrap text-accent-ink disabled:opacity-50"
-            : compact
-              ? "flex h-row shrink-0 items-center rounded px-1 text-ink hover:bg-raised disabled:opacity-50 aria-pressed:bg-selection"
-              : "flex h-row shrink-0 items-center gap-1 rounded border border-line px-gap whitespace-nowrap text-ink disabled:opacity-50"
+            : compact && tone === "warning"
+              ? "flex h-row shrink-0 items-center rounded border border-warning px-1 text-warning hover:bg-raised disabled:opacity-50"
+              : compact
+                ? "flex h-row shrink-0 items-center rounded px-1 text-ink hover:bg-raised disabled:opacity-50 aria-pressed:bg-selection"
+                : tone === "warning"
+                  ? "flex h-row shrink-0 items-center gap-1 rounded border border-warning px-gap whitespace-nowrap text-warning disabled:opacity-50"
+                  : "flex h-row shrink-0 items-center gap-1 rounded border border-line px-gap whitespace-nowrap text-ink disabled:opacity-50"
         }
         disabled={!enabled}
         onClick={() => invoke(actionId)}

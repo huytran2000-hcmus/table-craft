@@ -3,3 +3,4 @@ dist/
 release/
 bun.lock
 test/fixtures/
+test/support/plans/

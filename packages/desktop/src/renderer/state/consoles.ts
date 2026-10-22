@@ -13,7 +13,7 @@ import {
 import type { HistoryEntry } from "@table-craft/desktop/preload/bridge.js";
 import type { EngineClient } from "@table-craft/desktop/renderer/engine/client.js";
 import { carriedLayout, type ColumnLayout } from "@table-craft/desktop/renderer/model/columnLayout.js";
-import { executedText, exportedText, firstLine } from "@table-craft/desktop/renderer/model/format.js";
+import { executedText, explainedText, exportedText, firstLine } from "@table-craft/desktop/renderer/model/format.js";
 import { clampSelection, type GridSelection } from "@table-craft/desktop/renderer/model/gridSelection.js";
 import { statementsToRun, type RunScope, type TextSpan } from "@table-craft/desktop/renderer/model/statementAt.js";
 import { useCatalog } from "@table-craft/desktop/renderer/state/catalog.js";
@@ -24,16 +24,30 @@ import {
   type ExecutionReporter,
 } from "@table-craft/desktop/renderer/state/executions.js";
 import { history } from "@table-craft/desktop/renderer/state/history.js";
-import { useModal } from "@table-craft/desktop/renderer/state/modal.js";
-import { resultTabOf, type ResultTab } from "@table-craft/desktop/renderer/state/resultTab.js";
+import { useModal, type ModalRequest } from "@table-craft/desktop/renderer/state/modal.js";
+import {
+  planTabOf,
+  resultTabOf,
+  type AnalysedEffect,
+  type ConsoleTab,
+  type PlanTab,
+  type ResultTab,
+} from "@table-craft/desktop/renderer/state/resultTab.js";
 import { createResultWindows, toError } from "@table-craft/desktop/renderer/state/resultWindows.js";
 
 export {
+  ANALYSED_PLAN_TITLE,
   MAX_LOADED_WINDOWS,
+  PLAN_TITLE,
+  planTabOf,
   resultTabOf,
   rowAt,
   windowOffsetOf,
   withWindow,
+  type AnalysedEffect,
+  type ConsoleTab,
+  type PlanTab,
+  type PlanView,
   type ResultFetch,
   type ResultTab,
 } from "@table-craft/desktop/renderer/state/resultTab.js";
@@ -80,8 +94,8 @@ export interface ConsoleSession {
   readonly sql: string;
   /** The editor's main selection; empty is a caret. */
   readonly selection: TextSpan;
-  readonly results: readonly ResultTab[];
-  /** `OUTPUT_TAB` or a result tab's id. */
+  readonly results: readonly ConsoleTab[];
+  /** `OUTPUT_TAB` or a result or plan tab's id. */
   readonly activeResult: string;
   /** Newest last, at most `OUTPUT_LIMIT` entries; never written to disk. */
   readonly output: readonly OutputEntry[];
@@ -137,8 +151,22 @@ export interface ConsolesState {
   readonly sort: (id: string, resultId: string, keys: readonly SortKey[]) => Promise<void>;
   readonly setLayout: (id: string, resultId: string, layout: ColumnLayout) => void;
   readonly select: (id: string, resultId: string, selection: GridSelection | null) => void;
-  /** Runs the tab's statement again in place, keeping its layout and sort, reconnecting when it must. */
+  /**
+   * Explains the statement at the caret or the selection (plan 012 decision 9): the plugin checks
+   * it first, and Analyse of a write asks before it runs.
+   */
+  readonly explain: (id: string, analyze: boolean) => Promise<void>;
+  /**
+   * Runs the tab's statement again in place, keeping its layout and sort, reconnecting when it must;
+   * a plan tab explains again in the same mode.
+   */
   readonly rerun: (id: string, resultId: string) => Promise<void>;
+  /** The plan tab's view, selected node or collapsed nodes. */
+  readonly updatePlan: (
+    id: string,
+    planId: string,
+    change: Partial<Pick<PlanTab, "view" | "selected" | "collapsed">>,
+  ) => void;
   /** The chosen rows and columns as an extractor's text, or null when the engine refused (the Output log says why). */
   readonly extract: (
     id: string,
@@ -178,8 +206,52 @@ export function nextResultTitle(kept: readonly Pick<ResultTab, "title">[]): stri
   for (let n = 1; ; n++) if (!taken.has(`${RESULT_TITLE} ${n}`)) return `${RESULT_TITLE} ${n}`;
 }
 
+/** The shown tab when it holds rows: what the grid and its actions work on. */
 export function activeResultOf(session: ConsoleSession): ResultTab | null {
+  const active = activeTabOf(session);
+  return active?.kind === "rows" ? active : null;
+}
+
+/** The shown result or plan tab; null while Output is shown. */
+export function activeTabOf(session: ConsoleSession): ConsoleTab | null {
   return session.results.find((result) => result.id === session.activeResult) ?? null;
+}
+
+export function activePlanOf(session: ConsoleSession): PlanTab | null {
+  const active = activeTabOf(session);
+  return active?.kind === "plan" ? active : null;
+}
+
+const isRows = (tab: ConsoleTab): tab is ResultTab => tab.kind === "rows";
+
+/** What the user is asked before Explain Analyse runs a write (plan 012 decision 9). */
+export interface AnalyseRequest {
+  readonly statement: ClassifiedStatement;
+  readonly mode: TransactionMode;
+}
+
+export const ANALYSE_TITLE = "Explain Analyse runs this statement";
+export const ANALYSE_CONFIRM = "Run and Explain";
+const ANALYSE_COMMITS = "Its changes will be committed.";
+const ANALYSE_STAYS_OPEN = "Its changes stay in the open transaction until you commit or roll back.";
+export const EXPLAIN_ONE_STATEMENT = "Explain one statement at a time.";
+const NOTHING_TO_EXPLAIN = "Nothing to explain";
+const DECLINED = "Cancelled; nothing ran.";
+
+export function analyseConfirmation({ statement, mode }: AnalyseRequest): ModalRequest {
+  return {
+    kind: "confirm",
+    title: ANALYSE_TITLE,
+    message: mode === "auto" ? ANALYSE_COMMITS : ANALYSE_STAYS_OPEN,
+    items: [{ label: firstLine(statement.sql), detail: statement.destructive ?? "" }],
+    confirm: ANALYSE_CONFIRM,
+    destructive: true,
+  };
+}
+
+/** The label Services lists an explain under (plan 012 decision 13). */
+export function explainLabel(sql: string, analyze: boolean): string {
+  return `${analyze ? "Explain Analyse" : "Explain"}: ${firstLine(sql)}`;
 }
 
 export interface ConsolesDependencies {
@@ -190,6 +262,8 @@ export interface ConsolesDependencies {
   readonly clock?: () => number;
   /** Asks before destructive statements run (decision 9); false runs none of the batch. */
   readonly confirmDestructive?: (statements: readonly ClassifiedStatement[]) => Promise<boolean>;
+  /** Asks before Explain Analyse runs a write (plan 012 decision 9); false runs nothing. */
+  readonly confirmAnalyse?: (request: AnalyseRequest) => Promise<boolean>;
   /** DDL took effect outside a transaction: the datasource's cached catalog is stale (decision 19). */
   readonly onDdl?: (datasourceId: string) => void;
   /** Hears each statement start and end, for Services (plan 011, decision 11). */
@@ -230,6 +304,7 @@ export function createConsolesStore(dependencies: ConsolesDependencies) {
   const pendingDdl = new Set<string>();
   const clock = dependencies.clock ?? (() => Date.now());
   const confirmDestructive = dependencies.confirmDestructive ?? (() => Promise.resolve(true));
+  const confirmAnalyse = dependencies.confirmAnalyse ?? (() => Promise.resolve(true));
   const executions = dependencies.executions ?? { start: () => 0, finish: () => undefined };
   let entries = 0;
   let flashes = 0;
@@ -265,10 +340,10 @@ export function createConsolesStore(dependencies: ConsolesDependencies) {
     }
 
     /** One statement on its way to the engine: Services lists it now, history once it ends. */
-    function started(id: string, sql: string): (end: ExecutionEnd) => void {
+    function started(id: string, sql: string, label: string = firstLine(sql)): (end: ExecutionEnd) => void {
       const startedAt = clock();
       const datasourceId = get().consoles[id]?.datasourceId;
-      const executionId = executions.start(id, { label: firstLine(sql), sql, startedAt });
+      const executionId = executions.start(id, { label, sql, startedAt });
       return (end) => {
         const durationMs = Math.max(0, Math.round(end.durationMs));
         executions.finish(id, executionId, { ...end, durationMs });
@@ -276,7 +351,7 @@ export function createConsolesStore(dependencies: ConsolesDependencies) {
         const { outcome, rowCount, message } = end;
         dependencies.record?.({
           datasourceId,
-          sql,
+          sql: end.sql ?? sql,
           startedAt,
           durationMs,
           outcome,
@@ -337,31 +412,53 @@ export function createConsolesStore(dependencies: ConsolesDependencies) {
       }
     }
 
-    function release(id: string, results: readonly ResultTab[]): void {
+    function release(id: string, results: readonly ConsoleTab[]): void {
       const client = clients.get(id);
       for (const result of results) {
         forget(result.id);
-        if (client !== undefined && !result.stale) {
+        if (result.kind === "rows" && client !== undefined && !result.stale) {
           void client.call("result.release", { handle: result.handle }).catch(() => undefined);
         }
       }
     }
 
-    function resultOf(id: string, resultId: string): ResultTab | undefined {
+    function tabOf(id: string, resultId: string): ConsoleTab | undefined {
       return get().consoles[id]?.results.find((result) => result.id === resultId);
+    }
+
+    function resultOf(id: string, resultId: string): ResultTab | undefined {
+      const tab = tabOf(id, resultId);
+      return tab?.kind === "rows" ? tab : undefined;
+    }
+
+    function planOf(id: string, planId: string): PlanTab | undefined {
+      const tab = tabOf(id, planId);
+      return tab?.kind === "plan" ? tab : undefined;
     }
 
     function updateResult(id: string, resultId: string, change: (result: ResultTab) => ResultTab): void {
       const current = get().consoles[id];
       if (current === undefined) return;
-      patch(id, { results: current.results.map((result) => (result.id === resultId ? change(result) : result)) });
+      patch(id, {
+        results: current.results.map((result) => (result.id === resultId && isRows(result) ? change(result) : result)),
+      });
+    }
+
+    function updatePlan(id: string, planId: string, change: (plan: PlanTab) => PlanTab): void {
+      const current = get().consoles[id];
+      if (current === undefined) return;
+      patch(id, {
+        results: current.results.map((tab) => (tab.id === planId && tab.kind === "plan" ? change(tab) : tab)),
+      });
     }
 
     /** The engine closes a session's open cursor when the session runs anything or its transaction ends. */
     function cursorsClosed(id: string): void {
       const current = get().consoles[id];
-      if (current === undefined || !current.results.some((result) => result.cursorOpen)) return;
-      patch(id, { results: current.results.map((result) => ({ ...result, cursorOpen: false })) });
+      if (current === undefined || !current.results.some((result) => isRows(result) && result.cursorOpen)) return;
+      patch(id, {
+        results: current.results.map((result) => (isRows(result) ? { ...result, cursorOpen: false } : result)),
+      });
     }
 
     /** Drops the unpinned result tabs before a run fills new ones (decision 10). */
@@ -478,6 +575,109 @@ export function createConsolesStore(dependencies: ConsolesDependencies) {
       }
     }
 
+    /**
+     * Runs `body` on the console's session as Run does: opening one first when it has none, marking
+     * the console running, and recording the outcome as its last run.
+     */
+    async function onSession(
+      id: string,
+      body: (client: EngineClient, sessionId: string, session: ConsoleSession) => Promise<RunOutcome>,
+    ): Promise<void> {
+      const before = get().consoles[id];
+      if (before === undefined || !canRun(before.status)) return;
+      if (before.status !== "ready" && !(await openSession(id))) return;
+      const current = get().consoles[id];
+      const client = clients.get(id);
+      if (current?.sessionId == null || current.status !== "ready" || client === undefined) return;
+      const startedAt = dependencies.now();
+      patch(id, { status: "running", error: null });
+      let outcome: RunOutcome = "failed";
+      try {
+        outcome = await body(client, current.sessionId, current);
+      } catch (cause) {
+        const error = toError(cause);
+        logError(id, "", error);
+        patch(id, { error, activeResult: OUTPUT_TAB });
+      }
+      const latest = get().consoles[id];
+      patch(id, {
+        // A detach while running already said the session is gone, and why.
+        status: latest?.status === "disconnected" || latest?.status === "failed" ? latest.status : "ready",
+        lastRun: { durationMs: dependencies.now() - startedAt, outcome },
+      });
+    }
+
+    /** Refused or declined: Output says why and nothing runs (plan 012 decision 9). */
+    function notRun(id: string, sql: string, message: string): RunOutcome {
+      log(id, { sql, message, tone: "warning" });
+      patch(id, { activeResult: OUTPUT_TAB });
+      return "cancelled";
+    }
+
+    /**
+     * Explains one statement: the plugin's check, the question when Analyse writes, then the plan
+     * into a new tab, or into `replacing` when a plan tab explains again.
+     */
+    async function explainOne(
+      id: string,
+      client: EngineClient,
+      sessionId: string,
+      statement: ClassifiedStatement,
+      analyze: boolean,
+      replacing: PlanTab | null,
+    ): Promise<RunOutcome> {
+      const sql = firstLine(statement.sql);
+      const verdict = await client.call("sql.explainable", { sql: statement.sql, analyze });
+      if (!verdict.ok) return notRun(id, sql, verdict.reason);
+      const mode = get().consoles[id]?.txMode ?? "auto";
+      if (analyze && verdict.writes && !(await confirmAnalyse({ statement, mode }))) return notRun(id, "", DECLINED);
+      if (replacing === null) {
+        replaceUnpinned(id);
+        patch(id, { flash: { from: statement.from, to: statement.to, seq: ++flashes } });
+      }
+      cursorsClosed(id);
+      const ended = started(id, statement.sql, explainLabel(statement.sql, analyze));
+      const startedAt = dependencies.now();
+      try {
+        const { plan, transactionOpen } = await client.call("statement.explain", {
+          sessionId,
+          sql: statement.sql,
+          analyze,
+        });
+        const elapsed = dependencies.now() - startedAt;
+        ended({ durationMs: elapsed, outcome: "success", rowCount: null, message: null, sql: plan.statement });
+        log(id, { sql, message: explainedText(analyze, elapsed), tone: "success" });
+        const current = get().consoles[id];
+        if (current === undefined) return "cancelled";
+        const effect: AnalysedEffect =
+          analyze && verdict.writes ? (transactionOpen ? "inTransaction" : "committed") : "none";
+        if (replacing === null) {
+          const tab = planTabOf(`${id}/plan-${++resultIds}`, statement.sql, plan, effect);
+          patch(id, { results: [...current.results, tab], activeResult: tab.id, transactionOpen });
+        } else {
+          updatePlan(id, replacing.id, (latest) => ({
+            ...planTabOf(latest.id, latest.sql, plan, effect),
+            view: latest.view,
+            pinned: latest.pinned,
+          }));
+          patch(id, { transactionOpen });
+        }
+        if (analyze && statement.kind === "ddl") {
+          if (transactionOpen) pendingDdl.add(id);
+          else dependencies.onDdl?.(current.datasourceId);
+        }
+        return "succeeded";
+      } catch (cause) {
+        const error = toError(cause);
+        ended(failureEnd(error, dependencies.now() - startedAt));
+        const cancelled = error.code === "cancelled";
+        if (cancelled) log(id, { sql, message: "Cancelled", tone: "warning" });
+        else logError(id, sql, error);
+        patch(id, { error, activeResult: OUTPUT_TAB });
+        return cancelled ? "cancelled" : "failed";
+      }
+    }
+
     return {
       consoles: {},
 
@@ -515,7 +715,9 @@ export function createConsolesStore(dependencies: ConsolesDependencies) {
             status: error === null ? "disconnected" : "failed",
             error: error ?? session.error,
             transactionOpen: false,
-            results: session.results.map((result) => ({ ...result, stale: true, cursorOpen: false, fetching: null })),
+            results: session.results.map((result) =>
+              isRows(result) ? { ...result, stale: true, cursorOpen: false, fetching: null } : result,
+            ),
           });
         }
       },
@@ -640,7 +842,31 @@ export function createConsolesStore(dependencies: ConsolesDependencies) {
         updateResult(id, resultId, (latest) => (latest.selection === selection ? latest : { ...latest, selection }));
       },
 
+      explain: (id, analyze) =>
+        onSession(id, async (client, sessionId, session) => {
+          const statements = await resolveTarget(client, session, "caret");
+          const [statement] = statements;
+          if (statement === undefined) {
+            log(id, { sql: "", message: NOTHING_TO_EXPLAIN, tone: "info" });
+            patch(id, { activeResult: OUTPUT_TAB });
+            return "succeeded";
+          }
+          if (statements.length > 1) return notRun(id, "", EXPLAIN_ONE_STATEMENT);
+          return explainOne(id, client, sessionId, statement, analyze, null);
+        }),
+
       async rerun(id, resultId) {
+        const plan = planOf(id, resultId);
+        if (plan !== undefined) {
+          await onSession(id, async (client, sessionId) => {
+            const [statement] = await client.call("script.split", { text: plan.sql });
+            if (statement === undefined) return notRun(id, "", NOTHING_TO_EXPLAIN);
+            const latest = planOf(id, resultId);
+            if (latest === undefined) return "cancelled";
+            return explainOne(id, client, sessionId, statement, plan.analyzed, latest);
+          });
+          return;
+        }
         const before = get().consoles[id];
         if (before === undefined || resultOf(id, resultId) === undefined || !canRun(before.status)) return;
         if (before.status !== "ready" && !(await openSession(id))) return;
@@ -733,6 +959,10 @@ export function createConsolesStore(dependencies: ConsolesDependencies) {
         patch(id, { activeResult: resultId });
       },
 
+      updatePlan(id, planId, change) {
+        updatePlan(id, planId, (latest) => ({ ...latest, ...change }));
+      },
+
       togglePin(id, resultId) {
         const current = get().consoles[id];
         if (current === undefined) return;
@@ -776,10 +1006,15 @@ async function askDestructive(statements: readonly ClassifiedStatement[]): Promi
   return answer !== null;
 }
 
+async function askAnalyse(request: AnalyseRequest): Promise<boolean> {
+  return (await useModal.getState().ask(analyseConfirmation(request))) !== null;
+}
+
 export const useConsoles = createConsolesStore({
   connect: (datasourceId) => useDatasources.getState().connect(datasourceId),
   now: () => performance.now(),
   confirmDestructive: askDestructive,
+  confirmAnalyse: askAnalyse,
   onDdl: (datasourceId) => void useCatalog.getState().refreshCached(datasourceId),
   executions: {
     start: (tabId, start) => useExecutions.getState().start(tabId, start),
