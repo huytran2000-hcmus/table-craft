@@ -31,6 +31,7 @@ import {
   newProfile,
   openConsoleOn,
   pressChord,
+  readProfileFile,
   runStatement,
   SCENARIO_TIMEOUT_MS,
   seedDatasources,
@@ -48,6 +49,7 @@ const LOOP_TIMEOUT_MS = SCENARIO_TIMEOUT_MS * 3;
 const BUILT_IN_KINDS = ["MySQL", "PostgreSQL", "SQLite"];
 /** Not the default on a light-mode host, so the relaunched window shows it was kept. */
 const CHOSEN_THEME = "Dark";
+const CHOSEN_THEME_ID = "dark";
 const PASSWORD = POSTGRES_CONFIG.password;
 
 const { password: _postgresPassword, ...POSTGRES_PLAIN } = POSTGRES_CONFIG;
@@ -84,6 +86,12 @@ async function openAppearance(page: Page): Promise<void> {
   await pressChord(page, ",");
   await settingsDialog(page).waitFor({ timeout: LAUNCH_TIMEOUT_MS });
   await settingsDialog(page).getByRole("tab", { name: "Appearance", exact: true }).click();
+}
+
+/** The theme `settings.json` holds on disk, or null before the first save. */
+function savedTheme(userDataDir: string): string | null {
+  const text = readProfileFile(userDataDir, "settings.json");
+  return text === null ? null : (JSON.parse(text) as { appearance: { theme: string } }).appearance.theme;
 }
 
 describe.runIf(SMOKE_ENABLED && APP_EXECUTABLE !== undefined)("packaged app", () => {
@@ -169,6 +177,9 @@ describe.runIf(SMOKE_ENABLED && APP_EXECUTABLE !== undefined)("packaged app", ()
       await openAppearance(first.page);
       await themeOption(first.page, CHOSEN_THEME).click();
       await expect.poll(() => themeOption(first.page, CHOSEN_THEME).getAttribute("aria-checked")).toBe("true");
+      // The option checks before main has written settings.json, and closing kills the app: on
+      // the Windows runner the write lost that race (found live, plan 014).
+      await expect.poll(() => savedTheme(userDataDir), { timeout: LAUNCH_TIMEOUT_MS }).toBe(CHOSEN_THEME_ID);
       await closeRunning();
 
       const { page } = await launchSaved([saved], userDataDir);
@@ -176,7 +187,7 @@ describe.runIf(SMOKE_ENABLED && APP_EXECUTABLE !== undefined)("packaged app", ()
       await waitUntilReady(page);
       await openAppearance(page);
 
-      expect(await themeOption(page, CHOSEN_THEME).getAttribute("aria-checked")).toBe("true");
+      await expect.poll(() => themeOption(page, CHOSEN_THEME).getAttribute("aria-checked")).toBe("true");
       await captureWindow(page, "packaged-relaunch");
     },
     SCENARIO_TIMEOUT_MS * 2,

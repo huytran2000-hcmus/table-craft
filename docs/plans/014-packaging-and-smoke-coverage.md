@@ -301,6 +301,14 @@ helpers use it; the timed rerun's slowest step took under half a second. The fla
 three isolated runs or in later full runs; four Electron processes orphaned by earlier interrupted
 runs were running at the time and were killed.
 
+**17. Bug (test): the relaunch scenario closed the app before the setting was on disk.** The first
+CI run on `main` failed the Windows job: after relaunch Dark was not checked. The renderer checks the
+option as soon as it is clicked, while main writes `settings.json` (temporary file, then rename)
+afterwards, and closing the app kills it; on the Windows runner the close won. The scenario now
+waits for `settings.json` to hold `dark` before closing, and polls the relaunched dialog. A user who
+quits within milliseconds of a change can still lose it; flushing pending writes on quit is a
+follow-up, not part of this plan.
+
 ---
 
 ## Out of scope
