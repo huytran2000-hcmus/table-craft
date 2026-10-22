@@ -42,14 +42,40 @@ page; the first release is not out yet.
 
 The builds are not signed with a paid certificate, so the first launch needs one extra step:
 
-- **macOS** (ad-hoc signed): opening the app shows _“TableCraft” Not Opened. Apple could not verify
-  “TableCraft” is free of malware that may harm your Mac or compromise your privacy._ Click
-  **Done**, open **System Settings → Privacy & Security**, and click **Open Anyway** next to the
-  message about TableCraft. Or clear the quarantine flag once:
-  `xattr -dr com.apple.quarantine /Applications/TableCraft.app`.
+- **macOS**: see [Running the unsigned macOS app](#running-the-unsigned-macos-app) below.
 - **Windows**: SmartScreen says _Windows protected your PC_; click **More info**, then **Run
   anyway**.
 - **Linux**: make the AppImage executable with `chmod +x TableCraft-*.AppImage` and run it.
+
+### Running the unsigned macOS app
+
+The DMGs are ad-hoc signed rather than notarized, because a Developer ID belongs to whoever ships
+the build and not to this repository
+([decision 033](docs/decisions/033-the-packaged-app-is-dist-in-asar-with-plugins-beside-it.md)).
+macOS quarantines anything a browser downloaded, and Gatekeeper refuses to open a quarantined app it
+cannot verify. Depending on the macOS version it says either _“TableCraft” Not Opened. Apple could
+not verify “TableCraft” is free of malware…_ or _“TableCraft” is damaged and can’t be opened_. The
+app is not damaged; only the download attribute is in the way.
+
+1. Open the DMG and drag `TableCraft.app` to `/Applications`.
+2. Clear the attribute the download added:
+
+   ```sh
+   xattr -dr com.apple.quarantine /Applications/TableCraft.app
+   ```
+
+3. Open TableCraft as usual.
+
+Nothing inside the app changes; only that attribute is removed, and only once per download.
+
+If you would rather not use the terminal and macOS showed _Not Opened_, click **Done**, open
+**System Settings → Privacy & Security**, scroll to **Security**, click **Open Anyway** next to the
+message about TableCraft, and confirm with your password. That button appears only for an hour or
+so after the refused launch. The _damaged_ message offers no such button; use `xattr`.
+
+Pick the DMG that matches your Mac: `arm64` for Apple silicon, `x64` for Intel. An app you build
+yourself with `bun run desktop:package` was never downloaded, so it carries no quarantine and opens
+directly.
 
 ### Build from source
 
