@@ -47,9 +47,6 @@ Run from the repository root.
   reloads the demo `shop` database in the `test:db` Postgres and drives one scene per GIF. Needs
   Docker, ffmpeg and a display; `README_MEDIA=explain,grid` re-records only those. Re-record after
   a UI change a GIF shows
-- `node --experimental-strip-types packages/desktop/scripts/render-icon.ts` - re-render
-  `build/icon.png` from `build/icon.svg` (under Node: Playwright hangs connecting to Electron under
-  Bun)
 
 CI (`.github/workflows/ci.yml`) runs `verify` (lint, format, typecheck, test, test:db) and the
 packaged suite on macOS arm64 and x64 (blocking), Windows and Linux (best-effort) on every push.
@@ -85,11 +82,10 @@ packages/core/             @table-craft/core: plugin loader, session manager, re
                            completion catalog over it (`catalog/`). Knows nothing about
                            Electron
 packages/desktop/          @table-craft/desktop, the Electron app
-  build/                   electron-builder resources: the icon (SVG source and rendered
-                           PNG) and the macOS entitlements
+  build/                   electron-builder resources: the icon (`icon.png`, 1024 px, the
+                           source itself) and the macOS entitlements
   scripts/                 packaging: `package.ts` (electron-builder with the version and
-                           signing flags), `version.ts`, `packaged-executable.ts`,
-                           `render-icon.ts`
+                           signing flags), `version.ts`, `packaged-executable.ts`
   electron-builder.yml     the packaged layout and targets (decision 033)
   src/main/paths.ts        where the engine, preload, renderer, plugins and icon live,
                            in a development run and a packaged one

@@ -1274,8 +1274,9 @@ is passed as `extraMetadata.version`; nothing in the tree holds it. A developmen
 Signing: without a Developer ID (`CSC_LINK` or `CSC_NAME`), macOS builds are signed ad hoc with
 the hardened runtime off, so the arm64 app launches; a Developer ID build keeps the hardened runtime
 with `build/entitlements.mac.plist` (JIT and unsigned executable memory). Windows and Linux are
-unsigned. The icon is `build/icon.svg` in the Dark tokens, rendered to `build/icon.png` (1024 px)
-by `node --experimental-strip-types packages/desktop/scripts/render-icon.ts`.
+unsigned. The icon is `build/icon.png`, a woven 3×3 grid of ribbons on an indigo tile: a 1024 px
+raster with a transparent margin around an 824 px tile, the macOS icon grid. It is the source
+itself, generated as an image rather than drawn from vectors, so a new icon replaces the file.
 
 `bun run test:smoke:packaged` builds the unpacked app and runs `test/e2e/packaged.smoke.test.ts`
 against it through `TABLE_CRAFT_APP_EXECUTABLE` (`scripts/packaged-executable.ts` names the
