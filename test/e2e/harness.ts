@@ -58,6 +58,8 @@ export interface SavedDatasource {
   readonly color?: string | null;
   readonly readOnly?: boolean;
   readonly comment?: string;
+  readonly keepAliveSeconds?: number;
+  readonly statementTimeoutSeconds?: number;
   readonly config: Readonly<Record<string, string | number | boolean>>;
   readonly secretModes?: Readonly<Record<string, "forever" | "untilRestart" | "never">>;
 }
