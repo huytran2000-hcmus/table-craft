@@ -14,7 +14,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ServerResponse } from "node:http";
 import type { Locator } from "playwright-core";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, onTestFinished } from "vitest";
 import {
   CLOSE_HOOK_TIMEOUT_MS,
   closeApp,
@@ -36,6 +36,7 @@ import {
   rightGroupNames,
   serve,
   updateButton,
+  updateLines,
   type AssetResponder,
   type LocalServer,
   type Release,
@@ -54,6 +55,8 @@ const LIVE_TIMEOUT_MS = 240_000;
 const DOWNLOAD_TIMEOUT_MS = 120_000;
 const RELAUNCH_TIMEOUT_MS = 60_000;
 const STOP_GRACE_MS = 5_000;
+const KEYCHAIN_WAIT_MS = 20_000;
+const POLL_MS = 250;
 const CHUNK_BYTES = 1024 * 1024;
 const CHUNK_DELAY_MS = 25;
 const CUT_FRACTION = 0.3;
@@ -61,6 +64,24 @@ const STAGING_PREFIX = ".table-craft-update-";
 const BACKUP_SUFFIX = ".update-backup";
 
 const captureWindow = evidenceFor("020");
+
+async function waitFor(condition: () => boolean, timeoutMs: number): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (condition()) return true;
+    await new Promise((resolve) => setTimeout(resolve, POLL_MS));
+  }
+  return condition();
+}
+
+/** Only the test build's own item; the user's real "TableCraft Safe Storage" is never touched. */
+function forgetTestKeychainItem(): void {
+  try {
+    execFileSync("security", ["delete-generic-password", "-s", KEYCHAIN_SERVICE], { stdio: "ignore" });
+  } catch {
+    // Not there: nothing to forget.
+  }
+}
 
 function built(version: string, file: string): string {
   return join(LIVE_DIR, `v${version}`, file);
@@ -414,6 +435,8 @@ describe.runIf(LIVE)("in-app update (packaged test builds, live)", () => {
   it.runIf(process.env["TABLE_CRAFT_UPDATE_LIVE_KEYCHAIN"] === "1")(
     "givenAPasswordInTheKeychain_whenTheAppIsReplaced_thenWhatHappensToIt",
     async () => {
+      forgetTestKeychainItem();
+      onTestFinished(forgetTestKeychainItem);
       const target = installed();
       const userDataDir = newProfile();
       const first = await open({ version: NEW, asset: newZip() }, target.executable, {
@@ -447,29 +470,35 @@ describe.runIf(LIVE)("in-app update (packaged test builds, live)", () => {
       execFileSync("security", ["find-generic-password", "-s", KEYCHAIN_SERVICE]);
 
       await downloadToReady(first.page);
+      await openPopover(first.page);
       const exited = new Promise<void>((resolve) => first.app.process().once("exit", () => resolve()));
       await first.page.getByTestId("update-popover").getByRole("button", { name: "Restart to Update" }).click();
       await exited;
       running = null;
       await expect.poll(() => started(userDataDir, NEW), { timeout: RELAUNCH_TIMEOUT_MS }).toBe(1);
+      // The swap log is drained only after the secret store has asked the keychain, so a
+      // relaunch that never drains it is sitting on macOS's keychain prompt.
+      const pastKeychain = await waitFor(
+        () => updateLines(userDataDir).filter((line) => line.msg === "swap script").length >= 2,
+        KEYCHAIN_WAIT_MS,
+      );
+      const screen = join(process.env["TABLE_CRAFT_EVIDENCE_DIR"] ?? tmpdir(), "09-keychain-after-swap-screen.png");
+      execFileSync("screencapture", ["-x", screen]);
+      console.log(`plan 020 keychain after swap: ${pastKeychain ? "no prompt" : "blocked on the keychain prompt"}`);
       await stopRelaunched(target.executable);
+      expect(existsSync(screen)).toBe(true);
+      if (!pastKeychain) return;
 
       const after = await open({ version: NEW, asset: newZip() }, target.executable, {
         userDataDir,
         systemKeychain: true,
       });
-      const outcome = await Promise.race([
-        after.page.evaluate(
-          (id) => (globalThis as unknown as { tableCraft: TableCraftLike }).tableCraft.connectEngine(id),
-          saved.id,
-        ),
-        new Promise<"blocked">((resolve) => setTimeout(() => resolve("blocked"), RELAUNCH_TIMEOUT_MS / 2)),
-      ]);
-      const screen = join(process.env["TABLE_CRAFT_EVIDENCE_DIR"] ?? tmpdir(), "09-keychain-after-swap-screen.png");
-      execFileSync("screencapture", ["-x", screen]);
-      console.log(`plan 020 keychain after swap: ${JSON.stringify(outcome)}`);
-      if (outcome !== "blocked") await captureWindow(after.page, "09-keychain-after-swap");
-      expect(existsSync(screen)).toBe(true);
+      const outcome = await after.page.evaluate(
+        (id) => (globalThis as unknown as { tableCraft: TableCraftLike }).tableCraft.connectEngine(id),
+        saved.id,
+      );
+      console.log(`plan 020 keychain connect after swap: ${JSON.stringify(outcome)}`);
+      await captureWindow(after.page, "09-keychain-after-swap");
     },
     LIVE_TIMEOUT_MS,
   );

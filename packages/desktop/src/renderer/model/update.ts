@@ -81,8 +81,9 @@ export function updateButton(state: UpdateState): UpdateButtonView | null {
  * The keychain note (plan 020, live test scenario 9): an ad-hoc-signed swap changes the app's code
  * signature, so macOS asks once for the keychain item that holds saved passwords.
  */
+/** Measured in plan 020's live test: every ad-hoc build has a new code hash, so macOS asks again. */
 export const KEYCHAIN_NOTE =
-  "After the restart macOS may ask to let TableCraft use its keychain item; choose Always Allow to keep your saved passwords.";
+  "After the restart macOS asks for your login keychain password before TableCraft opens. Enter it and choose Always Allow to keep your saved passwords; Deny leaves them unreadable until you allow it.";
 
 export function updatePopover(state: UpdateState, mac: boolean): UpdatePopoverView {
   const release = state.phase === "idle" || state.phase === "checking" ? null : state.release;
