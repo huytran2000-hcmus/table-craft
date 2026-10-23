@@ -1,13 +1,15 @@
 import {
   RESULT_WINDOW_ROWS,
   type EngineError,
-  type ExportedResult,
+  type ExportFormat,
+  type ExportTask,
   type ExtractorKind,
   type ResultState,
   type RowRange,
 } from "@table-craft/desktop/engine/protocol.js";
 import { EngineRequestError, type EngineClient } from "@table-craft/desktop/renderer/engine/client.js";
 import { widerChars } from "@table-craft/desktop/renderer/grid/widths.js";
+import type { ExportStarter } from "@table-craft/desktop/renderer/state/exports.js";
 import { withWindow, type ResultTab } from "@table-craft/desktop/renderer/state/resultTab.js";
 import { currentFormats } from "@table-craft/desktop/renderer/state/settings.js";
 
@@ -27,6 +29,9 @@ export interface ResultOwner {
   readonly failed: (ownerId: string, result: ResultTab, error: EngineError, window: boolean) => void;
   /** Fetching grew the result to `rowCount` rows, so Services can say so. */
   readonly fetched: (ownerId: string, resultId: string, rowCount: number) => void;
+  /** The datasource an owner's session is on, for an export of its result. */
+  readonly datasourceOf: (ownerId: string) => string | undefined;
+  readonly exports: ExportStarter;
 }
 
 /** Whether Fetch Next Page and Fetch All can run on the tab. */
@@ -145,33 +150,36 @@ export function createResultWindows(owner: ResultOwner) {
     }
   }
 
-  /** Writes the result to `path`, draining its open cursor; null when it could not. */
+  /**
+   * Starts a background export of the result (decision 040); null when it could not start. Only
+   * an export that drains the console's own cursor keeps the grid busy, until its task ends.
+   */
   async function exportTo(
     ownerId: string,
     resultId: string,
-    extractor: ExtractorKind,
+    format: ExportFormat,
     path: string,
     columns: readonly number[],
-  ): Promise<ExportedResult | null> {
+  ): Promise<ExportTask | null> {
     const result = owner.result(ownerId, resultId);
-    const client = owner.client(ownerId);
-    if (result === undefined || client === undefined || result.stale || result.fetching !== null) return null;
-    owner.update(ownerId, resultId, (latest) => ({ ...latest, fetching: "export" }));
+    const datasourceId = owner.datasourceOf(ownerId);
+    if (result === undefined || datasourceId === undefined || result.stale || result.fetching !== null) return null;
     try {
-      const exported = await client.call("result.export", {
-        handle: result.handle,
-        extractor,
+      const task = await owner.exports.start(datasourceId, {
+        source: { kind: "result", handle: result.handle, columns: [...columns] },
+        format,
         path,
-        columns: [...columns],
       });
-      // The export drained the cursor into the file.
-      owner.update(ownerId, resultId, (latest) => ({ ...latest, cursorOpen: false }));
-      return exported;
+      if (task.origin === "cursor") {
+        owner.update(ownerId, resultId, (latest) => ({ ...latest, fetching: "export" }));
+        void owner.exports.finished(task.taskId).then(() => {
+          owner.update(ownerId, resultId, (latest) => ({ ...latest, fetching: null, cursorOpen: false }));
+        });
+      }
+      return task;
     } catch (cause) {
       owner.failed(ownerId, result, toError(cause), false);
       return null;
-    } finally {
-      owner.update(ownerId, resultId, (latest) => ({ ...latest, fetching: null }));
     }
   }
 

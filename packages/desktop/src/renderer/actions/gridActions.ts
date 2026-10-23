@@ -1,7 +1,7 @@
 import type { ExtractorKind, SortDirection } from "@table-craft/desktop/engine/protocol.js";
 import type { ActionContext } from "@table-craft/desktop/renderer/actions/context.js";
 import { defineAction, type AnyAction } from "@table-craft/desktop/renderer/actions/registry.js";
-import { bridge } from "@table-craft/desktop/renderer/bridge.js";
+import { askExport } from "@table-craft/desktop/renderer/actions/exportActions.js";
 import { allShown, hiddenColumn, visibleColumns } from "@table-craft/desktop/renderer/model/columnLayout.js";
 import { formatCount } from "@table-craft/desktop/renderer/model/format.js";
 import { rowCountOf, selectAll, selectedRanges } from "@table-craft/desktop/renderer/model/gridSelection.js";
@@ -10,7 +10,6 @@ import { canFetch, canRun, useConsoles, type ResultTab } from "@table-craft/desk
 import { canReload, tableRowCount, useTables } from "@table-craft/desktop/renderer/state/tables.js";
 import { reloadTable, settlePendingEdits } from "@table-craft/desktop/renderer/actions/tableCommands.js";
 import { useLayout } from "@table-craft/desktop/renderer/state/layout.js";
-import { useModal } from "@table-craft/desktop/renderer/state/modal.js";
 
 export const GRID_ACTION_IDS = {
   fetchNextPage: "grid.fetchNextPage",
@@ -40,13 +39,8 @@ export const EXTRACTOR_LABELS: Readonly<Record<ExtractorKind, string>> = {
   markdown: "Markdown",
 };
 
-const EXTRACTOR_EXTENSIONS: Readonly<Record<ExtractorKind, string>> = {
-  csv: "csv",
-  tsv: "tsv",
-  json: "json",
-  sqlInsert: "sql",
-  markdown: "md",
-};
+const EXPORT_RESULT_NOTE =
+  "Every row of the result. A read runs again on a connection of its own; anything else exports the rows this result holds and fetches.";
 
 /** A header menu entry names its column by result index. */
 export interface ColumnArgs {
@@ -121,10 +115,6 @@ export function copyBlockedReason(result: ResultTab | null): string | null {
 
 async function writeClipboard(text: string): Promise<void> {
   await navigator.clipboard.writeText(text);
-}
-
-export function defaultExportName(title: string, extractor: ExtractorKind): string {
-  return `${title}.${EXTRACTOR_EXTENSIONS[extractor]}`;
 }
 
 export const GRID_ACTIONS: readonly AnyAction[] = [
@@ -237,15 +227,15 @@ export const GRID_ACTIONS: readonly AnyAction[] = [
     run: async (context) => {
       const target = live(context);
       if (target === null) return;
-      const { extractor } = useLayout.getState().layout;
-      const chosen = await bridge().saveFile("Export Data", defaultExportName(target.result.title, extractor));
-      if (!chosen.ok) {
-        await useModal.getState().ask({ kind: "notice", title: "Could not export", ...chosen.error });
-        return;
-      }
-      if (chosen.value === null) return;
-      const columns = visibleColumns(target.result.layout);
-      await target.host.exportTo(target.ownerId, target.result.id, extractor, chosen.value, columns);
+      const { result } = target;
+      const choice = await askExport({
+        name: result.title,
+        columns: result.columns.map((column) => column.name),
+        chosen: visibleColumns(result.layout),
+        note: EXPORT_RESULT_NOTE,
+      });
+      if (choice === null) return;
+      await target.host.exportTo(target.ownerId, result.id, choice.format, choice.path, choice.columns);
     },
   }),
   defineAction({

@@ -4,6 +4,7 @@ import {
   type Column,
   type EngineError,
   type ExecutedStatement,
+  type ExportFormat,
   type ExtractorKind,
   type RowRange,
   type SortKey,
@@ -26,6 +27,7 @@ import { caretAfterReformat } from "@table-craft/desktop/renderer/model/reformat
 import { statementsToRun, type RunScope, type TextSpan } from "@table-craft/desktop/renderer/model/statementAt.js";
 import { useCatalog } from "@table-craft/desktop/renderer/state/catalog.js";
 import { useDatasources } from "@table-craft/desktop/renderer/state/datasources.js";
+import { NO_EXPORTS, useExports, type ExportStarter } from "@table-craft/desktop/renderer/state/exports.js";
 import {
   NO_EXECUTION_REPORTER,
   useExecutions,
@@ -225,7 +227,7 @@ export interface ConsolesState {
   readonly exportTo: (
     id: string,
     resultId: string,
-    extractor: ExtractorKind,
+    format: ExportFormat,
     path: string,
     columns: readonly number[],
   ) => Promise<boolean>;
@@ -318,6 +320,8 @@ export interface ConsolesDependencies {
   readonly executions?: ExecutionReporter;
   /** Each statement once it ends, for query history (decision 030); must not throw. */
   readonly record?: (entry: HistoryEntry) => void;
+  /** Starts background exports of a result (decision 040). */
+  readonly exports?: ExportStarter;
 }
 
 function newConsole(datasourceId: string, name: string, sql: string, connect: boolean): ConsoleSession {
@@ -373,6 +377,7 @@ export function createConsolesStore(dependencies: ConsolesDependencies) {
   const askParameters =
     dependencies.askParameters ?? ((request: ParametersRequest) => Promise.resolve(request.initial));
   const executions = dependencies.executions ?? NO_EXECUTION_REPORTER;
+  const exports = dependencies.exports ?? NO_EXPORTS;
   /** The execution each result tab came from, by result id, so fetching more updates its row count. */
   const producedBy = new Map<string, number>();
   /** When each console's current run started; a confirmation restarts it once answered. */
@@ -394,6 +399,8 @@ export function createConsolesStore(dependencies: ConsolesDependencies) {
         const executionId = producedBy.get(resultId);
         if (executionId !== undefined) executions.recount(id, executionId, rowCount);
       },
+      datasourceOf: (id) => get().consoles[id]?.datasourceId,
+      exports,
     });
     const { invalidate: invalidateWindows, forget } = windows;
 
@@ -1143,13 +1150,23 @@ export function createConsolesStore(dependencies: ConsolesDependencies) {
 
       extract: windows.extract,
 
-      async exportTo(id, resultId, extractor, path, columns) {
-        const exported = await windows.exportTo(id, resultId, extractor, path, columns);
+      async exportTo(id, resultId, format, path, columns) {
+        const task = await windows.exportTo(id, resultId, format, path, columns);
         const result = resultOf(id, resultId);
-        if (exported !== null && result !== undefined) {
-          log(id, { sql: firstLine(result.sql), message: exportedText(exported), tone: "success" });
-        }
-        return exported !== null;
+        if (task === null || result === undefined) return false;
+        const sql = firstLine(result.sql);
+        void exports.finished(task.taskId).then((ended) => {
+          if (ended.state === "done") log(id, { sql, message: exportedText(ended), tone: "success" });
+          else if (ended.error !== null) {
+            log(id, {
+              sql,
+              message: ended.error.message,
+              hint: ended.error.hint,
+              tone: ended.state === "cancelled" ? "warning" : "error",
+            });
+          }
+        });
+        return true;
       },
 
       showResult(id, resultId) {
@@ -1233,6 +1250,7 @@ async function askAnalyse(request: AnalyseRequest): Promise<boolean> {
 
 export const useConsoles = createConsolesStore({
   connect: (datasourceId) => useDatasources.getState().connect(datasourceId),
+  exports: useExports.getState(),
   now: () => performance.now(),
   confirmDestructive: askDestructive,
   confirmAnalyse: askAnalyse,

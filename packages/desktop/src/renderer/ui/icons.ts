@@ -113,6 +113,7 @@ export {
   CheckCircle as SuccessIcon,
   XCircle as ErrorIcon,
   Prohibit as CancelledIcon,
+  Export as ExportIcon,
 };
 
 /** The header's type glyph per column class (plan 007 decision 7); temporal reads as a date. */

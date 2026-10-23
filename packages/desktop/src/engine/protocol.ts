@@ -264,13 +264,72 @@ export interface RowRange {
   readonly to: number;
 }
 
-/** What `result.export` wrote. */
-export interface ExportedResult {
+/** Mirrors `EXPORT_FORMATS` in core: every extractor, plus XLSX, which only Export writes. */
+export const EXPORT_FORMATS = [...EXTRACTOR_KINDS, "xlsx"] as const;
+export type ExportFormat = (typeof EXPORT_FORMATS)[number];
+
+/** Mirrors `EXPORT_FAILURE_REASONS` in core. */
+export const EXPORT_FAILURE_REASONS = ["stalled", "diskFull", "cancelled", "source", "file"] as const;
+export type ExportFailureReason = (typeof EXPORT_FAILURE_REASONS)[number];
+
+/**
+ * What an export reads (decision 040): a console or table-editor result by handle, with the
+ * result's column indices, or a whole table by path and name, with column names.
+ */
+export type ExportSource =
+  | { readonly kind: "result"; readonly handle: string; readonly columns: readonly number[] }
+  | {
+      readonly kind: "table";
+      readonly path: readonly string[];
+      readonly relation: string;
+      readonly columns: readonly string[];
+    };
+
+/**
+ * Where the rows come from: `rerun` runs the result's statement again on a session of the
+ * export's own, `table` selects a whole table there, `memory` writes the rows the grid holds,
+ * `cursor` drains the console's still-open cursor.
+ */
+export type ExportOrigin = "rerun" | "table" | "memory" | "cursor";
+export type ExportTaskState = "running" | "done" | "failed" | "cancelled";
+
+/** One background export, as every event carries it whole. */
+export interface ExportTask {
+  readonly taskId: string;
   readonly path: string;
+  readonly format: ExportFormat;
+  readonly origin: ExportOrigin;
+  readonly state: ExportTaskState;
   readonly rows: number;
   readonly bytes: number;
   readonly elapsedMs: number;
+  /** Rows expected, when known: only a memory export knows. */
+  readonly estimate: number | null;
+  /** XLSX sheets written; 0 for text formats. */
+  readonly sheets: number;
+  readonly truncatedCells: number;
+  /** Binary values written from the grid's preview, not in full. */
+  readonly clippedBytes: number;
+  /** Shown beside the task, never blocking: low free disk space. */
+  readonly warning: string | null;
+  readonly error: (EngineError & { readonly reason: ExportFailureReason }) | null;
+  /** Only re-run and table exports can run again; a memory or cursor export's rows are gone. */
+  readonly retryable: boolean;
+  /** The result handle a cursor export drains, so its grid can show the drain end; null otherwise. */
+  readonly drains: string | null;
 }
+
+export const EXPORT_EVENT_TYPES = ["export.progress", "export.done", "export.failed", "export.cancelled"] as const;
+export type ExportEventType = (typeof EXPORT_EVENT_TYPES)[number];
+
+/** Pushed by the engine to every connection, unasked: `id` is always null. */
+export interface ExportEvent {
+  readonly id: null;
+  readonly type: ExportEventType;
+  readonly task: ExportTask;
+}
+
+export type EngineEvent = ExportEvent;
 
 /** Mirrors `ResultSummary` in core, with the first window and the session's transaction attached. */
 export interface ExecutedStatement extends ResultState {
@@ -514,16 +573,26 @@ export interface EngineCalls {
     };
     result: string;
   };
-  /** Writes every held row, then drains the open cursor uncapped, to `path` (decision 025). */
-  "result.export": {
+  /**
+   * Starts a background export to `path` and answers at once with the task; progress and the end
+   * arrive as `ExportEvent`s (decision 040). The stall timeout is the `data.exportStallSeconds`
+   * setting, which the engine cannot read itself.
+   */
+  "export.start": {
     params: {
-      readonly handle: string;
-      readonly extractor: ExtractorKind;
+      readonly source: ExportSource;
+      readonly format: ExportFormat;
       readonly path: string;
-      readonly columns: readonly number[];
+      readonly stallSeconds: number;
     };
-    result: ExportedResult;
+    result: ExportTask;
   };
+  /** Stops a running export; its `.part` file is removed. A finished task is left as it is. */
+  "export.cancel": { params: { readonly taskId: string }; result: null };
+  /** Runs a failed or cancelled re-run or table export again, from the first row, as a new task. */
+  "export.retry": { params: { readonly taskId: string; readonly stallSeconds: number }; result: ExportTask };
+  /** Every task this engine ran, for a renderer that reloaded. */
+  "export.list": { params: Record<never, never>; result: readonly ExportTask[] };
   /**
    * The datasource's namespaces, from the engine's cache unless `refresh`; the first call opens the
    * engine's introspection session (decision 022). Needs `schemaTree`.
@@ -636,6 +705,7 @@ export type EngineErrorCode =
   | "invalidRequest"
   | "editRejected"
   | "timedOut"
+  | "exportFailed"
   | "internal";
 
 export interface EngineError {

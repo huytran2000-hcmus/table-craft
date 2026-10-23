@@ -7,6 +7,7 @@ import { formatChord } from "@table-craft/desktop/renderer/actions/chords.js";
 import { BUILT_IN_THEME_IDS, DENSITIES } from "@table-craft/desktop/appearance/themes.js";
 import {
   DEFAULT_SETTINGS,
+  EXPORT_STALL_SECONDS_RANGE,
   FETCH_ALL_CAP_RANGE,
   FONT_SIZE_RANGE,
   INDENT_WIDTH_RANGE,
@@ -31,6 +32,7 @@ const RANGES: Readonly<Record<string, NumberRange>> = {
   "data.nullText": NULL_TEXT_LENGTH,
   "data.pageRows": PAGE_ROWS_RANGE,
   "data.fetchAllCap": FETCH_ALL_CAP_RANGE,
+  "data.exportStallSeconds": EXPORT_STALL_SECONDS_RANGE,
 };
 
 /** GitHub's heading anchor: lower case, punctuation dropped, each space a hyphen. */

@@ -90,6 +90,11 @@ export interface Session {
   close(): Promise<void>;
   /** What the server reports about itself, such as `17.4`; null when it reports nothing. */
   readonly serverVersion: string | null;
+  /**
+   * True when another session on the same configuration sees a different database, as with
+   * SQLite's `:memory:`; the engine then never re-runs this session's statements elsewhere.
+   */
+  readonly privateDatabase?: boolean;
 }
 
 export interface ConnectOptions {

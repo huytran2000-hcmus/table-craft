@@ -1,4 +1,3 @@
-import { open as openFile, rename, rm } from "node:fs/promises";
 import { isAbsolute } from "node:path";
 import {
   CatalogCache,
@@ -18,7 +17,7 @@ import {
   tableCount,
   tableSelect,
   type EditTable,
-  type ExtractorKind,
+  type ExportEncoderOptions,
   type PluginLoadResult,
   type ResultState,
   type RowEdit,
@@ -51,7 +50,10 @@ import type {
   ExecutedStatement,
   Explainability,
   ExplainedStatement,
-  ExportedResult,
+  EngineEvent,
+  ExportFormat,
+  ExportSource,
+  ExportTask,
   FormatOptions,
   GeneratorStatement,
   ParameterValue,
@@ -70,6 +72,7 @@ import {
   type LoggedRequest,
   type RequestContext,
 } from "@table-craft/desktop/engine/requestLog.js";
+import { exportTasks, type ExportJob, type ExportRows } from "@table-craft/desktop/engine/exports.js";
 import { engineRequestSchema, readRequestId } from "@table-craft/desktop/engine/requests.js";
 import type { Logger, LogFields } from "@table-craft/desktop/log/record.js";
 
@@ -90,8 +93,11 @@ export interface EngineConnection {
 }
 
 export interface Engine {
-  connect(): EngineConnection;
-  /** Closes what the engine holds for every connection: the introspection session. */
+  /** `emit` receives every export event, whichever connection started the task (decision 040). */
+  connect(emit?: (event: EngineEvent) => void): EngineConnection;
+  /** Resolves once no export runs, so a reloading window does not cut one short. */
+  exportsSettled(): Promise<void>;
+  /** Closes what the engine holds for every connection: export tasks and the introspection session. */
   close(): Promise<void>;
 }
 
@@ -221,33 +227,19 @@ export async function probeDatasource(options: EngineOptions, now: () => number 
 }
 
 const TRANSACTION_HINT = "Check the connection, then try again; the transaction may already have ended.";
-const EXPORT_HINT = "Check that the folder exists and is writable, then export again.";
-const TEMP_SUFFIX = ".tmp";
-/** Characters gathered before a write, so an export of a million rows is not a million writes. */
-const EXPORT_CHUNK_CHARS = 1 << 16;
 
-/** Writes `chunks` to `path` through a temporary file renamed into place, removed on failure. */
-async function writeAtomically(path: string, chunks: AsyncIterable<string>): Promise<number> {
-  const temporary = `${path}${TEMP_SUFFIX}`;
-  const file = await openFile(temporary, "w");
-  let bytes = 0;
-  try {
-    let pending = "";
-    for await (const chunk of chunks) {
-      pending += chunk;
-      if (pending.length < EXPORT_CHUNK_CHARS) continue;
-      bytes += (await file.write(pending)).bytesWritten;
-      pending = "";
-    }
-    if (pending !== "") bytes += (await file.write(pending)).bytesWritten;
-    await file.close();
-    await rename(temporary, path);
-    return bytes;
-  } catch (cause) {
-    await file.close().catch(() => undefined);
-    await rm(temporary, { force: true });
-    throw cause;
-  }
+/** TCP keepalive on an export's own connection, so a dead peer is noticed by the OS too (decision 040). */
+const EXPORT_KEEPALIVE_MS = 10_000;
+const MS_PER_SECOND = 1_000;
+
+async function* heldThenRest(held: readonly Row[], rest: AsyncIterable<Row>): AsyncGenerator<Row> {
+  yield* held;
+  yield* rest;
+}
+
+async function* heldRows(held: readonly Row[]): AsyncGenerator<Row> {
+  await Promise.resolve();
+  yield* held;
 }
 
 function rowsIn(rows: readonly Row[], ranges: readonly RowRange[]): Row[] {
@@ -478,6 +470,83 @@ export function createEngine(options: EngineOptions, now: () => number = Date.no
     return language.resolve(request, await completionCatalogOf());
   }
 
+  const tasks = exportTasks();
+
+  /** An export's rows from `sql` on a read-only session of its own, every byte of binary values in full. */
+  async function exportRowsOf(sql: string): Promise<ExportRows> {
+    const { pluginId, config } = options.datasource;
+    const session = await openSession(options.plugins, pluginId, config, {
+      readOnly: true,
+      keepAliveInitialDelayMs: EXPORT_KEEPALIVE_MS,
+    }).catch((cause: unknown) => {
+      throw connectionFailed(cause);
+    });
+    try {
+      const result = await session.execute(sql, [], { fullBytes: true });
+      return { rows: result.rows, close: () => session.close() };
+    } catch (cause) {
+      await session.close().catch(() => undefined);
+      throw statementFailed(cause, true);
+    }
+  }
+
+  async function tableJob(
+    source: Extract<ExportSource, { kind: "table" }>,
+    format: ExportFormat,
+    path: string,
+  ): Promise<ExportJob> {
+    const language = sqlLanguage();
+    const { relation, qualified } = await relationOf(source.path, source.relation);
+    const columns = source.columns.map((name): Column => {
+      const meta = relation.columns.find((column) => column.name === name);
+      if (meta === undefined) {
+        throw new EngineFailure({
+          code: "invalidRequest",
+          message: `There is no column ${name} in ${source.relation}.`,
+          hint: SYNCHRONIZE_HINT,
+        });
+      }
+      return { name: meta.name, type: meta.type };
+    });
+    const list = columns.map((column) => language.quoteIdentifier(column.name)).join(", ");
+    const sql = `SELECT ${list} FROM ${qualified}`;
+    const encoder: ExportEncoderOptions = { dialect: language, table: qualified };
+    return {
+      path,
+      format,
+      origin: "table",
+      columns,
+      projection: null,
+      estimate: null,
+      encoder,
+      retryable: true,
+      drains: null,
+      open: () => exportRowsOf(sql),
+    };
+  }
+
+  function taskOf(taskId: string): ExportTask {
+    const task = tasks.get(taskId);
+    if (task === undefined) {
+      throw new EngineFailure({
+        code: "invalidRequest",
+        message: `No export task "${taskId}".`,
+        hint: "Export again.",
+      });
+    }
+    return task;
+  }
+
+  function absolutePath(path: string): void {
+    if (!isAbsolute(path)) {
+      throw new EngineFailure({
+        code: "invalidRequest",
+        message: `Export needs an absolute path, not "${path}".`,
+        hint: BUG_HINT,
+      });
+    }
+  }
+
   /** Count Rows on a session of its own: the editor's session would close its open cursor. */
   async function countRows(path: readonly string[], name: string, where: string): Promise<number> {
     const { qualified } = await relationOf(path, name);
@@ -494,7 +563,7 @@ export function createEngine(options: EngineOptions, now: () => number = Date.no
     }
   }
 
-  function connect(): EngineConnection {
+  function connect(emit: (event: EngineEvent) => void = () => undefined): EngineConnection {
     const sessions = new Map<string, OpenSession>();
     /** Each live result handle, mapped to the session that produced it. */
     const handles = new Map<string, string>();
@@ -502,10 +571,14 @@ export function createEngine(options: EngineOptions, now: () => number = Date.no
     const cursors = new Map<string, string>();
     /** The handles `table.query` produced, with what editing them needs. */
     const tables = new Map<string, TableResult>();
+    /** The statement behind each handle, so an export can run it again on a session of its own. */
+    const statements = new Map<string, string>();
+    const unsubscribe = tasks.subscribe(emit);
 
     function forget(handle: string): void {
       handles.delete(handle);
       tables.delete(handle);
+      statements.delete(handle);
     }
 
     async function releaseHandlesOf(sessionId: string): Promise<void> {
@@ -544,44 +617,91 @@ export function createEngine(options: EngineOptions, now: () => number = Date.no
       });
     }
 
-    async function exportResult(
-      handle: string,
-      extractor: ExtractorKind,
+    /**
+     * Where a result's export reads from (decision 040): its statement again on a session of the
+     * export's own when it is a read that sees what any session sees; else the rows held when
+     * the cursor is done; else the console's own cursor, drained.
+     */
+    function resultJob(
+      source: { handle: string; columns: readonly number[] },
+      format: ExportFormat,
       path: string,
-      columns: readonly number[],
-    ): Promise<ExportedResult> {
-      if (!isAbsolute(path)) {
-        throw new EngineFailure({
-          code: "invalidRequest",
-          message: `Export needs an absolute path, not "${path}".`,
-          hint: BUG_HINT,
-        });
+    ): ExportJob {
+      const handle = ownedHandle(source.handle);
+      const language = sqlLanguage();
+      const columns = chosenColumns(handle, source.columns);
+      const owner = sessions.get(handles.get(handle) ?? "");
+      const sql = statements.get(handle);
+      const state = results.state(handle);
+      const table = tables.get(handle)?.table;
+      const base = {
+        path,
+        format,
+        columns,
+        projection: source.columns,
+        encoder: table === undefined ? { dialect: language } : { dialect: language, table },
+      };
+      const rerun =
+        sql !== undefined &&
+        owner !== undefined &&
+        language.classify(sql).kind === "read" &&
+        owner.session.transactions?.open !== true &&
+        owner.session.privateDatabase !== true;
+      if (rerun) {
+        return {
+          ...base,
+          origin: "rerun",
+          estimate: state.cursorOpen ? null : state.rowCount,
+          retryable: true,
+          drains: null,
+          open: () => exportRowsOf(sql),
+        };
       }
-      const started = now();
-      const writer = rowWriter(extractor, chosenColumns(handle, columns), { dialect: sqlLanguage() });
-      let count = 0;
       const held = results.rows(handle);
-      const bytes = await results
-        .drain(handle, (rest) =>
-          writeAtomically(
-            path,
-            (async function* chunks(): AsyncGenerator<string, void, undefined> {
-              yield writer.start();
-              for (const row of held) yield writer.row(project(row, columns), count++);
-              for await (const row of rest) yield writer.row(project(row, columns), count++);
-              yield writer.end(count);
-            })(),
-          ),
-        )
-        .catch((cause: unknown) => {
-          if (isPluginError(cause)) throw statementFailed(cause, options.datasource.readOnly);
-          throw new EngineFailure(
-            { code: "statementFailed", message: `Export failed: ${messageOf(cause)}`, hint: EXPORT_HINT },
-            cause,
-          );
+      if (!state.cursorOpen) {
+        return {
+          ...base,
+          origin: "memory",
+          estimate: held.length,
+          retryable: false,
+          drains: null,
+          open: () => Promise.resolve({ rows: heldRows(held), close: () => Promise.resolve() }),
+        };
+      }
+      const sessionId = handles.get(handle);
+      if (sessionId !== undefined && cursors.get(sessionId) === handle) cursors.delete(sessionId);
+      return {
+        ...base,
+        origin: "cursor",
+        estimate: null,
+        retryable: false,
+        drains: handle,
+        open: () => drainCursor(handle, held),
+      };
+    }
+
+    /** The console's cursor, handed to the export until it closes its rows. */
+    function drainCursor(handle: string, held: readonly Row[]): Promise<ExportRows> {
+      return new Promise((resolve, reject) => {
+        let finish = (): void => undefined;
+        const finished = new Promise<void>((settle) => {
+          finish = settle;
         });
-      track(handle, results.state(handle));
-      return { path, rows: count, bytes, elapsedMs: now() - started };
+        const draining = results.drain(handle, (rest) => {
+          resolve({
+            rows: heldThenRest(held, rest),
+            close: () => {
+              finish();
+              return draining.then(
+                () => undefined,
+                () => undefined,
+              );
+            },
+          });
+          return finished;
+        });
+        draining.catch(reject);
+      });
     }
 
     function sessionFor(sessionId: string): OpenSession {
@@ -636,6 +756,7 @@ export function createEngine(options: EngineOptions, now: () => number = Date.no
           sessionFor(sessionId);
         }
         handles.set(summary.handle, sessionId);
+        statements.set(summary.handle, sql);
         if (summary.cursorOpen) cursors.set(sessionId, summary.handle);
         return {
           ...summary,
@@ -859,8 +980,28 @@ export function createEngine(options: EngineOptions, now: () => number = Date.no
         const body = picked.map((row, index) => writer.row(project(row, columns), index)).join("");
         return Promise.resolve(writer.start() + body + writer.end(picked.length));
       },
-      "result.export": ({ handle, extractor, path, columns }) =>
-        exportResult(ownedHandle(handle), extractor, path, columns),
+      "export.start": async ({ source, format, path, stallSeconds }) => {
+        absolutePath(path);
+        const stallMs = stallSeconds * MS_PER_SECOND;
+        if (source.kind === "table") return tasks.start(await tableJob(source, format, path), stallMs);
+        return tasks.start(resultJob(source, format, path), stallMs);
+      },
+      "export.cancel": ({ taskId }) => {
+        taskOf(taskId);
+        tasks.cancel(taskId);
+        return Promise.resolve(null);
+      },
+      "export.retry": ({ taskId, stallSeconds }) => {
+        if (!taskOf(taskId).retryable) {
+          throw new EngineFailure({
+            code: "invalidRequest",
+            message: "This export wrote rows the grid held, and they cannot be read again.",
+            hint: "Run the statement again, then export its result.",
+          });
+        }
+        return Promise.resolve(tasks.retry(taskId, stallSeconds * MS_PER_SECOND));
+      },
+      "export.list": () => Promise.resolve(tasks.list()),
       "catalog.namespaces": ({ refresh }) => introspect(({ cache }) => cache.namespaces(refresh)),
       "catalog.describe": ({ path, refresh }) => introspect(({ cache }) => cache.describe(path, refresh)),
       "catalog.qualifiedName": ({ path, name }) =>
@@ -912,8 +1053,10 @@ export function createEngine(options: EngineOptions, now: () => number = Date.no
         }
       },
       async close() {
+        unsubscribe();
         const held = [...handles.keys()];
         handles.clear();
+        statements.clear();
         tables.clear();
         cursors.clear();
         await Promise.all(held.map((handle) => results.release(handle)));
@@ -925,11 +1068,12 @@ export function createEngine(options: EngineOptions, now: () => number = Date.no
   }
 
   async function close(): Promise<void> {
+    await tasks.close();
     const open = introspection;
     introspection = null;
     if (open === null) return;
     await open.then((entry) => entry.session.close()).catch(() => undefined);
   }
 
-  return { connect, close };
+  return { connect, exportsSettled: () => tasks.settled(), close };
 }

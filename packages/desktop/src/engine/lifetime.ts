@@ -6,6 +6,7 @@
 export interface Lifetime {
   attached(): void;
   detached(): void;
+  readonly idle: boolean;
 }
 
 export function createLifetime(onIdle: () => void): Lifetime {
@@ -18,6 +19,9 @@ export function createLifetime(onIdle: () => void): Lifetime {
       if (open === 0) return;
       open -= 1;
       if (open === 0) onIdle();
+    },
+    get idle() {
+      return open === 0;
     },
   };
 }

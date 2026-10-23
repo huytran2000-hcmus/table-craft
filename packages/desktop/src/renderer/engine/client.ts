@@ -1,10 +1,12 @@
-import type {
-  EngineCalls,
-  EngineError,
-  EngineErrorCode,
-  EngineMethod,
-  EngineResponse,
-  ResultOf,
+import {
+  EXPORT_EVENT_TYPES,
+  type EngineCalls,
+  type EngineError,
+  type EngineErrorCode,
+  type EngineEvent,
+  type EngineMethod,
+  type EngineResponse,
+  type ResultOf,
 } from "@table-craft/desktop/engine/protocol.js";
 import { ENGINE_PORT_WINDOW_MESSAGE, type EnginePortWindowMessage } from "@table-craft/desktop/preload/bridge.js";
 import { bridge } from "@table-craft/desktop/renderer/bridge.js";
@@ -33,6 +35,16 @@ export interface EngineClient {
   call<M extends EngineMethod>(type: M, params: EngineCalls[M]["params"]): Promise<ResultOf<M>>;
   /** Rejects every pending and later call with `error` and closes the port: its engine is gone. */
   fail(error: EngineError): void;
+  /** Events the engine pushes unasked, such as export progress (decision 040). */
+  onEvent(listener: EngineEventListener): () => void;
+}
+
+export type EngineEventListener = (event: EngineEvent) => void;
+
+const EVENT_TYPES: ReadonlySet<string> = new Set(EXPORT_EVENT_TYPES);
+
+function isEvent(message: EngineResponse | EngineEvent): message is EngineEvent {
+  return message.id === null && EVENT_TYPES.has(message.type);
 }
 
 interface Pending {
@@ -43,9 +55,14 @@ interface Pending {
 export function clientFor(port: MessagePort): EngineClient {
   const pending = new Map<number, Pending>();
   let failure: EngineError | null = null;
+  const listeners = new Set<EngineEventListener>();
 
-  port.addEventListener("message", (event: MessageEvent<EngineResponse>) => {
+  port.addEventListener("message", (event: MessageEvent<EngineResponse | EngineEvent>) => {
     const response = event.data;
+    if (isEvent(response)) {
+      for (const listener of listeners) listener(response);
+      return;
+    }
     if (response.id === null) {
       rendererLog("engine").error("engine rejected an unreadable request", {
         error: response.type === "engine.error" ? response.error.message : null,
@@ -74,7 +91,12 @@ export function clientFor(port: MessagePort): EngineClient {
       failure = error;
       for (const waiting of pending.values()) waiting.reject(new EngineRequestError(error));
       pending.clear();
+      listeners.clear();
       port.close();
+    },
+    onEvent(listener) {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
     },
   };
 }

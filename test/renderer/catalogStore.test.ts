@@ -51,6 +51,7 @@ function catalogClient(describe: () => Promise<DescribedCatalog> = () => Promise
       return Promise.resolve(null);
     },
     fail: () => undefined,
+    onEvent: () => () => undefined,
   };
   return { client: client as EngineClient, calls };
 }

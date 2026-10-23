@@ -1,6 +1,8 @@
 import * as ContextMenu from "@radix-ui/react-context-menu";
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
-import { HISTORY_ACTION_IDS, type ServiceArgs } from "@table-craft/desktop/renderer/actions/historyActions.js";
+import { EXPORT_ACTION_IDS } from "@table-craft/desktop/renderer/actions/exportActions.js";
+import { HISTORY_ACTION_IDS } from "@table-craft/desktop/renderer/actions/historyActions.js";
+import type { ExportTaskState } from "@table-craft/desktop/engine/protocol.js";
 import { invoke, registry } from "@table-craft/desktop/renderer/actions/index.js";
 import {
   clockTime,
@@ -11,6 +13,13 @@ import {
   type ServiceState,
 } from "@table-craft/desktop/renderer/model/format.js";
 import {
+  EXPORT_STATE_TEXT,
+  exportNotes,
+  exportPercent,
+  exportProgressText,
+  fileNameOf,
+} from "@table-craft/desktop/renderer/model/exportText.js";
+import {
   expandable,
   movedInTree,
   serviceRows,
@@ -19,7 +28,12 @@ import {
 } from "@table-craft/desktop/renderer/model/servicesTree.js";
 import { useConsoles } from "@table-craft/desktop/renderer/state/consoles.js";
 import { connectionOf, useDatasources } from "@table-craft/desktop/renderer/state/datasources.js";
-import { useExecutions, type Execution } from "@table-craft/desktop/renderer/state/executions.js";
+import {
+  useExecutions,
+  type Execution,
+  type ExecutionOutcome,
+} from "@table-craft/desktop/renderer/state/executions.js";
+import { useExports, type ExportEntry } from "@table-craft/desktop/renderer/state/exports.js";
 import { useTables } from "@table-craft/desktop/renderer/state/tables.js";
 import { useTabs } from "@table-craft/desktop/renderer/state/tabs.js";
 import { cn } from "@table-craft/desktop/renderer/ui/cn.js";
@@ -28,6 +42,7 @@ import {
   ConsoleIcon,
   DatabaseIcon,
   ExpandedIcon,
+  ExportIcon,
   SpinnerIcon,
   TableIcon,
 } from "@table-craft/desktop/renderer/ui/icons.js";
@@ -64,7 +79,23 @@ function useNow(ticking: boolean): number {
 
 interface MenuEntry {
   readonly actionId: string;
-  readonly args: ServiceArgs;
+  readonly args: unknown;
+}
+
+/** An export's state as the outcome glyph Services draws for an execution. */
+const EXPORT_OUTCOME: Readonly<Record<ExportTaskState, ExecutionOutcome>> = {
+  running: "running",
+  done: "success",
+  failed: "error",
+  cancelled: "cancelled",
+};
+
+/** What an export line offers, in its context menu and as its buttons. */
+function exportActionsOf(entry: ExportEntry): readonly string[] {
+  const { task } = entry;
+  if (task.state === "running") return [EXPORT_ACTION_IDS.cancel];
+  const finished = task.state === "done" ? [EXPORT_ACTION_IDS.reveal] : task.retryable ? [EXPORT_ACTION_IDS.retry] : [];
+  return [...finished, EXPORT_ACTION_IDS.dismiss];
 }
 
 function menuOf(row: ServiceRow, cancellable: boolean): readonly MenuEntry[] {
@@ -74,6 +105,10 @@ function menuOf(row: ServiceRow, cancellable: boolean): readonly MenuEntry[] {
       ...(cancellable ? [{ actionId: HISTORY_ACTION_IDS.cancel, args }] : []),
       { actionId: HISTORY_ACTION_IDS.clearExecutions, args },
     ];
+  }
+  if (row.kind === "export") {
+    const args = { taskId: row.node.task.taskId };
+    return exportActionsOf(row.node).map((actionId) => ({ actionId, args }));
   }
   if (row.kind === "execution" && row.node.sql !== null) {
     const args = { tabId: row.tabId, executionId: row.node.id };
@@ -154,8 +189,75 @@ function ExecutionLine({ execution, now }: { readonly execution: Execution; read
   );
 }
 
+function ExportsLine({ count }: { readonly count: number }) {
+  return (
+    <>
+      <ExportIcon aria-hidden className="size-icon shrink-0 text-accent" />
+      <span className="truncate">Exports</span>
+      <span className="text-ink-muted tabular-nums">{count}</span>
+    </>
+  );
+}
+
+const EXPORT_BUTTON_LABEL: Readonly<Record<string, string>> = {
+  [EXPORT_ACTION_IDS.cancel]: "Cancel",
+  [EXPORT_ACTION_IDS.retry]: "Retry",
+  [EXPORT_ACTION_IDS.reveal]: "Reveal",
+};
+
+/**
+ * One background export: its file, state and progress; a failure's message and hint in the
+ * tooltip and under the line's detail. Cancel, Retry and Reveal are buttons as well as menu items.
+ */
+function ExportLine({ entry }: { readonly entry: ExportEntry }) {
+  const { task } = entry;
+  const percent = exportPercent(task);
+  const detail =
+    task.error === null ? [task.path, ...exportNotes(task)].join("\n") : `${task.error.message}\n${task.error.hint}`;
+  return (
+    <>
+      <OutcomeGlyph outcome={EXPORT_OUTCOME[task.state]} />
+      <span className="min-w-0 truncate" title={detail}>
+        {fileNameOf(task.path)}
+      </span>
+      <span className={cn("shrink-0", task.state === "failed" ? "text-danger" : "text-ink-muted")}>
+        {task.state === "running" && percent !== null
+          ? `${EXPORT_STATE_TEXT.running} ${String(percent)}%`
+          : EXPORT_STATE_TEXT[task.state]}
+      </span>
+      <span className="ml-auto flex shrink-0 items-center gap-cell text-ink-muted tabular-nums">
+        <span data-testid="export-progress">{exportProgressText(task)}</span>
+        {exportActionsOf(entry).flatMap((actionId) => {
+          const label = EXPORT_BUTTON_LABEL[actionId];
+          if (label === undefined) return [];
+          return [
+            <button
+              key={actionId}
+              type="button"
+              tabIndex={-1}
+              data-action={actionId}
+              className="rounded px-1 text-accent hover:bg-raised"
+              onClick={(event) => {
+                event.stopPropagation();
+                invoke(actionId, { taskId: task.taskId });
+              }}
+            >
+              {label}
+            </button>,
+          ];
+        })}
+      </span>
+    </>
+  );
+}
+
 function rowLabel(row: ServiceRow): string {
   if (row.kind === "datasource") return row.node.name;
+  if (row.kind === "exports") return `Exports, ${String(row.count)}`;
+  if (row.kind === "export") {
+    const { task } = row.node;
+    return `${fileNameOf(task.path)}, ${EXPORT_STATE_TEXT[task.state]}, ${exportProgressText(task)}`;
+  }
   if (row.kind === "session") return `${row.node.title}, ${SERVICE_STATE_TEXT[row.node.state]}`;
   return `${row.node.label}, ${row.node.outcome}`;
 }
@@ -163,6 +265,7 @@ function rowLabel(row: ServiceRow): string {
 /**
  * The Services tree (plan 011 decision 12): each datasource with an open console or table tab, its
  * sessions, and what each sent, newest first. Enter or a click on a session or execution shows its tab.
+ * Background exports follow under one Exports node (decision 040).
  */
 export function ServicesPane() {
   const tabs = useTabs((state) => state.tabs);
@@ -172,6 +275,7 @@ export function ServicesPane() {
   const tables = useTables((state) => state.tables);
   const executions = useExecutions((state) => state.byTab);
   const datasources = useDatasources((state) => state.datasources);
+  const exports = useExports((state) => state.entries);
   const [selected, setSelected] = useState<string | null>(null);
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(NO_COLLAPSED);
   const elements = useRef(new Map<string, HTMLLIElement>());
@@ -180,7 +284,7 @@ export function ServicesPane() {
     () => servicesTree({ tabs, consoles, tables, executions, datasources }),
     [tabs, consoles, tables, executions, datasources],
   );
-  const rows = useMemo(() => serviceRows(tree, collapsed), [tree, collapsed]);
+  const rows = useMemo(() => serviceRows(tree, collapsed, exports), [tree, collapsed, exports]);
   const running = rows.some((row) => row.kind === "execution" && row.node.outcome === "running");
   const now = useNow(running);
   const selectedIndex = rows.findIndex((row) => row.key === selected);
@@ -250,7 +354,13 @@ export function ServicesPane() {
             tabIndex={isSelected ? 0 : -1}
             data-kind={row.kind}
             data-state={
-              row.kind === "session" ? row.node.state : row.kind === "execution" ? row.node.outcome : undefined
+              row.kind === "session"
+                ? row.node.state
+                : row.kind === "execution"
+                  ? row.node.outcome
+                  : row.kind === "export"
+                    ? row.node.task.state
+                    : undefined
             }
             style={{ paddingLeft: `calc(var(--spacing-gap) + ${String(row.depth * INDENT_PX)}px)` }}
             className={cn(
@@ -282,6 +392,10 @@ export function ServicesPane() {
               <DatasourceLine row={row} />
             ) : row.kind === "session" ? (
               <SessionLine row={row} />
+            ) : row.kind === "exports" ? (
+              <ExportsLine count={row.count} />
+            ) : row.kind === "export" ? (
+              <ExportLine entry={row.node} />
             ) : (
               <ExecutionLine execution={row.node} now={now} />
             )}

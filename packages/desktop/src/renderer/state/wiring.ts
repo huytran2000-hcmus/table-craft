@@ -10,6 +10,7 @@ import {
 import { applyAppearance } from "@table-craft/desktop/renderer/appearance/apply.js";
 import { appearanceOf } from "@table-craft/desktop/renderer/appearance/tokens.js";
 import { useExecutions, type ExecutionsStore } from "@table-craft/desktop/renderer/state/executions.js";
+import { useExports, type ExportsStore } from "@table-craft/desktop/renderer/state/exports.js";
 import { themeOf, useSettings, type SettingsStore } from "@table-craft/desktop/renderer/state/settings.js";
 import { tablesOf, useTables, type TablesStore } from "@table-craft/desktop/renderer/state/tables.js";
 import { useTabs, type TabsStore } from "@table-craft/desktop/renderer/state/tabs.js";
@@ -22,16 +23,28 @@ export interface WiredStores {
   readonly tables?: TablesStore;
   readonly ddl?: DdlStore;
   readonly executions?: ExecutionsStore;
+  readonly exports?: ExportsStore;
 }
 
 /**
  * What one store's change means for the others: a datasource whose engine went away leaves its
  * consoles and tables disconnected and its catalog forgotten, a deleted one takes its tabs with it,
  * a namespace described anew refreshes the DDL tabs showing its relations, and a closed tab's
- * executions leave Services with it.
+ * executions leave Services with it; engine events reach the exports list.
  */
-export function wireStores({ datasources, consoles, tabs, catalog, tables, ddl, executions }: WiredStores): () => void {
+export function wireStores({
+  datasources,
+  consoles,
+  tabs,
+  catalog,
+  tables,
+  ddl,
+  executions,
+  exports,
+}: WiredStores): () => void {
+  const offEvents = datasources.onEngineEvent((id, event) => exports?.getState().received(id, event));
   const offDetached = datasources.onDetached((id, error) => {
+    exports?.getState().detached(id, error);
     consoles.getState().detach(id, error);
     tables?.getState().detach(id, error);
     catalog?.getState().clear(id);
@@ -56,6 +69,7 @@ export function wireStores({ datasources, consoles, tabs, catalog, tables, ddl, 
   const offRedescribes = catalog === undefined || ddl === undefined ? () => undefined : followRedescribes(ddl, catalog);
   const offClosed = executions === undefined ? () => undefined : dropClosedExecutions(tabs, executions);
   return () => {
+    offEvents();
     offDetached();
     offRemoved();
     offAttached();
@@ -100,6 +114,7 @@ export function installDatasourceSync(onFirstList: () => void): () => void {
     tables: useTables,
     ddl: useDdl,
     executions: useExecutions,
+    exports: useExports,
   });
   const offChanged = bridge().onDatasourcesChanged((list) => useDatasources.getState().applyList(list));
   const offExited = bridge().onEngineExited((exited) => useDatasources.getState().engineExited(exited));

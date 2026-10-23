@@ -43,6 +43,7 @@ const connectRequest = z.strictObject({
 const disconnectRequest = z.strictObject({ datasourceId: z.string().min(1) });
 const chooseFileRequest = z.strictObject({ title: z.string() });
 const saveFileRequest = z.strictObject({ title: z.string(), defaultName: z.string() });
+const revealFileRequest = z.strictObject({ path: z.string().min(1) });
 const consoleListRequest = z.strictObject({ datasourceId: z.string().min(1) });
 const consoleRequest = z.strictObject({ datasourceId: z.string().min(1), name: z.string().min(1) });
 const consoleWriteRequest = z.strictObject({
@@ -81,6 +82,7 @@ export interface IpcOptions<Sender> {
   readonly history: Pick<QueryHistory, "record" | "search" | "clear">;
   readonly chooseFile: (sender: Sender, title: string) => Promise<string | null>;
   readonly saveFile: (sender: Sender, title: string, defaultName: string) => Promise<string | null>;
+  readonly revealFile: (path: string) => void;
   /** The renderer's answer to a held close (`CHANNELS.closeRequested`). */
   readonly answerClose: (sender: Sender, proceed: boolean) => void;
   readonly settings: SettingsService;
@@ -165,6 +167,10 @@ export function registerIpc<Sender>(ipc: InvokeRegistrar<Sender>, options: IpcOp
   handle(INVOKE_CHANNELS.saveFile, saveFileRequest, ({ title, defaultName }, sender) =>
     options.saveFile(sender, title, defaultName),
   );
+  handle(INVOKE_CHANNELS.revealFile, revealFileRequest, ({ path }) => {
+    options.revealFile(path);
+    return null;
+  });
   handle(INVOKE_CHANNELS.answerClose, answerCloseRequest, ({ proceed }, sender) => {
     options.answerClose(sender, proceed);
     return null;

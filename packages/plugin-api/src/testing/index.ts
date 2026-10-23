@@ -615,7 +615,7 @@ export function runPluginContract(plugin: DatasourcePlugin, fixture: ContractFix
       it("givenFullBytes_whenExecuting_thenBytesPreviewIsComplete", async () => {
         const dialect = language();
         const run = async (session: Session, sql: string, options?: ExecuteOptions): Promise<Row[]> =>
-          collect((await session.execute(sql, options)).rows);
+          collect((await session.execute(sql, [], options)).rows);
         const whole = LONG_BYTES_HEX.repeat(LONG_BYTES_LENGTH);
         await withSession(plugin, fixture, async (session) => {
           const probe = await session.execute(`SELECT id, payload FROM ${TYPE_PROBE_TABLE} ORDER BY id`);

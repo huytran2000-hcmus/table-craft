@@ -35,6 +35,7 @@ function engine() {
       return Promise.resolve(null);
     },
     fail: () => undefined,
+    onEvent: () => () => undefined,
   };
   return { client: client as EngineClient, definitions };
 }

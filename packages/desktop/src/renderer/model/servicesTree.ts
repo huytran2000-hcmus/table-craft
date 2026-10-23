@@ -2,6 +2,7 @@ import type { DatasourceView } from "@table-craft/desktop/preload/bridge.js";
 import { serviceState, type ServiceState } from "@table-craft/desktop/renderer/model/format.js";
 import type { ConsoleSession } from "@table-craft/desktop/renderer/state/consoles.js";
 import type { Execution } from "@table-craft/desktop/renderer/state/executions.js";
+import type { ExportEntry } from "@table-craft/desktop/renderer/state/exports.js";
 import type { TableSession, TableStatus } from "@table-craft/desktop/renderer/state/tables.js";
 import type { Tab } from "@table-craft/desktop/renderer/state/tabs.js";
 
@@ -114,7 +115,18 @@ export type ServiceRow =
       readonly parent: string;
       readonly tabId: string;
       readonly node: Execution;
+    }
+  | { readonly kind: "exports"; readonly key: string; readonly depth: 0; readonly count: number }
+  | {
+      readonly kind: "export";
+      readonly key: string;
+      readonly depth: 1;
+      readonly parent: string;
+      readonly node: ExportEntry;
     };
+
+/** The Exports node's key: one node under the datasources, every background export below it (decision 040). */
+export const EXPORTS_ROW_KEY = "exports";
 
 export function datasourceRowKey(datasourceId: string): string {
   return `datasource:${datasourceId}`;
@@ -124,8 +136,15 @@ export function sessionRowKey(tabId: string): string {
   return `session:${tabId}`;
 }
 
-/** The lines shown, every node expanded unless `collapsed` holds its key (the tree starts expanded). */
-export function serviceRows(tree: readonly ServiceDatasource[], collapsed: ReadonlySet<string>): readonly ServiceRow[] {
+/**
+ * The lines shown, every node expanded unless `collapsed` holds its key (the tree starts expanded);
+ * the Exports node follows the datasources while any export is listed, newest first.
+ */
+export function serviceRows(
+  tree: readonly ServiceDatasource[],
+  collapsed: ReadonlySet<string>,
+  exports: readonly ExportEntry[] = [],
+): readonly ServiceRow[] {
   const rows: ServiceRow[] = [];
   for (const datasource of tree) {
     const datasourceKey = datasourceRowKey(datasource.datasourceId);
@@ -147,12 +166,19 @@ export function serviceRows(tree: readonly ServiceDatasource[], collapsed: Reado
       }
     }
   }
+  if (exports.length === 0) return rows;
+  rows.push({ kind: "exports", key: EXPORTS_ROW_KEY, depth: 0, count: exports.length });
+  if (collapsed.has(EXPORTS_ROW_KEY)) return rows;
+  for (const entry of [...exports].reverse()) {
+    rows.push({ kind: "export", key: `export:${entry.task.taskId}`, depth: 1, parent: EXPORTS_ROW_KEY, node: entry });
+  }
   return rows;
 }
 
 /** Whether a line has children to show or hide. */
 export function expandable(row: ServiceRow): boolean {
   if (row.kind === "datasource") return row.node.sessions.length > 0;
+  if (row.kind === "exports") return row.count > 0;
   return row.kind === "session" && row.node.executions.length > 0;
 }
 
@@ -196,7 +222,9 @@ export function movedInTree(
     case "ArrowLeft": {
       if (row === undefined) return { selected, collapsed };
       if (expandable(row) && !collapsed.has(row.key)) return { selected, collapsed: new Set(collapsed).add(row.key) };
-      return row.kind === "datasource" ? { selected, collapsed } : { selected: row.parent, collapsed };
+      return row.kind === "datasource" || row.kind === "exports"
+        ? { selected, collapsed }
+        : { selected: row.parent, collapsed };
     }
     default:
       return null;

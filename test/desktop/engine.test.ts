@@ -1,7 +1,4 @@
-import { mkdtemp, readdir, readFile, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import { PluginError, z, type DatasourcePlugin, type Session } from "@table-craft/plugin-api";
 import type { PluginLoadResult } from "@table-craft/core";
 import sqlite from "@table-craft/plugin-sqlite";
@@ -15,7 +12,6 @@ import type {
   Explainability,
   ExplainedStatement,
   Namespace,
-  ExportedResult,
   ResultState,
   ResultWindow,
   TransactionState,
@@ -777,11 +773,6 @@ describe("engine explain", () => {
 });
 
 describe("engine results", () => {
-  const directories: string[] = [];
-  afterEach(async () => {
-    await Promise.all(directories.splice(0).map((directory) => rm(directory, { recursive: true, force: true })));
-  });
-
   async function execute(connection: ReturnType<typeof connected>, sessionId: string, sql: string) {
     return resultOf<ExecutedStatement>(
       await connection.handle({ id: 3, type: "statement.execute", ...PAGING, sessionId, sql }),
@@ -867,59 +858,5 @@ describe("engine results", () => {
     });
 
     expect(resultOf<string>(text)).toBe(`INSERT INTO MY_TABLE ("a b", "blob") VALUES ('it''s', X'00ff');\n`);
-  });
-
-  it("givenOpenCursor_whenExported_thenFileHoldsEveryRowAndNoTempFile", async () => {
-    const directory = await mkdtemp(join(tmpdir(), "table-craft-export-"));
-    directories.push(directory);
-    const path = join(directory, "rows.csv");
-    const connection = connected();
-    const sessionId = await openSession(connection);
-    const { handle } = await execute(connection, sessionId, ROWS_1200);
-
-    const exported = resultOf<ExportedResult>(
-      await connection.handle({ id: 6, type: "result.export", handle, extractor: "csv", path, columns: [0] }),
-    );
-    const lines = (await readFile(path, "utf8")).trimEnd().split("\n");
-
-    expect(exported).toMatchObject({ path, rows: 1200 });
-    expect(exported.bytes).toBeGreaterThan(0);
-    expect(lines).toHaveLength(1201);
-    expect(lines.at(-1)).toBe("1200");
-    expect(await readdir(directory)).toEqual(["rows.csv"]);
-  });
-
-  it("givenRelativePath_whenExported_thenInvalidRequest", async () => {
-    const connection = connected();
-    const sessionId = await openSession(connection);
-    const { handle } = await execute(connection, sessionId, "SELECT 1");
-
-    const response = await connection.handle({
-      id: 6,
-      type: "result.export",
-      handle,
-      extractor: "csv",
-      path: "relative.csv",
-      columns: [0],
-    });
-
-    expect(response).toMatchObject({ type: "engine.error", error: { code: "invalidRequest" } });
-  });
-
-  it("givenMissingFolder_whenExported_thenStatementFailedWithExportHint", async () => {
-    const connection = connected();
-    const sessionId = await openSession(connection);
-    const { handle } = await execute(connection, sessionId, "SELECT 1");
-
-    const response = await connection.handle({
-      id: 6,
-      type: "result.export",
-      handle,
-      extractor: "csv",
-      path: join(tmpdir(), "table-craft-missing-folder", "rows.csv"),
-      columns: [0],
-    });
-
-    expect(response).toMatchObject({ type: "engine.error", error: { code: "statementFailed" } });
   });
 });

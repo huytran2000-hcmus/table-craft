@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, type KeyboardEvent } from "react";
 import { ACTION_IDS } from "@table-craft/desktop/renderer/actions/appActions.js";
 import { currentPlatform, formatChord } from "@table-craft/desktop/renderer/actions/chords.js";
 import { DDL_ACTION_IDS } from "@table-craft/desktop/renderer/actions/ddlActions.js";
+import { EXPORT_ACTION_IDS } from "@table-craft/desktop/renderer/actions/exportActions.js";
 import { HISTORY_ACTION_IDS } from "@table-craft/desktop/renderer/actions/historyActions.js";
 import { invoke, registry, useActionEnabled } from "@table-craft/desktop/renderer/actions/index.js";
 import { SETTINGS_ACTION_IDS } from "@table-craft/desktop/renderer/actions/settingsActions.js";
@@ -94,6 +95,7 @@ const CATALOG_MENU = [
 ] as const;
 const RELATION_MENU = [
   TABLE_ACTION_IDS.openData,
+  EXPORT_ACTION_IDS.exportRelation,
   DDL_ACTION_IDS.open,
   DDL_ACTION_IDS.quickDoc,
   DDL_ACTION_IDS.generator,

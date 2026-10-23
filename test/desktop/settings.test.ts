@@ -28,7 +28,7 @@ const CHOSEN: Settings = {
   },
   editor: { format: { keywordCase: "lower", indentWidth: 4, linesBetweenStatements: 0 } },
   console: { parameters: false },
-  data: { nullText: "∅", groupDigits: true, pageRows: 100, fetchAllCap: 2_000 },
+  data: { nullText: "∅", groupDigits: true, pageRows: 100, fetchAllCap: 2_000, exportStallSeconds: 300 },
   log: { level: "debug" },
 };
 
@@ -112,13 +112,19 @@ describe("settings document", () => {
     const read = readSettings({
       version: 1,
       appearance: { theme: "neon", density: "compact", fonts: { editor: { family: "a;b", sizePx: 99 } } },
-      data: { nullText: "", groupDigits: "yes", pageRows: 200, fetchAllCap: 100 },
+      data: { nullText: "", groupDigits: "yes", pageRows: 200, fetchAllCap: 100, exportStallSeconds: 5 },
     });
 
     expect(read.appearance.theme).toBe("system");
     expect(read.appearance.density).toBe("compact");
     expect(read.appearance.fonts.editor).toEqual({ family: null, sizePx: 13 });
-    expect(read.data).toEqual({ nullText: "<null>", groupDigits: false, pageRows: 200, fetchAllCap: 100_000 });
+    expect(read.data).toEqual({
+      nullText: "<null>",
+      groupDigits: false,
+      pageRows: 200,
+      fetchAllCap: 100_000,
+      exportStallSeconds: 120,
+    });
   });
 
   it("givenNoSystemTitleBarField_whenRead_thenFalse", () => {

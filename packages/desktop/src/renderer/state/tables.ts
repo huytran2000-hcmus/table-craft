@@ -4,6 +4,7 @@ import type {
   ColumnMeta,
   EditableIdentity,
   EngineError,
+  ExportFormat,
   ExtractorKind,
   ForeignKey,
   ReferencingKey,
@@ -32,6 +33,7 @@ import {
 } from "@table-craft/desktop/renderer/model/editBuffer.js";
 import { clampSelection, type GridSelection } from "@table-craft/desktop/renderer/model/gridSelection.js";
 import { useDatasources } from "@table-craft/desktop/renderer/state/datasources.js";
+import { NO_EXPORTS, useExports, type ExportStarter } from "@table-craft/desktop/renderer/state/exports.js";
 import {
   NO_EXECUTION_REPORTER,
   useExecutions,
@@ -127,7 +129,7 @@ export interface TablesState {
   readonly exportTo: (
     id: string,
     resultId: string,
-    extractor: ExtractorKind,
+    format: ExportFormat,
     path: string,
     columns: readonly number[],
   ) => Promise<boolean>;
@@ -175,6 +177,8 @@ export interface TablesDependencies {
   readonly executions?: ExecutionReporter;
   /** Each submit that ran, for query history (plan 011, decision 6); must not throw. */
   readonly record?: (entry: HistoryEntry) => void;
+  /** Starts background exports of a table's rows (decision 040). */
+  readonly exports?: ExportStarter;
 }
 
 const EMPTY_CLAUSES: TableClauses = { where: "", orderBy: "" };
@@ -301,6 +305,8 @@ export function createTablesStore(dependencies: TablesDependencies) {
         const executionId = producedBy.get(resultId);
         if (executionId !== undefined) executions.recount(id, executionId, rowCount);
       },
+      datasourceOf: (id) => get().tables[id]?.datasourceId,
+      exports: dependencies.exports ?? NO_EXPORTS,
     });
 
     function patch(id: string, change: Partial<TableSession>): void {
@@ -581,9 +587,9 @@ export function createTablesStore(dependencies: TablesDependencies) {
 
       extract: windows.extract,
 
-      async exportTo(id, resultId, extractor, path, columns) {
-        const exported = await windows.exportTo(id, resultId, extractor, path, columns);
-        return exported !== null;
+      async exportTo(id, resultId, format, path, columns) {
+        const task = await windows.exportTo(id, resultId, format, path, columns);
+        return task !== null;
       },
 
       beginEdit(id, cell, text) {
@@ -810,6 +816,7 @@ export type TablesStore = ReturnType<typeof createTablesStore>;
 
 export const useTables = createTablesStore({
   connect: (datasourceId) => useDatasources.getState().connect(datasourceId),
+  exports: useExports.getState(),
   executions: {
     start: (tabId, start) => useExecutions.getState().start(tabId, start),
     finish: (tabId, executionId, end) => useExecutions.getState().finish(tabId, executionId, end),

@@ -14,6 +14,7 @@ import {
   ENGINE_PROBED_MESSAGE,
   ENGINE_SHUTDOWN_MESSAGE,
   type EngineBoot,
+  type EngineEvent,
   type EngineLog,
   type EngineProbed,
 } from "@table-craft/desktop/engine/protocol.js";
@@ -48,7 +49,7 @@ let booted: Promise<EngineConnectionFactory> | null = null;
 let engine: Engine | null = null;
 const connections = new Set<Promise<EngineConnection>>();
 
-type EngineConnectionFactory = () => EngineConnection;
+type EngineConnectionFactory = (emit: (event: EngineEvent) => void) => EngineConnection;
 
 async function plugins(message: EngineBoot): Promise<PluginLoadResult[]> {
   const loaded = await loadPlugins(message.pluginRoots);
@@ -73,12 +74,18 @@ async function exitAfterClosing(): Promise<never> {
   process.exit(0);
 }
 
-const lifetime = createLifetime(() => void exitAfterClosing());
+/** An export outlives the window that started it; the engine leaves once none runs and no port came back. */
+async function exitWhenSettled(): Promise<void> {
+  await engine?.exportsSettled();
+  if (lifetime.idle) await exitAfterClosing();
+}
+
+const lifetime = createLifetime(() => void exitWhenSettled());
 
 async function serve(message: EngineBoot): Promise<EngineConnectionFactory> {
   const served = createEngine({ datasource: message.datasource, plugins: await plugins(message), log });
   engine = served;
-  return () => served.connect();
+  return (emit) => served.connect(emit);
 }
 
 async function probe(message: EngineBoot): Promise<never> {
@@ -89,7 +96,7 @@ async function probe(message: EngineBoot): Promise<never> {
 }
 
 function attach(port: MessagePortMain, ready: Promise<EngineConnectionFactory>): void {
-  const connection = ready.then((connect) => connect());
+  const connection = ready.then((connect) => connect((event) => port.postMessage(event)));
   connections.add(connection);
   lifetime.attached();
   port.on("message", (event) => {

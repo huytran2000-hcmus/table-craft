@@ -1,7 +1,8 @@
-import { EXTRACTOR_KINDS } from "@table-craft/core";
+import { EXPORT_FORMATS, EXTRACTOR_KINDS } from "@table-craft/core";
 import { GENERATED_STATEMENTS, KEYWORD_CASES, TRANSACTION_MODES, z } from "@table-craft/plugin-api";
 import type { EngineRequest } from "@table-craft/desktop/engine/protocol.js";
 import {
+  EXPORT_STALL_SECONDS_RANGE,
   FETCH_ALL_CAP_RANGE,
   INDENT_WIDTH_RANGE,
   LINES_BETWEEN_STATEMENTS_RANGE,
@@ -16,6 +17,12 @@ const index = z.number().int().nonnegative();
 const extractor = z.enum(EXTRACTOR_KINDS);
 const columns = z.array(index);
 const relation = z.string().min(1);
+const taskId = z.string().min(1);
+const stallSeconds = z.number().int().min(EXPORT_STALL_SECONDS_RANGE.min).max(EXPORT_STALL_SECONDS_RANGE.max);
+const exportSource = z.discriminatedUnion("kind", [
+  z.strictObject({ kind: z.literal("result"), handle, columns }),
+  z.strictObject({ kind: z.literal("table"), path: namespacePath, relation, columns: z.array(z.string().min(1)) }),
+]);
 const GENERATOR_STATEMENTS = ["create", ...GENERATED_STATEMENTS] as const;
 const paging = {
   pageRows: z.number().int().min(PAGE_ROWS_RANGE.min).max(PAGE_ROWS_RANGE.max),
@@ -108,12 +115,15 @@ export const engineRequestSchema = z.discriminatedUnion("type", [
   }),
   z.strictObject({
     id: requestId,
-    type: z.literal("result.export"),
-    handle,
-    extractor,
+    type: z.literal("export.start"),
+    source: exportSource,
+    format: z.enum(EXPORT_FORMATS),
     path: z.string().min(1),
-    columns,
+    stallSeconds,
   }),
+  z.strictObject({ id: requestId, type: z.literal("export.cancel"), taskId }),
+  z.strictObject({ id: requestId, type: z.literal("export.retry"), taskId, stallSeconds }),
+  z.strictObject({ id: requestId, type: z.literal("export.list") }),
   z.strictObject({ id: requestId, type: z.literal("catalog.namespaces"), refresh: z.boolean().optional() }),
   z.strictObject({
     id: requestId,

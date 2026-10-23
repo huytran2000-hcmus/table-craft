@@ -88,6 +88,24 @@ export type ModalRequest =
       readonly now: number;
     }
   | {
+      /**
+       * Export Data (decision 040): a format, the columns and a file; resolves `exportAnswer`.
+       * `browse` asks main's save dialog for a file named for the chosen format.
+       */
+      readonly kind: "export";
+      readonly title: string;
+      readonly formats: readonly ModalChoice[];
+      readonly initialFormat: string;
+      readonly columns: readonly string[];
+      /** Indices into `columns` checked when the dialog opens. */
+      readonly chosen: readonly number[];
+      readonly browse: (format: string, current: string) => Promise<string | null>;
+      /** The typed or browsed path with its extension swapped for `format`'s. */
+      readonly retarget: (path: string, format: string) => string;
+      /** Where the rows come from, said under the title. */
+      readonly note: string;
+    }
+  | {
       /** Open Closed Console (plan 011 decision 14): resolves `pickerAnswer(choice, name)` for a `CLOSED_CONSOLE_CHOICES` choice. */
       readonly kind: "closedConsoles";
       readonly title: string;
@@ -133,6 +151,21 @@ export const pickerAnswer = generatorAnswer;
 export function parseGeneratorAnswer(answer: string): { readonly choice: string; readonly statement: string } {
   const at = answer.indexOf(GENERATOR_SEPARATOR);
   return { choice: answer.slice(0, at), statement: answer.slice(at + GENERATOR_SEPARATOR.length) };
+}
+
+/** What the Export Data dialog answers. */
+export interface ExportAnswer {
+  readonly format: string;
+  readonly columns: readonly number[];
+  readonly path: string;
+}
+
+export function exportAnswer(answer: ExportAnswer): string {
+  return JSON.stringify(answer);
+}
+
+export function parseExportAnswer(answer: string): ExportAnswer {
+  return JSON.parse(answer) as ExportAnswer;
 }
 
 /** The radio group's arrow keys, as WAI-ARIA's radio group pattern moves them. */

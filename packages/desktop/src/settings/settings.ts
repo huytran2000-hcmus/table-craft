@@ -43,6 +43,8 @@ export interface DataSettings {
   readonly pageRows: number;
   /** Rows Fetch All reads at most. */
   readonly fetchAllCap: number;
+  /** Seconds an export waits for the next row before it fails as stalled (decision 040). */
+  readonly exportStallSeconds: number;
 }
 
 /** Mirrors `KEYWORD_CASES` in plugin-api. */
@@ -95,6 +97,7 @@ export interface NumberRange {
 export const FONT_SIZE_RANGE: NumberRange = { min: 8, max: 32 };
 export const PAGE_ROWS_RANGE: NumberRange = { min: 10, max: 10_000 };
 export const FETCH_ALL_CAP_RANGE: NumberRange = { min: 1_000, max: 1_000_000 };
+export const EXPORT_STALL_SECONDS_RANGE: NumberRange = { min: 10, max: 3_600 };
 export const NULL_TEXT_LENGTH: NumberRange = { min: 1, max: 16 };
 export const INDENT_WIDTH_RANGE: NumberRange = { min: 1, max: 8 };
 export const LINES_BETWEEN_STATEMENTS_RANGE: NumberRange = { min: 0, max: 5 };
@@ -124,6 +127,7 @@ export const DEFAULT_SETTINGS: Settings = {
     groupDigits: false,
     pageRows: 500,
     fetchAllCap: 100_000,
+    exportStallSeconds: 120,
   },
   log: {
     level: "info",
@@ -185,6 +189,10 @@ export function indentWidthError(indentWidth: number): string | null {
 
 export function linesBetweenStatementsError(lines: number): string | null {
   return rangeError(lines, LINES_BETWEEN_STATEMENTS_RANGE, "Blank lines between statements");
+}
+
+export function exportStallSecondsError(seconds: number): string | null {
+  return rangeError(seconds, EXPORT_STALL_SECONDS_RANGE, "The export stall timeout");
 }
 
 export function nullTextError(nullText: string): string | null {
@@ -259,6 +267,9 @@ export function readSettings(input: unknown): Settings {
       groupDigits: typeof data.groupDigits === "boolean" ? data.groupDigits : defaults.data.groupDigits,
       pageRows,
       fetchAllCap,
+      exportStallSeconds: inRange(data.exportStallSeconds, EXPORT_STALL_SECONDS_RANGE)
+        ? data.exportStallSeconds
+        : defaults.data.exportStallSeconds,
     },
     log: {
       level: LOG_LEVEL_CHOICES.includes(log.level as LogLevelChoice)

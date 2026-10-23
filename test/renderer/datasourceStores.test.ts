@@ -85,6 +85,7 @@ function fakeClient(datasourceId: string, options: { openFails?: EngineError } =
       failure = error;
     },
     failedWith: () => failure,
+    onEvent: () => () => undefined,
   };
   return client as FakeClient;
 }

@@ -155,6 +155,9 @@ function readRows(rows: Iterator<unknown>, cells: readonly Cell[]): AsyncIterabl
 }
 
 const VERSION_SQL = "SELECT sqlite_version() AS version";
+/** SQLite's name for a database private to its connection; an empty path makes a private temporary one. */
+const MEMORY_PATH = ":memory:";
+
 /** Refuses every write on this connection, temporary tables included. */
 const READ_ONLY_SQL = "PRAGMA query_only = ON";
 
@@ -166,11 +169,13 @@ class SqliteSession implements Session {
   readonly #database: DatabaseSync;
   #mode: TransactionMode = "auto";
   readonly serverVersion: string | null;
+  readonly privateDatabase: boolean;
   readonly introspector: Introspector;
   readonly transactions: Transactions;
 
   constructor(config: SqliteConfig, options: ConnectOptions) {
     this.#database = new DatabaseSync(config.path);
+    this.privateDatabase = config.path === MEMORY_PATH || config.path === "";
     this.introspector = sqliteIntrospector(this.#database);
     const database = this.#database;
     const mode = (): TransactionMode => this.#mode;

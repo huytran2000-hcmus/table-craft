@@ -514,6 +514,7 @@ void app.whenReady().then(async () => {
     },
     chooseFile,
     saveFile,
+    revealFile: (path) => shell.showItemInFolder(path),
     answerClose(sender, proceed) {
       const window = BrowserWindow.fromWebContents(sender);
       if (!proceed) relaunchRequested = false;

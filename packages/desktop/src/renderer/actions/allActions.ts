@@ -1,6 +1,7 @@
 import { APP_ACTIONS } from "@table-craft/desktop/renderer/actions/appActions.js";
 import { DDL_ACTIONS } from "@table-craft/desktop/renderer/actions/ddlActions.js";
 import { HISTORY_ACTIONS } from "@table-craft/desktop/renderer/actions/historyActions.js";
+import { EXPORT_ACTIONS } from "@table-craft/desktop/renderer/actions/exportActions.js";
 import { GRID_ACTIONS } from "@table-craft/desktop/renderer/actions/gridActions.js";
 import { EXPLAIN_ACTIONS } from "@table-craft/desktop/renderer/actions/explainActions.js";
 import { EXPLORER_ACTIONS } from "@table-craft/desktop/renderer/actions/explorerActions.js";
@@ -15,6 +16,7 @@ import { TABLE_ACTIONS } from "@table-craft/desktop/renderer/actions/tableAction
 export const ALL_ACTIONS: readonly AnyAction[] = [
   ...APP_ACTIONS,
   ...GRID_ACTIONS,
+  ...EXPORT_ACTIONS,
   ...EXPLORER_ACTIONS,
   ...TABLE_ACTIONS,
   ...NAVIGATION_ACTIONS,

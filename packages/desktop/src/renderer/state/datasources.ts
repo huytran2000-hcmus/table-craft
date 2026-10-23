@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import type { Capability, EngineError } from "@table-craft/desktop/engine/protocol.js";
+import type { Capability, EngineError, EngineEvent } from "@table-craft/desktop/engine/protocol.js";
 import type {
   ConnectionField,
   DatasourceList,
@@ -83,6 +83,7 @@ export interface DatasourcesDependencies {
 }
 
 export type DetachedListener = (datasourceId: string, error: EngineError | null) => void;
+export type DatasourceEventListener = (datasourceId: string, event: EngineEvent) => void;
 export type RemovedListener = (datasourceIds: readonly string[]) => void;
 
 export const ENGINE_EXITED_HINT = "Connect again; if it keeps happening, the plugin or its driver crashed.";
@@ -119,6 +120,7 @@ export function createDatasourcesStore(dependencies: DatasourcesDependencies) {
   /** Disconnects in flight, which a new connect waits out so it gets a fresh engine. */
   const stopping = new Map<string, Promise<void>>();
   const detachedListeners = new Set<DetachedListener>();
+  const eventListeners = new Set<DatasourceEventListener>();
   const removedListeners = new Set<RemovedListener>();
 
   const store = create<DatasourcesState>()((set, get) => {
@@ -238,6 +240,9 @@ export function createDatasourcesStore(dependencies: DatasourcesDependencies) {
         // mid-connect leaves this attempt stale.
         const connecting = Promise.resolve().then(async () => {
           const client = await open(id);
+          client.onEvent((event) => {
+            for (const listener of eventListeners) listener(id, event);
+          });
           try {
             const serverVersion = await verify(client);
             if (clients.get(id) === connecting) setConnection(id, { status: "connected", error: null, serverVersion });
@@ -290,6 +295,11 @@ export function createDatasourcesStore(dependencies: DatasourcesDependencies) {
     onDetached(listener: DetachedListener): () => void {
       detachedListeners.add(listener);
       return () => detachedListeners.delete(listener);
+    },
+    /** Every event any datasource's engine pushes, such as export progress. */
+    onEngineEvent(listener: DatasourceEventListener): () => void {
+      eventListeners.add(listener);
+      return () => eventListeners.delete(listener);
     },
     onRemoved(listener: RemovedListener): () => void {
       removedListeners.add(listener);
