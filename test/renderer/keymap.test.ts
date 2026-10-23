@@ -2,9 +2,10 @@ import { describe, expect, it, vi } from "vitest";
 import { ALL_ACTIONS } from "@table-craft/desktop/renderer/actions/allActions.js";
 import type { FocusRegion } from "@table-craft/desktop/renderer/actions/context.js";
 import { createKeyDispatcher, findClashes, findReservedClashes } from "@table-craft/desktop/renderer/actions/keymap.js";
-import { createActionRegistry, defineAction } from "@table-craft/desktop/renderer/actions/registry.js";
+import { GRID_ACTION_IDS } from "@table-craft/desktop/renderer/actions/gridActions.js";
+import { createActionRegistry, defineAction, type AnyAction } from "@table-craft/desktop/renderer/actions/registry.js";
 import { WINDOW_ACTION_IDS } from "@table-craft/desktop/renderer/actions/windowActions.js";
-import { EDITOR_CHORDS } from "@table-craft/desktop/renderer/console/editorKeys.js";
+import { EDITOR_CHORDS, FIELD_CHORDS } from "@table-craft/desktop/renderer/console/editorKeys.js";
 import { IDLE_CONTEXT, keydown } from "./support.js";
 
 function dispatcherWith(enabled: boolean, paletteOpen = false) {
@@ -269,12 +270,50 @@ describe("grid keymap", () => {
     expect(ran).toEqual(["editor.zoomIn", "editor.zoomOut", "editor.zoomReset", "explorer.collapseAll"]);
   });
 
-  it("givenGridChords_whenListed_thenAllScopedToTheGrid", () => {
+  it("givenGridChords_whenListed_thenAllScopedToTheGridOrItsFindBar", () => {
     const gridChords = ALL_ACTIONS.filter(
       (action) => action.category === "Result Grid" && action.shortcut !== undefined,
     );
-    expect(gridChords.every((action) => action.shortcutRegion === "grid")).toBe(true);
-    expect(gridChords.map((action) => action.shortcut)).toEqual(["Mod+R", "Mod+C", "Mod+A", "Shift+Enter"]);
+    const scoped = (action: AnyAction) => {
+      const regions = typeof action.shortcutRegion === "string" ? [action.shortcutRegion] : action.shortcutRegion;
+      return regions !== undefined && regions.every((region) => region === "grid" || region === "gridFind");
+    };
+    expect(gridChords.every(scoped)).toBe(true);
+    expect(gridChords.map((action) => [action.shortcut, action.shortcutRegion])).toEqual([
+      ["Mod+R", "grid"],
+      ["Mod+C", "grid"],
+      ["Mod+A", "grid"],
+      ["Shift+Enter", "grid"],
+      ["Mod+F", ["grid", "gridFind"]],
+      ["Enter", "gridFind"],
+      ["Shift+Enter", "gridFind"],
+      ["Escape", "gridFind"],
+    ]);
+  });
+
+  it("givenFindInResult_whenFocusInEditorOrGrid_thenEditorKeepsModFAndGridOpensFind", () => {
+    let region: FocusRegion = "editor";
+    const ran: string[] = [];
+    const find = ALL_ACTIONS.find((action) => action.id === GRID_ACTION_IDS.find);
+    expect(find).toBeDefined();
+    const registry = createActionRegistry(() => IDLE_CONTEXT);
+    registry.register([{ ...(find as AnyAction), when: () => true, run: () => void ran.push("find") }]);
+    const dispatch = createKeyDispatcher({
+      registry,
+      platform: "mac",
+      paletteOpen: () => false,
+      focusedRegion: () => region,
+      reservedChords: () => (region === "editor" ? EDITOR_CHORDS : region === "gridFind" ? FIELD_CHORDS : []),
+    });
+
+    dispatch(keydown({ key: "f", code: "KeyF", metaKey: true }));
+    region = "grid";
+    dispatch(keydown({ key: "f", code: "KeyF", metaKey: true }));
+    region = "gridFind";
+    dispatch(keydown({ key: "f", code: "KeyF", metaKey: true }));
+
+    expect(ran).toEqual(["find", "find"]);
+    expect(findReservedClashes(ALL_ACTIONS, FIELD_CHORDS, "gridFind")).toEqual([]);
   });
 });
 

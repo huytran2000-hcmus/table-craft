@@ -83,7 +83,8 @@ export function exportedText(exported: {
 
 /**
  * The grid toolbar's row count (plan 007 decision 2): `5,000 rows` when all are fetched,
- * `500+ rows` while the cursor holds more, and why fetching ended when it ended early.
+ * `500+ rows` while the cursor holds more, and why fetching ended when it ended early. While a
+ * local filter hides rows (plan 023) it leads with the shown ones: `1,284 of 5,000 rows`.
  */
 export function resultStateText(result: {
   readonly rowCount: number;
@@ -91,8 +92,18 @@ export function resultStateText(result: {
   readonly cursorOpen: boolean;
   readonly sorted: boolean;
   readonly fetchAllCap: number;
+  readonly shown?: number | null;
 }): string {
   const count = formatCount(result.rowCount);
+  const shown = result.shown ?? null;
+  if (shown !== null) {
+    const parts = [`${formatCount(shown)} of ${count}${result.complete ? "" : "+"} rows`, "filtered locally"];
+    if (!result.complete && !result.cursorOpen) {
+      parts.push(result.rowCount >= result.fetchAllCap ? "fetch cap reached" : "fetching stopped");
+    }
+    if (result.sorted) parts.push("sorted locally");
+    return parts.join(" · ");
+  }
   if (result.complete) return result.rowCount === 1 ? "1 row" : `${count} rows`;
   const parts = [`${count}+ rows`];
   if (!result.cursorOpen) parts.push(result.rowCount >= result.fetchAllCap ? "fetch cap reached" : "fetching stopped");

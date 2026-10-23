@@ -106,6 +106,14 @@ function tableEngine(options: EngineOptions = {}) {
         return Promise.resolve([`UPDATE "public"."edit_probe" SET "label" = 'renamed' WHERE "id" = 1`]);
       case "table.count":
         return Promise.resolve(12_345);
+      case "result.view":
+        return Promise.resolve(
+          params.spec === null
+            ? { shown: 2, filtered: false, sources: null, matches: 0, error: null }
+            : { shown: 1, filtered: true, sources: [1], matches: 0, error: null },
+        );
+      case "result.window":
+        return Promise.resolve({ offset: 0, rows: [[2, "second"]] });
       case "result.fetchMore":
         return Promise.resolve({ rowCount: FETCHED_ALL, complete: true, cursorOpen: false });
       default:
@@ -218,6 +226,28 @@ describe("tables store", () => {
     expect(calls("table.query")).toHaveLength(2);
     expect(pendingOf(session())).toBe(0);
     expect(session().notice).toBe("Submitted 2 statements");
+  });
+
+  it("givenLocalFilter_whenShownRowEdited_thenEditNamesTheHeldRow", async () => {
+    const { store, session, calls } = await openedTable();
+    const resultId = session().result?.id ?? "";
+    await store.getState().search("t1", resultId, (search) => ({
+      ...search,
+      filters: [{ column: 1, op: "notEquals", text: "first" }],
+    }));
+    store.getState().ensureWindow("t1", resultId, 0);
+    await Promise.resolve();
+    await Promise.resolve();
+
+    store.getState().beginEdit("t1", { row: 0, column: 1 });
+    expect(session().editing?.text).toBe("second");
+    store.getState().changeEdit("t1", "renamed");
+    store.getState().commitEdit("t1");
+    expect(await store.getState().submit("t1")).toBe(true);
+
+    expect(calls("edits.submit")[0]).toMatchObject({
+      edits: [{ kind: "update", row: 1, values: [{ column: 1, value: { kind: "text", text: "renamed" } }] }],
+    });
   });
 
   it("givenUnchangedEdit_whenCommitted_thenNothingPending", async () => {

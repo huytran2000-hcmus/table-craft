@@ -30,6 +30,7 @@ import {
   toEdits,
   type BufferCell,
   type EditBuffer,
+  type HeldRows,
 } from "@table-craft/desktop/renderer/model/editBuffer.js";
 import { clampSelection, type GridSelection } from "@table-craft/desktop/renderer/model/gridSelection.js";
 import { datasourceById, useDatasources } from "@table-craft/desktop/renderer/state/datasources.js";
@@ -41,7 +42,14 @@ import {
   type ExecutionReporter,
 } from "@table-craft/desktop/renderer/state/executions.js";
 import { history } from "@table-craft/desktop/renderer/state/history.js";
-import { resultTabOf, rowAt, type ResultTab } from "@table-craft/desktop/renderer/state/resultTab.js";
+import {
+  resultTabOf,
+  rowAt,
+  searchedColumnsChanged,
+  shownHeld,
+  type ResultSearch,
+  type ResultTab,
+} from "@table-craft/desktop/renderer/state/resultTab.js";
 import { createResultWindows, toError } from "@table-craft/desktop/renderer/state/resultWindows.js";
 import { currentFormats, currentPaging, statementTimeoutOf } from "@table-craft/desktop/renderer/state/settings.js";
 
@@ -132,7 +140,12 @@ export interface TablesState {
     format: ExportFormat,
     path: string,
     columns: readonly number[],
+    shownOnly?: boolean,
   ) => Promise<boolean>;
+  /** Changes the result's find bar or local filter chips; the engine recomputes the view (plan 023). */
+  readonly search: (id: string, resultId: string, change: (search: ResultSearch) => ResultSearch) => Promise<void>;
+  /** Moves the find bar to the next match, or the previous one. */
+  readonly findNext: (id: string, resultId: string, backward: boolean) => Promise<void>;
   readonly beginEdit: (id: string, cell: BufferCell, text?: string) => void;
   readonly changeEdit: (id: string, text: string) => void;
   /** Writes the editor's text to the buffer unless unchanged; true when there was an editor. */
@@ -226,19 +239,19 @@ export function isEditable(session: TableSession | null | undefined): session is
 
 /** Rows the grid draws: held rows, then inserted ones. */
 export function tableRowCount(session: TableSession): number {
-  return session.result === null ? 0 : gridRowCount(session.buffer, session.result.rowCount);
+  return session.result === null ? 0 : gridRowCount(session.buffer, shownHeld(session.result));
 }
 
 /** The text a cell shows and edits from: its pending input, else its value; null and default edit as empty. */
 export function cellText(session: TableSession, cell: BufferCell): string {
   const result = session.result;
   if (result === null) return "";
-  const row = bufferRowAt(session.buffer, result.rowCount, cell.row);
+  const row = bufferRowAt(session.buffer, shownHeld(result), cell.row);
   if (row === null) return "";
   const pending = pendingInput(session.buffer, row, cell.column);
   if (pending !== undefined) return pending.kind === "text" ? pending.text : "";
   if (row.kind === "inserted") return "";
-  const value = rowAt(result.windows, row.row)?.[cell.column];
+  const value = rowAt(result.windows, cell.row)?.[cell.column];
   return value === undefined || value === null ? "" : formatCell(value);
 }
 
@@ -349,7 +362,7 @@ export function createTablesStore(dependencies: TablesDependencies) {
       if (current === undefined || current.result === null) return;
       const buffer = change(current);
       if (buffer === current.buffer) return;
-      const rows = gridRowCount(buffer, current.result.rowCount);
+      const rows = gridRowCount(buffer, shownHeld(current.result));
       const columns = current.result.layout.hidden.filter((hidden) => !hidden).length;
       patch(id, {
         buffer,
@@ -460,8 +473,10 @@ export function createTablesStore(dependencies: TablesDependencies) {
             sort,
             layout,
             autoChars: kept ? previous.autoChars : fresh.autoChars,
+            search: kept ? { ...previous.search, current: null } : fresh.search,
           },
         });
+        if (kept) await windows.applyView(id, fresh.id);
         return true;
       } catch (cause) {
         const error = toError(cause);
@@ -474,8 +489,8 @@ export function createTablesStore(dependencies: TablesDependencies) {
       }
     }
 
-    function heldRowsOf(session: TableSession): number {
-      return session.result?.rowCount ?? 0;
+    function heldRowsOf(session: TableSession): HeldRows {
+      return session.result === null ? 0 : shownHeld(session.result);
     }
 
     return {
@@ -576,14 +591,24 @@ export function createTablesStore(dependencies: TablesDependencies) {
       setLayout(id, resultId, layout) {
         const session = get().tables[id];
         if (session === undefined) return;
+        const before = session.result;
         updateResult(id, resultId, (latest) => {
           const visible = layout.hidden.filter((hidden) => !hidden).length;
           const hiddenChanged = layout.hidden.some((hidden, index) => hidden !== latest.layout.hidden[index]);
-          const rows = gridRowCount(session.buffer, latest.rowCount);
+          const rows = gridRowCount(session.buffer, shownHeld(latest));
           const selection = hiddenChanged ? null : clampSelection(latest.selection, { rows, columns: visible });
           return { ...latest, layout, selection };
         });
+        if (before !== null && searchedColumnsChanged(before.layout, layout)) void windows.applyView(id, resultId);
       },
+
+      async search(id, resultId, change) {
+        // An open editor names its cell by shown row, which a new view moves; edits name held rows and stay.
+        get().commitEdit(id);
+        get().applyPanel(id);
+        await windows.search(id, resultId, change);
+      },
+      findNext: windows.findNext,
 
       select(id, resultId, selection) {
         updateResult(id, resultId, (latest) => (latest.selection === selection ? latest : { ...latest, selection }));
@@ -591,8 +616,8 @@ export function createTablesStore(dependencies: TablesDependencies) {
 
       extract: windows.extract,
 
-      async exportTo(id, resultId, format, path, columns) {
-        const task = await windows.exportTo(id, resultId, format, path, columns);
+      async exportTo(id, resultId, format, path, columns, shownOnly) {
+        const task = await windows.exportTo(id, resultId, format, path, columns, shownOnly);
         return task !== null;
       },
 
@@ -666,12 +691,12 @@ export function createTablesStore(dependencies: TablesDependencies) {
           const result = session.result;
           if (result === null) return session.buffer;
           const sources = rows.flatMap((index) => {
-            const row = bufferRowAt(session.buffer, result.rowCount, index);
+            const row = bufferRowAt(session.buffer, shownHeld(result), index);
             if (row === null) return [];
             if (row.kind === "inserted") {
               return [session.buffer.inserts.find((inserted) => inserted.id === row.id)?.values ?? []];
             }
-            const values = rowAt(result.windows, row.row);
+            const values = rowAt(result.windows, index);
             if (values === undefined) return [];
             return [
               result.columns.map((_, column) => pendingInput(session.buffer, row, column) ?? inputOf(values[column])),

@@ -30,16 +30,30 @@ export interface BufferCell {
   readonly column: number;
 }
 
-/** Inserted rows draw after the `heldRows` the result holds, in the order they were added. */
-export function bufferRowAt(buffer: EditBuffer, heldRows: number, index: number): BufferRow | null {
+/**
+ * The held rows the grid draws: all of them, or while a local filter hides some (plan 023) the
+ * `count` it shows, `sources` naming each one's index in the result.
+ */
+export type HeldRows = number | { readonly count: number; readonly sources: readonly number[] };
+
+function heldCount(heldRows: HeldRows): number {
+  return typeof heldRows === "number" ? heldRows : heldRows.count;
+}
+
+/** Inserted rows draw after the held rows, in the order they were added. */
+export function bufferRowAt(buffer: EditBuffer, heldRows: HeldRows, index: number): BufferRow | null {
   if (index < 0) return null;
-  if (index < heldRows) return { kind: "held", row: index };
-  const inserted = buffer.inserts[index - heldRows];
+  const held = heldCount(heldRows);
+  if (index < held) {
+    const row = typeof heldRows === "number" ? index : heldRows.sources[index];
+    return row === undefined ? null : { kind: "held", row };
+  }
+  const inserted = buffer.inserts[index - held];
   return inserted === undefined ? null : { kind: "inserted", id: inserted.id };
 }
 
-export function gridRowCount(buffer: EditBuffer, heldRows: number): number {
-  return heldRows + buffer.inserts.length;
+export function gridRowCount(buffer: EditBuffer, heldRows: HeldRows): number {
+  return heldCount(heldRows) + buffer.inserts.length;
 }
 
 /** The input a cell holds in the buffer, or undefined when it shows the value the database sent. */
@@ -118,7 +132,7 @@ export function deleteRows(buffer: EditBuffer, rows: readonly BufferRow[]): Edit
  * Undoes what the buffer holds for `cells`: an edited cell goes back to its value, a deleted row
  * comes back, and an inserted row any of whose cells is named is dropped.
  */
-export function revertCells(buffer: EditBuffer, heldRows: number, cells: readonly BufferCell[]): EditBuffer {
+export function revertCells(buffer: EditBuffer, heldRows: HeldRows, cells: readonly BufferCell[]): EditBuffer {
   const updates = new Map(buffer.updates);
   const deletes = new Set(buffer.deletes);
   const dropped = new Set<number>();

@@ -10,7 +10,7 @@ import { visibleColumns } from "@table-craft/desktop/renderer/model/columnLayout
 import { bufferRowAt, pendingCount, pendingText } from "@table-craft/desktop/renderer/model/editBuffer.js";
 import { formatCount } from "@table-craft/desktop/renderer/model/format.js";
 import { pluginOf, useDatasources } from "@table-craft/desktop/renderer/state/datasources.js";
-import { rowAt } from "@table-craft/desktop/renderer/state/resultTab.js";
+import { rowAt, shownHeld } from "@table-craft/desktop/renderer/state/resultTab.js";
 import {
   cellText,
   isEditable,
@@ -56,7 +56,7 @@ function TablePanel({
   const result = session.result;
   const column = focus === null ? null : (result?.columns[focus.column] ?? null);
   if (result === null || focus === null) return <ValuePanel column={column} value={undefined} />;
-  const row = bufferRowAt(session.buffer, result.rowCount, focus.row);
+  const row = bufferRowAt(session.buffer, shownHeld(result), focus.row);
   const typeClass = result.typeClasses[focus.column];
   const deleted = row?.kind === "held" && session.buffer.deletes.has(row.row);
   if (isEditable(session) && row !== null && !deleted && typeClass !== "bytes") {
@@ -73,7 +73,7 @@ function TablePanel({
       />
     );
   }
-  const value = row?.kind === "held" ? rowAt(result.windows, row.row)?.[focus.column] : null;
+  const value = row?.kind === "held" ? rowAt(result.windows, focus.row)?.[focus.column] : null;
   return <ValuePanel column={column} value={value} />;
 }
 

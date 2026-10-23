@@ -112,6 +112,11 @@ export type ModalRequest =
       readonly retarget: (path: string, format: string) => string;
       /** Where the rows come from, said under the title. */
       readonly note: string;
+      /**
+       * While the grid hides or reorders rows (plan 023), a choice between the rows it shows and
+       * the whole result, opening on the shown ones; `note` then describes the whole result.
+       */
+      readonly rows?: { readonly shownLabel: string; readonly wholeLabel: string; readonly shownNote: string };
     }
   | {
       /**
@@ -184,6 +189,8 @@ export interface ExportAnswer {
   readonly format: string;
   readonly columns: readonly number[];
   readonly path: string;
+  /** The rows the grid shows rather than the whole result; only when the request offered `rows`. */
+  readonly shownOnly?: boolean;
 }
 
 export function exportAnswer(answer: ExportAnswer): string {

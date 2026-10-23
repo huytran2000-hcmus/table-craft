@@ -47,6 +47,7 @@ import {
   Asterisk,
   CaretDown,
   CaretRight,
+  CaretUp,
   Check,
   CircleNotch,
   Columns,
@@ -182,4 +183,6 @@ export const ACTION_ICONS: Readonly<Record<ActionIcon, Icon>> = {
   diagnostics: FileZip,
   update: ArrowCircleUp,
   download: DownloadSimple,
+  findNext: CaretDown,
+  findPrevious: CaretUp,
 };

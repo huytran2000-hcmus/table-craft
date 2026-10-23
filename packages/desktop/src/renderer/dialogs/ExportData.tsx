@@ -22,6 +22,7 @@ export function ExportData({ request }: { readonly request: ExportRequest }) {
   const [format, setFormat] = useState(request.initialFormat);
   const [chosen, setChosen] = useState<ReadonlySet<number>>(() => new Set(request.chosen));
   const [path, setPath] = useState("");
+  const [shownOnly, setShownOnly] = useState(request.rows !== undefined);
 
   const toggle = (index: number) => {
     const next = new Set(chosen);
@@ -45,11 +46,17 @@ export function ExportData({ request }: { readonly request: ExportRequest }) {
       className="flex flex-col gap-gap p-gap"
       onSubmit={(event) => {
         event.preventDefault();
-        if (ready) answer(exportAnswer({ format, columns, path: path.trim() }));
+        if (ready) {
+          answer(
+            exportAnswer({ format, columns, path: path.trim(), ...(request.rows === undefined ? {} : { shownOnly }) }),
+          );
+        }
       }}
     >
       <Dialog.Title className="font-semibold">{request.title}</Dialog.Title>
-      <p className="text-ink-muted">{request.note}</p>
+      <p className="text-ink-muted" data-testid="export-note">
+        {request.rows !== undefined && shownOnly ? request.rows.shownNote : request.note}
+      </p>
       <div className="grid grid-cols-[max-content_1fr] gap-x-gap gap-y-cell">
         <FieldRow label="Format">
           <div
@@ -84,6 +91,26 @@ export function ExportData({ request }: { readonly request: ExportRequest }) {
             ))}
           </div>
         </FieldRow>
+        {request.rows === undefined ? null : (
+          <FieldRow label="Rows">
+            <div role="radiogroup" aria-label="Rows" className="flex flex-wrap gap-gap">
+              {[
+                { shown: true, label: request.rows.shownLabel },
+                { shown: false, label: request.rows.wholeLabel },
+              ].map((choice) => (
+                <label key={choice.label} className="flex h-row items-center gap-cell">
+                  <input
+                    type="radio"
+                    name="export-rows"
+                    checked={shownOnly === choice.shown}
+                    onChange={() => setShownOnly(choice.shown)}
+                  />
+                  {choice.label}
+                </label>
+              ))}
+            </div>
+          </FieldRow>
+        )}
         <FieldRow label="Columns">
           <span className="text-ink-muted">
             {columns.length} of {request.columns.length}

@@ -18,7 +18,12 @@ import {
 } from "@table-craft/desktop/engine/protocol.js";
 import { currentPlatform, formatChord } from "@table-craft/desktop/renderer/actions/chords.js";
 import { REGION_ATTRIBUTE } from "@table-craft/desktop/renderer/actions/context.js";
-import { GRID_ACTION_IDS, type SortArgs } from "@table-craft/desktop/renderer/actions/gridActions.js";
+import {
+  GRID_ACTION_IDS,
+  LOCAL_FILTER_LABELS,
+  LOCAL_FILTER_MENU,
+  type SortArgs,
+} from "@table-craft/desktop/renderer/actions/gridActions.js";
 import { invoke, registry, useActionEnabled } from "@table-craft/desktop/renderer/actions/index.js";
 import { DEFAULT_TEXT, formatCell, type CellFormats } from "@table-craft/desktop/renderer/grid/format.js";
 import { GridToolbar } from "@table-craft/desktop/renderer/grid/GridToolbar.js";
@@ -31,7 +36,7 @@ import {
   visibleColumns,
   type ColumnLayout,
 } from "@table-craft/desktop/renderer/model/columnLayout.js";
-import { gridRowCount, type EditBuffer } from "@table-craft/desktop/renderer/model/editBuffer.js";
+import { bufferRowAt, gridRowCount, type EditBuffer } from "@table-craft/desktop/renderer/model/editBuffer.js";
 import {
   contains,
   extendTo,
@@ -45,7 +50,15 @@ import {
   type GridSelection,
 } from "@table-craft/desktop/renderer/model/gridSelection.js";
 import { sortMarkOf } from "@table-craft/desktop/renderer/model/sortKeys.js";
-import { rowAt, windowOffsetOf, type ResultTab } from "@table-craft/desktop/renderer/state/resultTab.js";
+import {
+  rowAt,
+  shownHeld,
+  shownRowCount,
+  windowOffsetOf,
+  type ResultSearch,
+  type ResultTab,
+} from "@table-craft/desktop/renderer/state/resultTab.js";
+import { FilterChips, FindBar } from "@table-craft/desktop/renderer/grid/FindBar.js";
 import { useLayout } from "@table-craft/desktop/renderer/state/layout.js";
 import { currentFormats, useCellFormats, useRowHeightPx } from "@table-craft/desktop/renderer/state/settings.js";
 import { cn } from "@table-craft/desktop/renderer/ui/cn.js";
@@ -65,6 +78,8 @@ export interface GridHost {
   readonly ensureWindow: (ownerId: string, resultId: string, offset: number) => void;
   readonly select: (ownerId: string, resultId: string, selection: GridSelection | null) => void;
   readonly setLayout: (ownerId: string, resultId: string, layout: ColumnLayout) => void;
+  /** The find bar's typed query; its toggles and the chips are actions. */
+  readonly search: (ownerId: string, resultId: string, change: (search: ResultSearch) => ResultSearch) => Promise<void>;
 }
 
 /** The cell open for editing: its grid row, result column and text. */
@@ -91,6 +106,9 @@ export interface GridEdits {
 }
 
 type EditMark = "modified" | "inserted" | "deleted";
+
+/** A cell the find query matches; `current` is the one the find bar is on. */
+type FindMark = "match" | "current";
 
 const GLYPH_OF: Readonly<Record<TypeClass, keyof typeof TYPE_GLYPHS>> = {
   integer: "number",
@@ -135,6 +153,8 @@ export function ResultGrid({ ownerId, result, host, edits, toolbar, staleText, p
       <GridToolbar result={result} serverSorted={edits !== undefined}>
         {toolbar}
       </GridToolbar>
+      {result.search.open ? <FindBar ownerId={ownerId} result={result} host={host} /> : null}
+      {result.search.filters.length > 0 ? <FilterChips result={result} local={edits !== undefined} /> : null}
       {result.stale ? (
         <div
           role="status"
@@ -174,19 +194,33 @@ interface DrawnRow {
   readonly mark: EditMark | null;
 }
 
+/** Grid row `index`: a shown row's window values, with the buffer's edits named by its held row. */
 function drawnRow(result: ResultTab, buffer: EditBuffer | undefined, index: number): DrawnRow {
-  if (index >= result.rowCount && buffer !== undefined) {
-    const inserted = buffer.inserts[index - result.rowCount];
-    return { values: [], pending: (column) => inserted?.values[column], mark: "inserted" };
-  }
   const values = rowAt(result.windows, index);
   if (buffer === undefined) return { values, pending: () => undefined, mark: null };
-  const updates = buffer.updates.get(index);
+  const row = bufferRowAt(buffer, shownHeld(result), index);
+  if (row?.kind === "inserted") {
+    const inserted = buffer.inserts.find((each) => each.id === row.id);
+    return { values: [], pending: (column) => inserted?.values[column], mark: "inserted" };
+  }
+  if (row === null) return { values, pending: () => undefined, mark: null };
+  const updates = buffer.updates.get(row.row);
   return {
     values,
     pending: (column) => updates?.get(column),
-    mark: buffer.deletes.has(index) ? "deleted" : null,
+    mark: buffer.deletes.has(row.row) ? "deleted" : null,
   };
+}
+
+/** The loaded windows' matched cells as `row * columnCount + column` keys. */
+function matchKeys(matches: ResultTab["matches"], width: number): ReadonlySet<number> {
+  const keys = new Set<number>();
+  for (const pairs of Object.values(matches)) {
+    for (let index = 0; index + 1 < pairs.length; index += 2) {
+      keys.add((pairs[index] as number) * width + (pairs[index + 1] as number));
+    }
+  }
+  return keys;
 }
 
 function cellOf(target: EventTarget): Cell | null {
@@ -200,7 +234,10 @@ function Rows({ ownerId, result, visible, host, edits }: RowsProps) {
   const scroller = useRef<HTMLDivElement>(null);
   const dragging = useRef(false);
   const { windows, selection } = result;
-  const rowCount = edits === undefined ? result.rowCount : gridRowCount(edits.buffer, result.rowCount);
+  const rowCount = edits === undefined ? shownRowCount(result) : gridRowCount(edits.buffer, shownHeld(result));
+  const width = result.columns.length;
+  const matched = useMemo(() => matchKeys(result.matches, width), [result.matches, width]);
+  const current = result.search.current;
   const bounds: GridBounds = { rows: rowCount, columns: visible.length };
   const rowHeightPx = useRowHeightPx();
   const virtualizer = useVirtualizer({
@@ -208,6 +245,9 @@ function Rows({ ownerId, result, visible, host, edits }: RowsProps) {
     getScrollElement: () => scroller.current,
     estimateSize: () => rowHeightPx,
     overscan: OVERSCAN_ROWS,
+    // The sticky header row sits above the rows in the scroller, so a row brought into view at the
+    // bottom must clear one more row height than the virtualizer knows of.
+    scrollPaddingEnd: rowHeightPx,
   });
   useEffect(() => virtualizer.measure(), [virtualizer, rowHeightPx]);
   const formats = useCellFormats();
@@ -242,6 +282,14 @@ function Rows({ ownerId, result, visible, host, edits }: RowsProps) {
   useEffect(() => {
     if (focusRow !== undefined) virtualizer.scrollToIndex(focusRow, { align: "auto" });
   }, [focusRow, virtualizer]);
+
+  // The find bar's current match may sit in a column scrolled out of view.
+  const currentPosition = current === null ? -1 : visible.indexOf(current.column);
+  const currentRow = current?.row;
+  useEffect(() => {
+    if (currentRow !== undefined && currentPosition >= 0) reveal({ row: currentRow, column: currentPosition });
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- reveal reads the scroller, not state
+  }, [currentRow, currentPosition]);
 
   const select = (next: ResultTab["selection"]) => host().select(ownerId, result.id, next);
 
@@ -413,8 +461,15 @@ function Rows({ ownerId, result, visible, host, edits }: RowsProps) {
                     );
                   }
                   const pending = row.pending(column);
+                  const find: FindMark | null =
+                    current?.row === item.index && current.column === column
+                      ? "current"
+                      : matched.has(item.index * width + column)
+                        ? "match"
+                        : null;
                   return (
                     <GridCell
+                      find={find}
                       key={column}
                       value={row.mark === "inserted" ? undefined : row.values?.[column]}
                       pending={pending}
@@ -549,6 +604,7 @@ function GridCell({
   value,
   pending,
   mark,
+  find,
   row,
   position,
   typeClass,
@@ -559,6 +615,7 @@ function GridCell({
   readonly value: WireValue | undefined;
   readonly pending: CellInput | undefined;
   readonly mark: EditMark | null;
+  readonly find: FindMark | null;
   readonly row: number;
   readonly position: number;
   readonly typeClass: TypeClass;
@@ -576,10 +633,17 @@ function GridCell({
       aria-selected={selected}
       data-null={shown.tone === "null" ? true : undefined}
       data-edit={mark ?? undefined}
+      data-match={find ?? undefined}
       className={cn(
         CELL,
         numeric && "text-right",
-        selected ? "bg-grid-selection" : mark !== null && MARK_CLASS[mark],
+        find === "current"
+          ? "bg-search-match font-semibold"
+          : selected
+            ? "bg-grid-selection"
+            : find === "match"
+              ? "bg-search-match"
+              : mark !== null && MARK_CLASS[mark],
         mark === "deleted" && "line-through",
         focused && "outline outline-1 -outline-offset-1 outline-accent",
         shown.tone !== null && "text-grid-null italic",
@@ -708,6 +772,11 @@ function HeaderCell({ ownerId, host, result, column, position, bounds, select }:
           <ContextMenu.Separator className="my-1 h-px bg-line" />
           <MenuItem actionId={GRID_ACTION_IDS.hideColumn} args={{ column }} />
           <MenuItem actionId={GRID_ACTION_IDS.showAllColumns} />
+          <ContextMenu.Separator className="my-1 h-px bg-line" />
+          <ContextMenu.Label className="px-gap text-ink-muted">Local filter</ContextMenu.Label>
+          {LOCAL_FILTER_MENU.map((actionId) => (
+            <MenuItem key={actionId} actionId={actionId} label={LOCAL_FILTER_LABELS[actionId]} args={{ column }} />
+          ))}
           <ContextMenu.Separator className="my-1 h-px bg-line" />
           <MenuItem actionId={GRID_ACTION_IDS.copyColumnName} args={{ column }} />
         </ContextMenu.Content>

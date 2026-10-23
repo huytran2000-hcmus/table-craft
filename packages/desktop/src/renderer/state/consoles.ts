@@ -47,9 +47,12 @@ import { useModal, type ModalRequest } from "@table-craft/desktop/renderer/state
 import {
   planTabOf,
   resultTabOf,
+  searchedColumnsChanged,
+  shownRowCount,
   type AnalysedEffect,
   type ConsoleTab,
   type PlanTab,
+  type ResultSearch,
   type ResultTab,
 } from "@table-craft/desktop/renderer/state/resultTab.js";
 import { createResultWindows, toError } from "@table-craft/desktop/renderer/state/resultWindows.js";
@@ -75,6 +78,7 @@ export {
   type PlanTab,
   type PlanView,
   type ResultFetch,
+  type ResultSearch,
   type ResultTab,
 } from "@table-craft/desktop/renderer/state/resultTab.js";
 export { canFetch, toError } from "@table-craft/desktop/renderer/state/resultWindows.js";
@@ -241,7 +245,12 @@ export interface ConsolesState {
     format: ExportFormat,
     path: string,
     columns: readonly number[],
+    shownOnly?: boolean,
   ) => Promise<boolean>;
+  /** Changes the result's find bar or local filter chips; the engine recomputes the view (plan 023). */
+  readonly search: (id: string, resultId: string, change: (search: ResultSearch) => ResultSearch) => Promise<void>;
+  /** Moves the find bar to the next match, or the previous one. */
+  readonly findNext: (id: string, resultId: string, backward: boolean) => Promise<void>;
   readonly showResult: (id: string, resultId: string) => void;
   readonly togglePin: (id: string, resultId: string) => void;
   /** False when the engine refused, which the Output log then explains. */
@@ -1066,22 +1075,36 @@ export function createConsolesStore(dependencies: ConsolesDependencies) {
         try {
           const state = await client.call("result.sort", { handle: result.handle, keys: [...keys] });
           invalidateWindows(resultId);
-          updateResult(id, resultId, (latest) => ({ ...latest, ...state, sort: keys, windows: {}, selection: null }));
+          updateResult(id, resultId, (latest) => ({
+            ...latest,
+            ...state,
+            sort: keys,
+            windows: {},
+            matches: {},
+            selection: null,
+            search: { ...latest.search, current: null },
+          }));
+          await windows.refreshView(id, resultId);
         } catch (cause) {
           logError(id, firstLine(result.sql), toError(cause));
         }
       },
 
       setLayout(id, resultId, layout) {
+        const before = resultOf(id, resultId);
         updateResult(id, resultId, (latest) => {
           const visible = layout.hidden.filter((hidden) => !hidden).length;
           const hiddenChanged = layout.hidden.some((hidden, index) => hidden !== latest.layout.hidden[index]);
           const selection = hiddenChanged
             ? null
-            : clampSelection(latest.selection, { rows: latest.rowCount, columns: visible });
+            : clampSelection(latest.selection, { rows: shownRowCount(latest), columns: visible });
           return { ...latest, layout, selection };
         });
+        if (before !== undefined && searchedColumnsChanged(before.layout, layout)) void windows.applyView(id, resultId);
       },
+
+      search: windows.search,
+      findNext: windows.findNext,
 
       select(id, resultId, selection) {
         updateResult(id, resultId, (latest) => (latest.selection === selection ? latest : { ...latest, selection }));
@@ -1184,7 +1207,9 @@ export function createConsolesStore(dependencies: ConsolesDependencies) {
                 autoChars: kept ? latest.autoChars : fresh.autoChars,
                 sort,
                 windows: sort.length > 0 ? {} : fresh.windows,
+                search: kept ? { ...latest.search, current: null } : fresh.search,
               }));
+              if (kept) await windows.applyView(id, resultId);
             }
             patch(id, {
               transactionOpen,
@@ -1209,8 +1234,8 @@ export function createConsolesStore(dependencies: ConsolesDependencies) {
 
       extract: windows.extract,
 
-      async exportTo(id, resultId, format, path, columns) {
-        const task = await windows.exportTo(id, resultId, format, path, columns);
+      async exportTo(id, resultId, format, path, columns, shownOnly) {
+        const task = await windows.exportTo(id, resultId, format, path, columns, shownOnly);
         const result = resultOf(id, resultId);
         if (task === null || result === undefined) return false;
         const sql = firstLine(result.sql);

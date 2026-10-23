@@ -59,6 +59,7 @@ export interface ExportChoice {
   readonly format: ExportFormat;
   readonly columns: readonly number[];
   readonly path: string;
+  readonly shownOnly: boolean;
 }
 
 /** The Export Data dialog (decision 040): a format, the columns and a file; null when cancelled. */
@@ -67,6 +68,7 @@ export async function askExport(request: {
   readonly columns: readonly string[];
   readonly chosen: readonly number[];
   readonly note: string;
+  readonly rows?: { readonly shownLabel: string; readonly wholeLabel: string; readonly shownNote: string };
 }): Promise<ExportChoice | null> {
   const modal = useModal.getState();
   const answer = await modal.ask({
@@ -77,6 +79,7 @@ export async function askExport(request: {
     columns: request.columns,
     chosen: request.chosen,
     note: request.note,
+    ...(request.rows === undefined ? {} : { rows: request.rows }),
     retarget: (path, format) => (isExportFormat(format) ? withExtension(path, format) : path),
     browse: async (format, current) => {
       const exportFormat = isExportFormat(format) ? format : "csv";
@@ -88,7 +91,7 @@ export async function askExport(request: {
   if (answer === null) return null;
   const parsed = parseExportAnswer(answer);
   if (!isExportFormat(parsed.format)) return null;
-  return { format: parsed.format, columns: parsed.columns, path: parsed.path };
+  return { format: parsed.format, columns: parsed.columns, path: parsed.path, shownOnly: parsed.shownOnly === true };
 }
 
 export async function reportExportFailure(cause: unknown): Promise<void> {

@@ -4,13 +4,24 @@ import {
   type ExportFormat,
   type ExportTask,
   type ExtractorKind,
+  type FoundMatch,
   type ResultState,
   type RowRange,
 } from "@table-craft/desktop/engine/protocol.js";
 import { EngineRequestError, type EngineClient } from "@table-craft/desktop/renderer/engine/client.js";
 import { widerChars } from "@table-craft/desktop/renderer/grid/widths.js";
 import type { ExportStarter } from "@table-craft/desktop/renderer/state/exports.js";
-import { withWindow, type ResultTab } from "@table-craft/desktop/renderer/state/resultTab.js";
+import { visibleColumns } from "@table-craft/desktop/renderer/model/columnLayout.js";
+import { selectCell } from "@table-craft/desktop/renderer/model/gridSelection.js";
+import {
+  findsCells,
+  shownRowCount,
+  viewSpecOf,
+  withMatches,
+  withWindow,
+  type ResultSearch,
+  type ResultTab,
+} from "@table-craft/desktop/renderer/state/resultTab.js";
 import { currentFormats } from "@table-craft/desktop/renderer/state/settings.js";
 
 const UNEXPECTED_HINT = "Restart the app; if it happens again, report it.";
@@ -48,6 +59,14 @@ export function createResultWindows(owner: ResultOwner) {
   const requested = new Map<string, Set<number>>();
   /** Bumped when a tab's loaded windows stop matching the engine's order; older answers are dropped. */
   const generations = new Map<string, number>();
+  /** The latest view request per result tab; an answer to an earlier one is dropped. */
+  const viewRequests = new Map<string, number>();
+
+  function nextViewRequest(resultId: string): number {
+    const request = (viewRequests.get(resultId) ?? 0) + 1;
+    viewRequests.set(resultId, request);
+    return request;
+  }
 
   /** Loaded windows no longer match the engine's order: drop them, and any answer still on its way. */
   function invalidate(resultId: string): void {
@@ -58,6 +77,7 @@ export function createResultWindows(owner: ResultOwner) {
   function forget(resultId: string): void {
     requested.delete(resultId);
     generations.delete(resultId);
+    viewRequests.delete(resultId);
   }
 
   /** `result` after the engine reported `state`; rows that moved are fetched again as they show. */
@@ -74,8 +94,9 @@ export function createResultWindows(owner: ResultOwner) {
   function ensureWindow(ownerId: string, resultId: string, offset: number): void {
     const result = owner.result(ownerId, resultId);
     const client = owner.client(ownerId);
-    if (result === undefined || client === undefined || result.stale || offset in result.windows) return;
-    if (offset >= result.rowCount) return;
+    if (result === undefined || client === undefined || result.stale) return;
+    if (offset in result.windows && (!findsCells(result) || offset in result.matches)) return;
+    if (offset >= shownRowCount(result)) return;
     const inFlight = requested.get(resultId) ?? new Set<number>();
     requested.set(resultId, inFlight);
     if (inFlight.has(offset)) return;
@@ -85,11 +106,15 @@ export function createResultWindows(owner: ResultOwner) {
       .call("result.window", { handle: result.handle, offset, limit: RESULT_WINDOW_ROWS })
       .then((window) => {
         if ((generations.get(resultId) ?? 0) !== generation) return;
-        owner.update(ownerId, resultId, (latest) => ({
-          ...latest,
-          windows: withWindow(latest.windows, window.offset, window.rows),
-          autoChars: widerChars(latest.autoChars, window.rows, latest.typeClasses, currentFormats()),
-        }));
+        owner.update(ownerId, resultId, (latest) => {
+          const windows = withWindow(latest.windows, window.offset, window.rows);
+          return {
+            ...latest,
+            windows,
+            matches: withMatches(latest.matches, windows, window.offset, window.matches ?? []),
+            autoChars: widerChars(latest.autoChars, window.rows, latest.typeClasses, currentFormats()),
+          };
+        });
       })
       .catch((cause: unknown) => {
         if ((generations.get(resultId) ?? 0) === generation) owner.failed(ownerId, result, toError(cause), true);
@@ -106,6 +131,7 @@ export function createResultWindows(owner: ResultOwner) {
       const state = await client.call("result.fetchMore", { handle: result.handle, all, ...result.paging });
       owner.update(ownerId, resultId, (latest) => withState(latest, state));
       owner.fetched(ownerId, resultId, state.rowCount);
+      await refreshView(ownerId, resultId);
     } catch (cause) {
       owner.failed(ownerId, result, toError(cause), false);
       owner.update(ownerId, resultId, (latest) => ({ ...latest, cursorOpen: false }));
@@ -151,7 +177,8 @@ export function createResultWindows(owner: ResultOwner) {
   }
 
   /**
-   * Starts a background export of the result (decision 040); null when it could not start. Only
+   * Starts a background export of the result (decision 040), or with `shownOnly` of the rows the
+   * grid shows, in its order (plan 023); null when it could not start. Only
    * an export that drains the console's own cursor keeps the grid busy, until its task ends.
    */
   async function exportTo(
@@ -160,13 +187,14 @@ export function createResultWindows(owner: ResultOwner) {
     format: ExportFormat,
     path: string,
     columns: readonly number[],
+    shownOnly = false,
   ): Promise<ExportTask | null> {
     const result = owner.result(ownerId, resultId);
     const datasourceId = owner.datasourceOf(ownerId);
     if (result === undefined || datasourceId === undefined || result.stale || result.fetching !== null) return null;
     try {
       const task = await owner.exports.start(datasourceId, {
-        source: { kind: "result", handle: result.handle, columns: [...columns] },
+        source: { kind: "result", handle: result.handle, columns: [...columns], ...(shownOnly ? { shownOnly } : {}) },
         format,
         path,
       });
@@ -183,7 +211,117 @@ export function createResultWindows(owner: ResultOwner) {
     }
   }
 
-  return { invalidate, forget, withState, ensureWindow, fetchMore, stopFetch, extract, exportTo };
+  /** The match `match` selected and scrolled to, as the find bar's current one. */
+  function onMatch(result: ResultTab, match: FoundMatch | null): ResultTab {
+    const search = { ...result.search, current: match };
+    if (match === null) return { ...result, search };
+    const column = visibleColumns(result.layout).indexOf(match.column);
+    return { ...result, search, selection: selectCell({ row: match.row, column: Math.max(column, 0) }) };
+  }
+
+  /**
+   * Sends the tab's find query and chips to the engine, which computes the view (decision 050).
+   * Rows the view hides or brings back reload as they show; with no row hidden before or after,
+   * the loaded rows stay and only their matches reload. A live query then goes to its first match.
+   */
+  async function applyView(ownerId: string, resultId: string): Promise<void> {
+    const result = owner.result(ownerId, resultId);
+    const client = owner.client(ownerId);
+    if (result === undefined || client === undefined || result.stale) return;
+    const spec = viewSpecOf(result, currentFormats());
+    if (spec === null && result.view === null) return;
+    const request = nextViewRequest(resultId);
+    try {
+      const view = await client.call("result.view", { handle: result.handle, spec });
+      if (viewRequests.get(resultId) !== request) return;
+      invalidate(resultId);
+      owner.update(ownerId, resultId, (latest) => {
+        const moved = latest.view?.filtered === true || view.filtered;
+        return {
+          ...latest,
+          view: spec === null ? null : view,
+          windows: moved ? {} : latest.windows,
+          matches: {},
+          selection: moved ? null : latest.selection,
+          search: { ...latest.search, current: null },
+        };
+      });
+      const shown = owner.result(ownerId, resultId);
+      if (shown === undefined || !findsCells(shown)) return;
+      // The grid asks for windows as they change; kept windows only lost their matches.
+      for (const offset of Object.keys(shown.windows)) ensureWindow(ownerId, resultId, Number(offset));
+      if (view.matches === 0) return;
+      const first = await client.call("result.findMatch", { handle: shown.handle, from: null, backward: false });
+      if (viewRequests.get(resultId) !== request) return;
+      owner.update(ownerId, resultId, (latest) => onMatch(latest, first));
+    } catch (cause) {
+      if (viewRequests.get(resultId) === request) owner.failed(ownerId, result, toError(cause), false);
+    }
+  }
+
+  /** The search state changed: keep it on the tab and recompute the view when what it asks for did. */
+  async function search(
+    ownerId: string,
+    resultId: string,
+    change: (search: ResultSearch) => ResultSearch,
+  ): Promise<void> {
+    const before = owner.result(ownerId, resultId);
+    if (before === undefined) return;
+    const formats = currentFormats();
+    const spec = JSON.stringify(viewSpecOf(before, formats));
+    owner.update(ownerId, resultId, (latest) => ({ ...latest, search: change(latest.search) }));
+    const after = owner.result(ownerId, resultId);
+    if (after !== undefined && JSON.stringify(viewSpecOf(after, formats)) !== spec) {
+      await applyView(ownerId, resultId);
+    }
+  }
+
+  /** After fetching or sorting changed the held rows, asks the engine for the view over them. */
+  async function refreshView(ownerId: string, resultId: string): Promise<void> {
+    const result = owner.result(ownerId, resultId);
+    const client = owner.client(ownerId);
+    if (result?.view == null || client === undefined || result.stale) return;
+    const request = nextViewRequest(resultId);
+    try {
+      const view = await client.call("result.viewState", { handle: result.handle });
+      if (viewRequests.get(resultId) !== request) return;
+      owner.update(ownerId, resultId, (latest) => ({ ...latest, view }));
+    } catch (cause) {
+      if (viewRequests.get(resultId) === request) owner.failed(ownerId, result, toError(cause), false);
+    }
+  }
+
+  /** Moves the find bar to the next match after the focused cell, or before it when `backward`. */
+  async function findNext(ownerId: string, resultId: string, backward: boolean): Promise<void> {
+    const result = owner.result(ownerId, resultId);
+    const client = owner.client(ownerId);
+    if (result?.view == null || client === undefined || result.stale || !findsCells(result)) return;
+    const focus = result.selection?.focus;
+    const column = focus === undefined ? undefined : visibleColumns(result.layout)[focus.column];
+    const from =
+      focus === undefined || column === undefined ? (result.search.current ?? null) : { row: focus.row, column };
+    try {
+      const match = await client.call("result.findMatch", { handle: result.handle, from, backward });
+      owner.update(ownerId, resultId, (latest) => onMatch(latest, match));
+    } catch (cause) {
+      owner.failed(ownerId, result, toError(cause), false);
+    }
+  }
+
+  return {
+    invalidate,
+    forget,
+    withState,
+    ensureWindow,
+    fetchMore,
+    stopFetch,
+    extract,
+    exportTo,
+    applyView,
+    search,
+    refreshView,
+    findNext,
+  };
 }
 
 export type ResultWindows = ReturnType<typeof createResultWindows>;

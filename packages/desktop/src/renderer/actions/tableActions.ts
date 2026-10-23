@@ -15,6 +15,7 @@ import { rectOf, selectCell } from "@table-craft/desktop/renderer/model/gridSele
 import { focusRegion } from "@table-craft/desktop/renderer/shell/focus.js";
 import { useModal } from "@table-craft/desktop/renderer/state/modal.js";
 import { usePalette } from "@table-craft/desktop/renderer/state/palette.js";
+import { shownHeld } from "@table-craft/desktop/renderer/state/resultTab.js";
 import {
   canReload,
   isEditable,
@@ -100,7 +101,7 @@ export function selectedRows(session: TableSession): readonly number[] {
 
 /** The selected rows the engine holds, by result row: values that are not pending in the buffer. */
 function heldRows(session: TableSession): readonly number[] {
-  const held = session.result?.rowCount ?? 0;
+  const held = session.result === null ? 0 : shownHeld(session.result);
   return selectedRows(session).flatMap((index) => {
     const row = bufferRowAt(session.buffer, held, index);
     return row?.kind === "held" ? [row.row] : [];

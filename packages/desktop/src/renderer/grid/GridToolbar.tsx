@@ -56,6 +56,7 @@ export function GridToolbar({
           cursorOpen: result.cursorOpen,
           sorted: !serverSorted && result.sort.length > 0,
           fetchAllCap: result.paging.fetchAllCap,
+          shown: result.view?.filtered === true ? result.view.shown : null,
         })}
       </span>
       {result.fetching === null ? null : (
@@ -65,6 +66,12 @@ export function GridToolbar({
         </span>
       )}
       <div className="flex-1" />
+      <ActionButton actionId={GRID_ACTION_IDS.find} compact pressed={result.search.open} />
+      <ActionButton
+        actionId={GRID_ACTION_IDS.filterRows}
+        compact
+        pressed={result.search.open && result.search.rowsOnly}
+      />
       <select
         aria-label="Extractor"
         className="h-row rounded border border-line bg-panel px-1 text-ui text-ink"
