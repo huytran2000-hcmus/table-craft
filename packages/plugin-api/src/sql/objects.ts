@@ -45,7 +45,12 @@ export function tableDesignOf(
     primaryKeyName: relation.primaryKey?.name ?? null,
     indexes: relation.indexes
       .filter((index) => !index.primary && !primary.has(index.name))
-      .map((index): IndexDesign => ({ ...index, columns: index.columns, original: index.name })),
+      .map((index): IndexDesign => ({
+        name: index.name,
+        columns: index.columns,
+        unique: index.unique,
+        original: index.name,
+      })),
     foreignKeys: relation.foreignKeys.map((key): ForeignKeyDesign => ({
       name: key.name,
       columns: key.columns,

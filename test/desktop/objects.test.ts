@@ -9,6 +9,7 @@ import type {
   ObjectChange,
   TableDesign,
 } from "@table-craft/desktop/engine/protocol.js";
+import { engineRequestSchema } from "@table-craft/desktop/engine/requests.js";
 import { execute, exportHarness, openSession, resultOf, type ExportHarness } from "../support/engineExports.js";
 import { SQLITE_MANIFEST } from "../support/manifests.js";
 import { seededSqliteFile } from "../support/sqliteFixture.js";
@@ -101,6 +102,24 @@ describe("engine objects", () => {
     expect(design.name).toBe("customers");
     expect(design.primaryKey).toEqual(["id"]);
     expect(design.columns.map((column) => column.original)).toEqual(design.columns.map((column) => column.name));
+  });
+
+  it("givenTableWithIndex_whenDesignSentBackForPreview_thenRequestAcceptedAndNothingToChange", async () => {
+    const opened = open(seededSqliteFile());
+    const design = resultOf<TableDesign>(
+      await opened.connection.handle({ id: 5, type: "objects.design", path: MAIN, relation: "orders" }),
+    );
+    expect(design.indexes.length).toBeGreaterThan(0);
+
+    const parsed = engineRequestSchema.safeParse({
+      id: 7,
+      type: "objects.script",
+      change: { kind: "alterTable", path: MAIN, relation: "orders", design },
+    });
+
+    expect(parsed.error?.issues).toBeUndefined();
+    const unchanged = await script(opened, { kind: "alterTable", path: MAIN, relation: "orders", design });
+    expect(unchanged.statements).toEqual([]);
   });
 
   it("givenPreviewThatDiffers_whenApplied_thenRefusedAndNothingRuns", async () => {
