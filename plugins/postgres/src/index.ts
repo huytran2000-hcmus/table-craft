@@ -9,6 +9,7 @@ import {
   type Column,
   type ConnectOptions,
   type DatasourcePlugin,
+  type ExecuteOptions,
   type ExecuteResult,
   type ExplainedPlan,
   type ExplainOptions,
@@ -110,6 +111,8 @@ const BUSY_MESSAGE = "Another statement is still running in this session.";
 const DEFAULT_PORT = 5432;
 const MAX_PORT = 65_535;
 const CONNECT_TIMEOUT_MS = 10_000;
+/** How long `close` waits for the server to acknowledge Terminate before dropping the socket. */
+const CLOSE_GRACE_MS = 3000;
 /** Rows per cursor fetch: one result-window's worth, so the first window costs one round trip. */
 const FETCH_ROWS = 500;
 /** SQLSTATE `query_canceled`, raised by `pg_cancel_backend`. */
@@ -152,13 +155,22 @@ type Cell = (text: string) => WireValue;
 
 const asText: Cell = (text) => text;
 
+function byteaHex(text: string): string {
+  return text.startsWith(BYTEA_HEX_PREFIX) ? text.slice(BYTEA_HEX_PREFIX.length) : text;
+}
+
 function bytea(text: string): WireValue {
-  const hex = text.startsWith(BYTEA_HEX_PREFIX) ? text.slice(BYTEA_HEX_PREFIX.length) : text;
+  const hex = byteaHex(text);
   return {
     kind: "bytes",
     preview: hex.slice(0, BYTES_PREVIEW_LENGTH * HEX_DIGITS_PER_BYTE),
     length: hex.length / HEX_DIGITS_PER_BYTE,
   };
+}
+
+function wholeBytea(text: string): WireValue {
+  const hex = byteaHex(text);
+  return { kind: "bytes", preview: hex, length: hex.length / HEX_DIGITS_PER_BYTE };
 }
 
 /**
@@ -178,6 +190,8 @@ const CELLS: ReadonlyMap<number, Cell> = new Map<number, Cell>([
   [OID.jsonb, (text) => ({ kind: "json", text })],
   [OID.bytea, bytea],
 ]);
+
+const FULL_BYTES_CELLS: ReadonlyMap<number, Cell> = new Map<number, Cell>([...CELLS, [OID.bytea, wholeBytea]]);
 
 const NO_ROWS: AsyncIterable<Row> = {
   [Symbol.asyncIterator]: () => ({ next: () => Promise.resolve({ done: true, value: undefined }) }),
@@ -201,8 +215,11 @@ function sslOption(mode: PostgresConfig["sslMode"]): pg.ClientConfig["ssl"] {
   }
 }
 
-function clientConfig(config: PostgresConfig): pg.ClientConfig {
+function clientConfig(config: PostgresConfig, keepAliveInitialDelayMs?: number): pg.ClientConfig {
   return {
+    ...(keepAliveInitialDelayMs === undefined
+      ? {}
+      : { keepAlive: true, keepAliveInitialDelayMillis: keepAliveInitialDelayMs }),
     host: config.host,
     port: config.port,
     database: config.database,
@@ -218,8 +235,8 @@ function messageOf(cause: unknown): string {
   return cause instanceof Error ? cause.message : String(cause);
 }
 
-async function openClient(config: PostgresConfig): Promise<pg.Client> {
-  const client = new pg.Client(clientConfig(config));
+async function openClient(config: PostgresConfig, keepAliveInitialDelayMs?: number): Promise<pg.Client> {
+  const client = new pg.Client(clientConfig(config, keepAliveInitialDelayMs));
   try {
     await client.connect();
   } catch (cause) {
@@ -299,7 +316,7 @@ class PostgresSession implements Session {
   }
 
   static async open(config: PostgresConfig, options: ConnectOptions): Promise<PostgresSession> {
-    const client = await openClient(config);
+    const client = await openClient(config, options.keepAliveInitialDelayMs);
     try {
       if (options.readOnly) await client.query(READ_ONLY_SQL);
       const types = await client.query<{ oid: number; typname: string }>("SELECT oid, typname FROM pg_type");
@@ -316,7 +333,11 @@ class PostgresSession implements Session {
     }
   }
 
-  async execute(sql: string, params: readonly ParameterValue[] = []): Promise<ExecuteResult> {
+  async execute(
+    sql: string,
+    params: readonly ParameterValue[] = [],
+    options: ExecuteOptions = {},
+  ): Promise<ExecuteResult> {
     if (this.#broken !== null) {
       throw new PluginError("statementFailed", `The connection was lost: ${this.#broken.message}`);
     }
@@ -357,7 +378,8 @@ class PostgresSession implements Session {
         name: field.name,
         type: this.#typeNames.get(field.dataTypeID) ?? null,
       }));
-      const cells = fields.map((field) => CELLS.get(field.dataTypeID) ?? asText);
+      const cellMap = options.fullBytes === true ? FULL_BYTES_CELLS : CELLS;
+      const cells = fields.map((field) => cellMap.get(field.dataTypeID) ?? asText);
       return { columns, rows: this.#rows(cursor, running, first.rows, cells), rowsAffected: null };
     } catch (cause) {
       this.#running = null;
@@ -450,7 +472,17 @@ class PostgresSession implements Session {
 
   async close(): Promise<void> {
     await this.#cancelling.catch(() => undefined);
-    await this.#client.end();
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const graceful = this.#client.end().then(
+      () => true,
+      () => true,
+    );
+    const expired = new Promise<boolean>((resolve) => {
+      timer = setTimeout(() => resolve(false), CLOSE_GRACE_MS);
+    });
+    const ended = await Promise.race([graceful, expired]);
+    clearTimeout(timer);
+    if (!ended) this.#client.connection.stream.destroy();
   }
 }
 

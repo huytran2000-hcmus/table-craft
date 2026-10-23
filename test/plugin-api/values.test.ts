@@ -5,7 +5,7 @@ const LARGE_BLOB_LENGTH = 100;
 
 describe("toWireValue", () => {
   it("givenScalars_whenConverted_thenPassThrough", () => {
-    expect([null, undefined, true, 1.5, "x"].map(toWireValue)).toEqual([null, null, true, 1.5, "x"]);
+    expect([null, undefined, true, 1.5, "x"].map((value) => toWireValue(value))).toEqual([null, null, true, 1.5, "x"]);
   });
 
   it("givenBigInt_whenConverted_thenTaggedAsString", () => {
@@ -15,6 +15,11 @@ describe("toWireValue", () => {
   it("givenLargeBlob_whenConverted_thenPreviewIsTruncatedAndLengthKept", () => {
     const value = toWireValue(new Uint8Array(LARGE_BLOB_LENGTH).fill(0xab));
     expect(value).toEqual({ kind: "bytes", preview: "ab".repeat(BYTES_PREVIEW_LENGTH), length: LARGE_BLOB_LENGTH });
+  });
+
+  it("givenFullBytes_whenConverted_thenEveryByteInPreview", () => {
+    const value = toWireValue(new Uint8Array(LARGE_BLOB_LENGTH).fill(0x0c), { fullBytes: true });
+    expect(value).toEqual({ kind: "bytes", preview: "0c".repeat(LARGE_BLOB_LENGTH), length: LARGE_BLOB_LENGTH });
   });
 
   it("givenDateAndObject_whenConverted_thenTagged", () => {

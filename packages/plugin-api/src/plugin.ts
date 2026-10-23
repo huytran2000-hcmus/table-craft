@@ -51,13 +51,21 @@ export interface ExecuteResult {
 /** A value bound to a placeholder: text the server casts, or SQL NULL (decision 043). */
 export type ParameterValue = string | null;
 
+export interface ExecuteOptions {
+  /**
+   * Ship every byte of a binary value (`BytesValue.preview` holds all of it) instead of the
+   * preview. For an export, which writes values whole (decision 040); a grid never asks.
+   */
+  readonly fullBytes?: boolean;
+}
+
 export interface Session {
   /**
    * Rejects with a `PluginError`: `cancelled` when `cancel` interrupted it, `statementFailed`
    * otherwise. A session runs one statement at a time. `params` are bound by the driver to the
    * dialect's native placeholders in `sql`, as `SqlLanguage.bind` wrote them; never spliced.
    */
-  execute(sql: string, params?: readonly ParameterValue[]): Promise<ExecuteResult>;
+  execute(sql: string, params?: readonly ParameterValue[], options?: ExecuteOptions): Promise<ExecuteResult>;
   /**
    * Present exactly when the plugin declares `cancel`. Interrupts the running statement, which
    * then rejects with `cancelled`, and leaves the session usable; a no-op when nothing runs.
@@ -75,6 +83,10 @@ export interface Session {
    * `cancel` interrupts it as it does `execute`.
    */
   explain?(sql: string, options: ExplainOptions): Promise<ExplainedPlan>;
+  /**
+   * Settles in bounded time even when the network is gone: a graceful goodbye that does not
+   * answer within a few seconds gives way to dropping the socket (decision 040).
+   */
   close(): Promise<void>;
   /** What the server reports about itself, such as `17.4`; null when it reports nothing. */
   readonly serverVersion: string | null;
@@ -86,6 +98,12 @@ export interface ConnectOptions {
    * accidents, not a security boundary: a statement can switch it back off.
    */
   readonly readOnly: boolean;
+  /**
+   * Turn on TCP keepalive, first probe after this many idle milliseconds, so a peer that vanished
+   * without a goodbye is noticed by the OS (decision 040). Absent: the driver's default. A plugin
+   * without a socket ignores it.
+   */
+  readonly keepAliveInitialDelayMs?: number;
 }
 
 /** One statement of a script, in UTF-16 offsets into the text `split` received (decision 023). */

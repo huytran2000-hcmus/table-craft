@@ -9,6 +9,7 @@ import {
   type Column,
   type ConnectOptions,
   type DatasourcePlugin,
+  type ExecuteOptions,
   type ExecuteResult,
   type ExplainedPlan,
   type ExplainOptions,
@@ -117,6 +118,8 @@ const BUSY_MESSAGE = "Another statement is still running in this session.";
 const DEFAULT_PORT = 3306;
 const MAX_PORT = 65_535;
 const CONNECT_TIMEOUT_MS = 10_000;
+/** How long `close` waits for the server to acknowledge COM_QUIT before dropping the socket. */
+const CLOSE_GRACE_MS = 3000;
 /** Rows buffered ahead of the reader before the connection is paused. */
 const FETCH_ROWS = 500;
 /** `ER_QUERY_INTERRUPTED`, raised by `KILL QUERY` in a statement that checks for it. */
@@ -193,7 +196,17 @@ function typeName(field: mysql.FieldPacket): string | null {
  * `dateStrings` and `bigNumberStrings` keep temporal and exact values as the server's text, so
  * the cast below only decides what JavaScript can represent exactly (decision 017).
  */
+const FULL_BYTES: ExecuteOptions = { fullBytes: true };
+
 function cast(field: mysql.TypeCastField, next: mysql.TypeCastNext): WireValue {
+  return castCell(field, next, {});
+}
+
+function fullBytesCast(field: mysql.TypeCastField, next: mysql.TypeCastNext): WireValue {
+  return castCell(field, next, FULL_BYTES);
+}
+
+function castCell(field: mysql.TypeCastField, next: mysql.TypeCastNext, options: ExecuteOptions): WireValue {
   switch (field.type) {
     case "JSON": {
       const text = field.string("utf8");
@@ -209,7 +222,7 @@ function cast(field: mysql.TypeCastField, next: mysql.TypeCastNext): WireValue {
       return value !== 0;
     }
     default:
-      return toWireValue(next());
+      return toWireValue(next(), options);
   }
 }
 
@@ -236,9 +249,12 @@ function messageOf(cause: unknown): string {
   return cause instanceof Error ? cause.message : String(cause);
 }
 
-function openConnection(config: MysqlConfig): Promise<mysql.Connection> {
+function openConnection(config: MysqlConfig, keepAliveInitialDelayMs?: number): Promise<mysql.Connection> {
   const connection = mysql.createConnection({
     ...CONNECTION_OPTIONS,
+    ...(keepAliveInitialDelayMs === undefined
+      ? {}
+      : { enableKeepAlive: true, keepAliveInitialDelay: keepAliveInitialDelayMs }),
     host: config.host,
     port: config.port,
     user: config.user,
@@ -284,6 +300,17 @@ function closeConnection(connection: mysql.Connection): Promise<void> {
   });
 }
 
+/** `closeConnection`, but a server that does not answer within `CLOSE_GRACE_MS` loses the socket. */
+async function closeWithin(connection: mysql.Connection): Promise<void> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const expired = new Promise<boolean>((resolve) => {
+    timer = setTimeout(() => resolve(false), CLOSE_GRACE_MS);
+  });
+  const ended = await Promise.race([closeConnection(connection).then(() => true), expired]);
+  clearTimeout(timer);
+  if (!ended) connection.destroy();
+}
+
 const NO_ROWS: AsyncIterable<Row> = {
   [Symbol.asyncIterator]: () => ({ next: () => Promise.resolve({ done: true, value: undefined }) }),
 };
@@ -311,9 +338,15 @@ interface InFlight {
  * binds them (decision 043); it is closed once the statement ends, as mysql2 would otherwise
  * cache one per distinct text for the life of the connection.
  */
-function start(connection: mysql.Connection, sql: string, params: readonly ParameterValue[]): InFlight {
+function start(
+  connection: mysql.Connection,
+  sql: string,
+  params: readonly ParameterValue[],
+  executeOptions: ExecuteOptions,
+): InFlight {
   const prepared = params.length > 0;
-  const options = { sql, rowsAsArray: true, typeCast: cast };
+  const typeCast = executeOptions.fullBytes === true ? fullBytesCast : cast;
+  const options = { sql, rowsAsArray: true, typeCast };
   const query = prepared ? connection.execute({ ...options, values: [...params] }) : connection.query(options);
   // The stream reports the error; this listener stops the query's own emit from throwing.
   query.on("error", () => undefined);
@@ -368,7 +401,11 @@ class MysqlSession implements Session {
     });
   }
 
-  async execute(sql: string, params: readonly ParameterValue[] = []): Promise<ExecuteResult> {
+  async execute(
+    sql: string,
+    params: readonly ParameterValue[] = [],
+    options: ExecuteOptions = {},
+  ): Promise<ExecuteResult> {
     if (this.#broken !== null) {
       throw new PluginError("statementFailed", `The connection was lost: ${this.#broken.message}`);
     }
@@ -376,7 +413,7 @@ class MysqlSession implements Session {
     await this.#cancelling.catch(() => undefined);
     const running: Running = { cancelRequested: false };
     this.#running = running;
-    const inFlight = start(this.#connection, sql, params);
+    const inFlight = start(this.#connection, sql, params, options);
     try {
       const fields = await inFlight.fields.catch((cause: unknown) => {
         if (transactionEffect(sql, DIALECT) === "end") this.#transaction.open = false;
@@ -517,7 +554,7 @@ class MysqlSession implements Session {
 
   async close(): Promise<void> {
     await this.#cancelling.catch(() => undefined);
-    await closeConnection(this.#connection);
+    await closeWithin(this.#connection);
   }
 }
 
@@ -528,7 +565,7 @@ const plugin: DatasourcePlugin = {
   connectionSchema,
   connect: async (config, options) => {
     const parsed = connectionSchema.parse(config);
-    const connection = await openConnection(parsed);
+    const connection = await openConnection(parsed, options.keepAliveInitialDelayMs);
     try {
       return new MysqlSession(parsed, connection, await prepareConnection(connection, options));
     } catch (cause) {

@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
+  BYTES_PREVIEW_LENGTH,
   CAPABILITIES,
   DefinitionNotFoundError,
   isPluginError,
@@ -8,6 +9,7 @@ import {
   type CompletionCatalog,
   type ConnectOptions,
   type DatasourcePlugin,
+  type ExecuteOptions,
   type ExplainedPlan,
   type GeneratedStatement,
   type PlanNode,
@@ -178,6 +180,10 @@ const LARGE_RESULT_SQL =
   `SELECT a.n + 10 * b.n + 100 * c.n + 1000 * d.n + 10000 * e.n AS n FROM ` +
   ["a", "b", "c", "d", "e"].map((alias) => `(${DIGITS}) ${alias}`).join(" CROSS JOIN ");
 const ROWS_READ_BEFORE_RETURN = 3;
+/** Longer than `BYTES_PREVIEW_LENGTH` and within every fixture's `payload` column (MySQL's is `VARBINARY(64)`). */
+const LONG_BYTES_LENGTH = 48;
+const LONG_BYTES_HEX = "c3";
+const HEX_DIGITS_PER_BYTE = 2;
 
 const SLEEP_SECONDS = 30;
 /** Long enough for the statement to reach the database before it is cancelled. */
@@ -600,6 +606,42 @@ export function runPluginContract(plugin: DatasourcePlugin, fixture: ContractFix
             expect(await run(session, `SELECT * FROM ${TYPE_PROBE_COPY_TABLE} ORDER BY id`)).toEqual(
               fixture.typeProbe.expected,
             );
+          } finally {
+            await run(session, `DROP TABLE IF EXISTS ${TYPE_PROBE_COPY_TABLE}`);
+          }
+        });
+      });
+
+      it("givenFullBytes_whenExecuting_thenBytesPreviewIsComplete", async () => {
+        const dialect = language();
+        const run = async (session: Session, sql: string, options?: ExecuteOptions): Promise<Row[]> =>
+          collect((await session.execute(sql, options)).rows);
+        const whole = LONG_BYTES_HEX.repeat(LONG_BYTES_LENGTH);
+        await withSession(plugin, fixture, async (session) => {
+          const probe = await session.execute(`SELECT id, payload FROM ${TYPE_PROBE_TABLE} ORDER BY id`);
+          const payloadType = probe.columns[1]?.type ?? null;
+          await collect(probe.rows);
+          await run(session, `DROP TABLE IF EXISTS ${TYPE_PROBE_COPY_TABLE}`);
+          await run(session, fixture.typeProbe.copyTable);
+          try {
+            const payload = dialect.literal({ kind: "bytes", preview: whole, length: LONG_BYTES_LENGTH }, payloadType);
+            await run(
+              session,
+              `INSERT INTO ${dialect.quoteIdentifier(TYPE_PROBE_COPY_TABLE)} (id, payload) VALUES (${PROBE_ROW_ID}, ${payload})`,
+            );
+            const select = `SELECT payload FROM ${TYPE_PROBE_COPY_TABLE}`;
+            expect(await run(session, select, { fullBytes: true })).toEqual([
+              [{ kind: "bytes", preview: whole, length: LONG_BYTES_LENGTH }],
+            ]);
+            expect(await run(session, select)).toEqual([
+              [
+                {
+                  kind: "bytes",
+                  preview: whole.slice(0, BYTES_PREVIEW_LENGTH * HEX_DIGITS_PER_BYTE),
+                  length: LONG_BYTES_LENGTH,
+                },
+              ],
+            ]);
           } finally {
             await run(session, `DROP TABLE IF EXISTS ${TYPE_PROBE_COPY_TABLE}`);
           }

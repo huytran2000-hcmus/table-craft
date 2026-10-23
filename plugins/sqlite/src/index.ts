@@ -8,6 +8,7 @@ import {
   type Column,
   type ConnectOptions,
   type DatasourcePlugin,
+  type ExecuteOptions,
   type ExecuteResult,
   type ExplainedPlan,
   type ExplainOptions,
@@ -109,15 +110,20 @@ function plainCell(value: unknown): WireValue {
   return typeof value === "bigint" ? toWireInteger(value) : toWireValue(value);
 }
 
-function cellFor(column: Column): Cell {
+function wholeCell(value: unknown): WireValue {
+  return typeof value === "bigint" ? toWireInteger(value) : toWireValue(value, { fullBytes: true });
+}
+
+function cellFor(column: Column, options: ExecuteOptions): Cell {
+  const plain = options.fullBytes === true ? wholeCell : plainCell;
   const declared = column.type ?? "";
   if (BOOLEAN_DECLARATION.test(declared)) {
-    return (value) => (value === 0n || value === 1n ? value === 1n : plainCell(value));
+    return (value) => (value === 0n || value === 1n ? value === 1n : plain(value));
   }
   if (JSON_DECLARATION.test(declared)) {
-    return (value) => (typeof value === "string" ? { kind: "json", text: value } : plainCell(value));
+    return (value) => (typeof value === "string" ? { kind: "json", text: value } : plain(value));
   }
-  return plainCell;
+  return plain;
 }
 
 /** node:sqlite is synchronous; this turns a throw into a rejection coded as the contract expects. */
@@ -188,7 +194,7 @@ class SqliteSession implements Session {
     this.serverVersion = typeof row?.version === "string" ? row.version : null;
   }
 
-  execute(sql: string, params: readonly ParameterValue[] = []): Promise<ExecuteResult> {
+  execute(sql: string, params: readonly ParameterValue[] = [], options: ExecuteOptions = {}): Promise<ExecuteResult> {
     return settle("statementFailed", () => {
       const database = this.#database;
       if (this.#mode === "manual" && !database.isTransaction && transactionEffect(sql, DIALECT) === null) {
@@ -202,7 +208,14 @@ class SqliteSession implements Session {
         return { columns, rows: readRows([].values(), []), rowsAffected: Number(changes) };
       }
       statement.setReturnArrays(true);
-      return { columns, rows: readRows(statement.iterate(...params), columns.map(cellFor)), rowsAffected: null };
+      return {
+        columns,
+        rows: readRows(
+          statement.iterate(...params),
+          columns.map((column) => cellFor(column, options)),
+        ),
+        rowsAffected: null,
+      };
     });
   }
 

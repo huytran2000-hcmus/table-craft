@@ -56,6 +56,7 @@ export {
   type Column,
   type ConnectOptions,
   type DatasourcePlugin,
+  type ExecuteOptions,
   type ExecuteResult,
   type FormatOptions,
   GENERATED_STATEMENTS,
@@ -79,8 +80,10 @@ export {
 } from "./plugin.js";
 export {
   BYTES_PREVIEW_LENGTH,
+  toBytesValue,
   toWireInteger,
   toWireValue,
+  type WireValueOptions,
   type BigIntValue,
   type BytesValue,
   type DateValue,

@@ -8,7 +8,11 @@ export interface BigIntValue {
 
 export interface BytesValue {
   readonly kind: "bytes";
-  /** Lower-case hex of the first `BYTES_PREVIEW_LENGTH` bytes. */
+  /**
+   * Lower-case hex of the first `BYTES_PREVIEW_LENGTH` bytes, or of every byte when the statement
+   * ran with `ExecuteOptions.fullBytes`; the value is complete exactly when `preview.length` is
+   * twice `length`.
+   */
   readonly preview: string;
   readonly length: number;
 }
@@ -31,11 +35,26 @@ export type WireValue = null | boolean | number | string | BigIntValue | BytesVa
 
 const HEX_RADIX = 16;
 const HEX_BYTE_WIDTH = 2;
+const BYTE_VALUES = 256;
+const HEX_DIGITS = Array.from({ length: BYTE_VALUES }, (_, byte) =>
+  byte.toString(HEX_RADIX).padStart(HEX_BYTE_WIDTH, "0"),
+);
 
 function toHex(bytes: Uint8Array): string {
-  let hex = "";
-  for (const byte of bytes) hex += byte.toString(HEX_RADIX).padStart(HEX_BYTE_WIDTH, "0");
-  return hex;
+  const digits: string[] = new Array<string>(bytes.byteLength);
+  for (let index = 0; index < bytes.byteLength; index += 1) digits[index] = HEX_DIGITS[bytes[index] ?? 0] ?? "";
+  return digits.join("");
+}
+
+export interface WireValueOptions {
+  /** Ship every byte of a binary value instead of the preview (`ExecuteOptions.fullBytes`). */
+  readonly fullBytes?: boolean;
+}
+
+/** A binary value as it crosses the wire: the preview, or every byte with `fullBytes`. */
+export function toBytesValue(bytes: Uint8Array, options: WireValueOptions = {}): BytesValue {
+  const shown = options.fullBytes === true ? bytes : bytes.subarray(0, BYTES_PREVIEW_LENGTH);
+  return { kind: "bytes", preview: toHex(shown), length: bytes.byteLength };
 }
 
 /** A 64-bit integer as a number when it is exact in a double, tagged otherwise. */
@@ -46,7 +65,7 @@ export function toWireInteger(value: bigint | string): number | BigIntValue {
 }
 
 /** Converts what a JavaScript driver typically returns into a `WireValue`. */
-export function toWireValue(value: unknown): WireValue {
+export function toWireValue(value: unknown, options: WireValueOptions = {}): WireValue {
   if (value === null || value === undefined) return null;
   switch (typeof value) {
     case "boolean":
@@ -58,9 +77,7 @@ export function toWireValue(value: unknown): WireValue {
     default:
       break;
   }
-  if (value instanceof Uint8Array) {
-    return { kind: "bytes", preview: toHex(value.subarray(0, BYTES_PREVIEW_LENGTH)), length: value.byteLength };
-  }
+  if (value instanceof Uint8Array) return toBytesValue(value, options);
   if (value instanceof Date) return { kind: "date", iso: value.toISOString() };
   return { kind: "json", text: JSON.stringify(value) };
 }
