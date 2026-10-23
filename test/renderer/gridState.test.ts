@@ -51,7 +51,14 @@ function pagingEngine() {
       }
       case "script.split": {
         const text = String(params.text).trim();
-        const statement: ClassifiedStatement = { from: 0, to: text.length, sql: text, kind: "read", destructive: null };
+        const statement: ClassifiedStatement = {
+          from: 0,
+          to: text.length,
+          sql: text,
+          kind: "read",
+          destructive: null,
+          parameters: [],
+        };
         return Promise.resolve([statement]);
       }
       case "statement.execute": {

@@ -558,9 +558,97 @@ describe("engine scripts and transactions", () => {
     const response = await connected().handle({ id: 1, type: "script.split", text });
 
     expect(resultOf<ClassifiedStatement[]>(response)).toEqual([
-      { from: 0, to: 8, sql: "SELECT 1", kind: "read", destructive: null },
-      { from: 10, to: 23, sql: "DELETE FROM t", kind: "write", destructive: "DELETE without WHERE" },
+      { from: 0, to: 8, sql: "SELECT 1", kind: "read", destructive: null, parameters: [] },
+      {
+        from: 10,
+        to: 23,
+        sql: "DELETE FROM t",
+        kind: "write",
+        destructive: "DELETE without WHERE",
+        parameters: [],
+      },
     ]);
+  });
+
+  it("givenParameters_whenSplit_thenEachStatementListsItsPlaceholders", async () => {
+    const response = await connected().handle({ id: 1, type: "script.split", text: "SELECT :a, '?';\nSELECT ?" });
+
+    expect(resultOf<ClassifiedStatement[]>(response).map((statement) => statement.parameters)).toEqual([
+      [{ name: ":a", from: 7, to: 9, style: "named" }],
+      [{ name: "?1", from: 7, to: 8, style: "positional" }],
+    ]);
+  });
+
+  it("givenParameterValues_whenExecuted_thenBoundNotSpliced", async () => {
+    const connection = connected();
+    const sessionId = await openSession(connection);
+    const value = "x'); DROP TABLE t; --";
+
+    const response = await connection.handle({
+      id: 2,
+      type: "statement.execute",
+      ...PAGING,
+      sessionId,
+      sql: "SELECT :v AS v, :v || ? AS w",
+      parameters: { ":v": value, "?1": null },
+    });
+
+    expect(resultOf<ExecutedStatement>(response).firstWindow.rows).toEqual([[value, null]]);
+  });
+
+  it("givenMissingParameterValue_whenExecuted_thenStatementFailedNamingIt", async () => {
+    const connection = connected();
+    const sessionId = await openSession(connection);
+
+    const response = await connection.handle({
+      id: 2,
+      type: "statement.execute",
+      ...PAGING,
+      sessionId,
+      sql: "SELECT :v",
+      parameters: {},
+    });
+
+    expect(response).toMatchObject({ type: "engine.error", error: { code: "statementFailed" } });
+    expect(response.type === "engine.error" && response.error.message).toMatch(/:v/);
+  });
+
+  it("givenNoParameterValues_whenExecuted_thenRunsVerbatim", async () => {
+    const connection = connected();
+    const sessionId = await openSession(connection);
+
+    const response = await connection.handle({
+      id: 2,
+      type: "statement.execute",
+      ...PAGING,
+      sessionId,
+      sql: "SELECT :v",
+    });
+
+    expect(resultOf<ExecutedStatement>(response).firstWindow.rows).toEqual([[null]]);
+  });
+
+  it("givenText_whenFormatRequested_thenPluginLaysItOut", async () => {
+    const response = await connected().handle({
+      id: 1,
+      type: "sql.format",
+      text: "select a from t",
+      options: { keywordCase: "upper", indentWidth: 2, linesBetweenStatements: 1 },
+    });
+
+    expect(resultOf<string>(response)).toBe("SELECT\n  a\nFROM\n  t");
+  });
+
+  it("givenUnreadableText_whenFormatRequested_thenFormatFailedWithOneLineReason", async () => {
+    const response = await connected().handle({
+      id: 1,
+      type: "sql.format",
+      text: "select ((",
+      options: { keywordCase: "upper", indentWidth: 2, linesBetweenStatements: 1 },
+    });
+
+    expect(response).toMatchObject({ type: "engine.error", error: { code: "formatFailed" } });
+    expect(response.type === "engine.error" && response.error.message).not.toContain("\n");
   });
 
   it("givenTransactionRequest_whenPluginLacksTransactions_thenInvalidRequestError", async () => {

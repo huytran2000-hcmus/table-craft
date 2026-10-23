@@ -26,6 +26,8 @@ const CHOSEN: Settings = {
     },
     systemTitleBar: true,
   },
+  editor: { format: { keywordCase: "lower", indentWidth: 4, linesBetweenStatements: 0 } },
+  console: { parameters: false },
   data: { nullText: "∅", groupDigits: true, pageRows: 100, fetchAllCap: 2_000 },
 };
 

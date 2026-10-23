@@ -45,9 +45,33 @@ export interface DataSettings {
   readonly fetchAllCap: number;
 }
 
+/** Mirrors `KEYWORD_CASES` in plugin-api. */
+export const KEYWORD_CASES = ["upper", "lower", "preserve"] as const;
+
+export type KeywordCase = (typeof KEYWORD_CASES)[number];
+
+/** How Reformat Code lays SQL out (decision 042); sent as the plugin's `FormatOptions`. */
+export interface FormatSettings {
+  readonly keywordCase: KeywordCase;
+  readonly indentWidth: number;
+  /** Blank lines between two statements. */
+  readonly linesBetweenStatements: number;
+}
+
+export interface EditorSettings {
+  readonly format: FormatSettings;
+}
+
+export interface ConsoleSettings {
+  /** Prompt for `:name`, `?` and `$1` before a run and bind the values (decision 043); off runs SQL verbatim. */
+  readonly parameters: boolean;
+}
+
 export interface Settings {
   readonly version: typeof SETTINGS_VERSION;
   readonly appearance: AppearanceSettings;
+  readonly editor: EditorSettings;
+  readonly console: ConsoleSettings;
   readonly data: DataSettings;
 }
 
@@ -62,6 +86,8 @@ export const FONT_SIZE_RANGE: NumberRange = { min: 8, max: 32 };
 export const PAGE_ROWS_RANGE: NumberRange = { min: 10, max: 10_000 };
 export const FETCH_ALL_CAP_RANGE: NumberRange = { min: 1_000, max: 1_000_000 };
 export const NULL_TEXT_LENGTH: NumberRange = { min: 1, max: 16 };
+export const INDENT_WIDTH_RANGE: NumberRange = { min: 1, max: 8 };
+export const LINES_BETWEEN_STATEMENTS_RANGE: NumberRange = { min: 0, max: 5 };
 /** Longer than any installed family's name; guards a hand-edited file, not a real font. */
 export const FONT_FAMILY_MAX_LENGTH = 128;
 
@@ -76,6 +102,12 @@ export const DEFAULT_SETTINGS: Settings = {
       grid: { family: null, sizePx: 12 },
     },
     systemTitleBar: false,
+  },
+  editor: {
+    format: { keywordCase: "upper", indentWidth: 2, linesBetweenStatements: 1 },
+  },
+  console: {
+    parameters: true,
   },
   data: {
     nullText: "<null>",
@@ -134,6 +166,14 @@ export function fetchAllCapError(fetchAllCap: number, pageRows: number): string 
   return fetchAllCap < pageRows ? "The Fetch All limit must be at least the page size." : null;
 }
 
+export function indentWidthError(indentWidth: number): string | null {
+  return rangeError(indentWidth, INDENT_WIDTH_RANGE, "Indent width");
+}
+
+export function linesBetweenStatementsError(lines: number): string | null {
+  return rangeError(lines, LINES_BETWEEN_STATEMENTS_RANGE, "Blank lines between statements");
+}
+
 export function nullTextError(nullText: string): string | null {
   if (nullText.length < NULL_TEXT_LENGTH.min || nullText.length > NULL_TEXT_LENGTH.max) {
     return `NULL text must be ${NULL_TEXT_LENGTH.min} to ${NULL_TEXT_LENGTH.max} characters.`;
@@ -148,6 +188,19 @@ function readFont(value: unknown, fallback: FontSetting): FontSetting {
   return { family, sizePx };
 }
 
+function readFormat(value: unknown, fallback: FormatSettings): FormatSettings {
+  const format = record(value);
+  return {
+    keywordCase: KEYWORD_CASES.includes(format.keywordCase as KeywordCase)
+      ? (format.keywordCase as KeywordCase)
+      : fallback.keywordCase,
+    indentWidth: inRange(format.indentWidth, INDENT_WIDTH_RANGE) ? format.indentWidth : fallback.indentWidth,
+    linesBetweenStatements: inRange(format.linesBetweenStatements, LINES_BETWEEN_STATEMENTS_RANGE)
+      ? format.linesBetweenStatements
+      : fallback.linesBetweenStatements,
+  };
+}
+
 /**
  * A settings document from anything, each field on its own: a field that is missing, of the wrong
  * type or out of range reads as its default, and the others are kept (plan 013 decision 1).
@@ -157,6 +210,8 @@ export function readSettings(input: unknown): Settings {
   const appearance = record(root.appearance);
   const fonts = record(appearance.fonts);
   const data = record(root.data);
+  const editor = record(root.editor);
+  const console = record(root.console);
   const defaults = DEFAULT_SETTINGS;
   const pageRows = inRange(data.pageRows, PAGE_ROWS_RANGE) ? data.pageRows : defaults.data.pageRows;
   const fetchAllCap =
@@ -177,6 +232,10 @@ export function readSettings(input: unknown): Settings {
       },
       systemTitleBar:
         typeof appearance.systemTitleBar === "boolean" ? appearance.systemTitleBar : defaults.appearance.systemTitleBar,
+    },
+    editor: { format: readFormat(editor.format, defaults.editor.format) },
+    console: {
+      parameters: typeof console.parameters === "boolean" ? console.parameters : defaults.console.parameters,
     },
     data: {
       nullText:

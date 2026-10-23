@@ -54,7 +54,7 @@ function split(text: string): ClassifiedStatement[] {
       const verb = sql.split(/\s+/)[0]?.toUpperCase() ?? "";
       const kind = verb === "SELECT" ? "read" : verb === "CREATE" ? "ddl" : "write";
       const destructive = verb === "DELETE" && !/\bWHERE\b/i.test(sql) ? "DELETE without WHERE" : null;
-      statements.push({ from, to: from + sql.length, sql, kind, destructive });
+      statements.push({ from, to: from + sql.length, sql, kind, destructive, parameters: [] });
     }
     start += piece.length + 1;
   }

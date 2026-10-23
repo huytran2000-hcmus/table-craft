@@ -1,5 +1,9 @@
 import { describe, expect, expectTypeOf, it } from "vitest";
 import {
+  KEYWORD_CASES as SETTINGS_KEYWORD_CASES,
+  type FormatSettings,
+} from "@table-craft/desktop/settings/settings.js";
+import {
   EXTRACTOR_KINDS,
   HISTORY_OUTCOMES,
   HISTORY_SOURCES,
@@ -38,7 +42,11 @@ import {
   type NamespaceCatalog,
   type PlanNode,
   type PlanProperty,
+  type FormatOptions,
+  KEYWORD_CASES,
+  type ParameterValue,
   type PluginErrorCode,
+  type SqlParameter,
   type StatementClass,
   type StatementSpan,
   type TransactionMode,
@@ -95,9 +103,16 @@ describe("engine protocol", () => {
   });
 
   it("givenScriptTypes_whenComparedWithPluginApi_thenIdentical", () => {
-    expectTypeOf<protocol.ClassifiedStatement>().toExtend<StatementSpan & StatementClass>();
-    expectTypeOf<StatementSpan & StatementClass>().toExtend<protocol.ClassifiedStatement>();
-    expectTypeOf<keyof protocol.ClassifiedStatement>().toEqualTypeOf<keyof (StatementSpan & StatementClass)>();
+    type Classified = StatementSpan & StatementClass & { readonly parameters: readonly SqlParameter[] };
+    expectTypeOf<protocol.ClassifiedStatement>().toExtend<Classified>();
+    expectTypeOf<Classified>().toExtend<protocol.ClassifiedStatement>();
+    expectTypeOf<keyof protocol.ClassifiedStatement>().toEqualTypeOf<keyof Classified>();
+    expectTypeOf<protocol.StatementParameter>().toEqualTypeOf<SqlParameter>();
+    expectTypeOf<protocol.ParameterValue>().toEqualTypeOf<ParameterValue>();
+    expectTypeOf<protocol.FormatOptions>().toEqualTypeOf<FormatOptions>();
+    expectTypeOf<FormatSettings>().toEqualTypeOf<FormatOptions>();
+    expect(protocol.KEYWORD_CASES).toEqual(KEYWORD_CASES);
+    expect(SETTINGS_KEYWORD_CASES).toEqual(KEYWORD_CASES);
     expectTypeOf<protocol.TransactionMode>().toEqualTypeOf<TransactionMode>();
   });
 

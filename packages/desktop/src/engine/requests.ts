@@ -1,7 +1,12 @@
 import { EXTRACTOR_KINDS } from "@table-craft/core";
-import { GENERATED_STATEMENTS, TRANSACTION_MODES, z } from "@table-craft/plugin-api";
+import { GENERATED_STATEMENTS, KEYWORD_CASES, TRANSACTION_MODES, z } from "@table-craft/plugin-api";
 import type { EngineRequest } from "@table-craft/desktop/engine/protocol.js";
-import { FETCH_ALL_CAP_RANGE, PAGE_ROWS_RANGE } from "@table-craft/desktop/settings/settings.js";
+import {
+  FETCH_ALL_CAP_RANGE,
+  INDENT_WIDTH_RANGE,
+  LINES_BETWEEN_STATEMENTS_RANGE,
+  PAGE_ROWS_RANGE,
+} from "@table-craft/desktop/settings/settings.js";
 
 const requestId = z.number().int().nonnegative();
 const handle = z.string().min(1);
@@ -42,10 +47,25 @@ export const engineRequestSchema = z.discriminatedUnion("type", [
     type: z.literal("statement.execute"),
     sessionId,
     sql: z.string(),
+    parameters: z.record(z.string(), z.string().nullable()).optional(),
     ...paging,
   }),
   z.strictObject({ id: requestId, type: z.literal("statement.cancel"), sessionId }),
   z.strictObject({ id: requestId, type: z.literal("script.split"), text: z.string() }),
+  z.strictObject({
+    id: requestId,
+    type: z.literal("sql.format"),
+    text: z.string(),
+    options: z.strictObject({
+      keywordCase: z.enum(KEYWORD_CASES),
+      indentWidth: z.number().int().min(INDENT_WIDTH_RANGE.min).max(INDENT_WIDTH_RANGE.max),
+      linesBetweenStatements: z
+        .number()
+        .int()
+        .min(LINES_BETWEEN_STATEMENTS_RANGE.min)
+        .max(LINES_BETWEEN_STATEMENTS_RANGE.max),
+    }),
+  }),
   z.strictObject({ id: requestId, type: z.literal("sql.explainable"), sql: z.string(), analyze: z.boolean() }),
   z.strictObject({
     id: requestId,

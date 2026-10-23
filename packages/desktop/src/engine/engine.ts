@@ -25,6 +25,7 @@ import {
 } from "@table-craft/core";
 import {
   isPluginError,
+  type BoundStatement,
   type Capability,
   type Column,
   type ColumnMeta,
@@ -51,7 +52,9 @@ import type {
   Explainability,
   ExplainedStatement,
   ExportedResult,
+  FormatOptions,
   GeneratorStatement,
+  ParameterValue,
   ProbeResult,
   ReferencingKey,
   RequestOf,
@@ -113,6 +116,7 @@ function connectionFailed(cause: unknown): unknown {
 }
 
 const STATEMENT_HINT = "Fix the statement and run it again.";
+const FORMAT_HINT = "The text is unchanged; fix what the reason points at and reformat again.";
 const READ_ONLY_STATEMENT_HINT =
   "This data source is read-only, so writes are refused; clear Read-only in its properties to write.";
 
@@ -289,7 +293,18 @@ export function createEngine(options: EngineOptions, now: () => number = Date.no
 
   function splitScript(text: string): ClassifiedStatement[] {
     const language = sqlLanguage();
-    return language.split(text).map((span) => ({ ...span, ...language.classify(span.sql) }));
+    return language
+      .split(text)
+      .map((span) => ({ ...span, ...language.classify(span.sql), parameters: language.parameters(span.sql) }));
+  }
+
+  function formatText(text: string, format: FormatOptions): string {
+    try {
+      return sqlLanguage().format(text, format);
+    } catch (cause) {
+      if (cause instanceof EngineFailure) throw cause;
+      throw new EngineFailure({ code: "formatFailed", message: messageOf(cause), hint: FORMAT_HINT });
+    }
   }
 
   const results = new ResultStore();
@@ -555,14 +570,25 @@ export function createEngine(options: EngineOptions, now: () => number = Date.no
       return handle;
     }
 
-    async function runStatement(sessionId: string, sql: string, paging: ResultPaging): Promise<ExecutedStatement> {
+    async function runStatement(
+      sessionId: string,
+      sql: string,
+      parameters: Readonly<Record<string, ParameterValue>> | undefined,
+      paging: ResultPaging,
+    ): Promise<ExecutedStatement> {
       const open = sessionFor(sessionId);
+      let bound: BoundStatement = { sql, params: [] };
+      try {
+        if (parameters !== undefined) bound = sqlLanguage().bind(sql, parameters);
+      } catch (cause) {
+        throw statementFailed(cause, options.datasource.readOnly);
+      }
       open.running += 1;
       try {
         // Awaited only when there is one: a needless await would let a cancel overtake the execute.
         if (cursors.has(sessionId)) await closeCursorOf(sessionId);
         const summary = await open.session
-          .execute(sql)
+          .execute(bound.sql, bound.params)
           .then((result) => results.put(result, paging))
           .catch((cause: unknown) => {
             throw statementFailed(cause, options.datasource.readOnly);
@@ -611,7 +637,7 @@ export function createEngine(options: EngineOptions, now: () => number = Date.no
       const open = sessionFor(request.sessionId);
       const { relation, qualified } = await relationOf(request.path, request.relation);
       const sql = tableSelect(qualified, request);
-      const statement = await runStatement(request.sessionId, sql, request);
+      const statement = await runStatement(request.sessionId, sql, undefined, request);
       const catalogued = statement.columns.map((column) => relation.columns.find((meta) => meta.name === column.name));
       const columns = catalogued.map(
         (meta, index) => meta ?? reportedColumn(statement.columns[index] ?? { name: "", type: null }, index),
@@ -736,8 +762,8 @@ export function createEngine(options: EngineOptions, now: () => number = Date.no
         await open.session.close();
         return null;
       },
-      "statement.execute": ({ sessionId, sql, pageRows, fetchAllCap }) =>
-        runStatement(sessionId, sql, { pageRows, fetchAllCap }),
+      "statement.execute": ({ sessionId, sql, parameters, pageRows, fetchAllCap }) =>
+        runStatement(sessionId, sql, parameters, { pageRows, fetchAllCap }),
       "statement.cancel": async ({ sessionId }) => {
         const open = sessionFor(sessionId);
         if (!open.capabilities.includes("cancel") || open.session.cancel === undefined) {
@@ -751,6 +777,7 @@ export function createEngine(options: EngineOptions, now: () => number = Date.no
         return null;
       },
       "script.split": ({ text }) => Promise.resolve(splitScript(text)),
+      "sql.format": ({ text, options: format }) => Promise.resolve(formatText(text, format)),
       "sql.explainable": ({ sql, analyze }) => Promise.resolve(explainabilityOf(sqlLanguage(), sql, analyze)),
       "statement.explain": (request) => explainStatement(request),
       "transaction.setMode": ({ sessionId, mode }) =>

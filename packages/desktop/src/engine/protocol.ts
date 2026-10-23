@@ -51,6 +51,20 @@ export type StatementKind = "read" | "write" | "ddl" | "transaction" | "other";
 /** Mirrors `TransactionMode` in plugin-api: `auto` commits each statement, `manual` holds one transaction open. */
 export type TransactionMode = "auto" | "manual";
 
+/** Mirrors `ParameterStyle` in plugin-api. */
+export type ParameterStyle = "named" | "numbered" | "positional";
+
+/** Mirrors `SqlParameter` in plugin-api: a placeholder, in offsets into its statement's `sql`. */
+export interface StatementParameter {
+  readonly name: string;
+  readonly from: number;
+  readonly to: number;
+  readonly style: ParameterStyle;
+}
+
+/** Mirrors `ParameterValue` in plugin-api: text the server casts, or SQL NULL (decision 043). */
+export type ParameterValue = string | null;
+
 /** One statement of a script: its span in UTF-16 offsets, as the plugin split it, and its class. */
 export interface ClassifiedStatement {
   readonly from: number;
@@ -59,6 +73,20 @@ export interface ClassifiedStatement {
   readonly kind: StatementKind;
   /** Why the console asks before running it, such as `DELETE without WHERE`; null when it need not. */
   readonly destructive: string | null;
+  /** The placeholders the plugin finds in `sql`, in order. */
+  readonly parameters: readonly StatementParameter[];
+}
+
+/** Mirrors `KEYWORD_CASES` in plugin-api. */
+export const KEYWORD_CASES = ["upper", "lower", "preserve"] as const;
+
+export type KeywordCase = (typeof KEYWORD_CASES)[number];
+
+/** Mirrors `FormatOptions` in plugin-api (decision 042). */
+export interface FormatOptions {
+  readonly keywordCase: KeywordCase;
+  readonly indentWidth: number;
+  readonly linesBetweenStatements: number;
 }
 
 /** A session's transaction after a transaction request. */
@@ -413,14 +441,24 @@ export interface EngineCalls {
   "session.open": { params: Record<never, never>; result: OpenedSession };
   /** Closes the session and releases every result it produced. */
   "session.close": { params: { readonly sessionId: string }; result: null };
+  /**
+   * With `parameters`, the plugin binds them to the placeholders in `sql` (decision 043); a name
+   * without a value fails with `statementFailed`. Without, `sql` runs verbatim.
+   */
   "statement.execute": {
-    params: { readonly sessionId: string; readonly sql: string } & ResultPaging;
+    params: {
+      readonly sessionId: string;
+      readonly sql: string;
+      readonly parameters?: Readonly<Record<string, ParameterValue>>;
+    } & ResultPaging;
     result: ExecutedStatement;
   };
   /** Cancels the statement running in the session, if any; its `statement.execute` fails with `cancelled`. */
   "statement.cancel": { params: { readonly sessionId: string }; result: null };
   /** Splits and classifies `text` with the datasource plugin's language; needs no session. */
   "script.split": { params: { readonly text: string }; result: readonly ClassifiedStatement[] };
+  /** `text` laid out by the plugin's language (decision 042); fails with `formatFailed` and the reason. Needs no session. */
+  "sql.format": { params: { readonly text: string; readonly options: FormatOptions }; result: string };
   /** Whether the plugin's language can explain `sql` (one statement), and whether it writes; needs no session. Needs `explain`. */
   "sql.explainable": {
     params: { readonly sql: string; readonly analyze: boolean };
@@ -586,6 +624,7 @@ export type EngineErrorCode =
   | "introspectionFailed"
   | "definitionNotFound"
   | "explainUnsupported"
+  | "formatFailed"
   | "invalidRequest"
   | "editRejected"
   | "timedOut"

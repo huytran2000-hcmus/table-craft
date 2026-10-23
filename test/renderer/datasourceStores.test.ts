@@ -55,7 +55,14 @@ function fakeClient(datasourceId: string, options: { openFails?: EngineError } =
       }
       if (type === "script.split") {
         const text = String(params.text);
-        const statement: ClassifiedStatement = { from: 0, to: text.length, sql: text, kind: "read", destructive: null };
+        const statement: ClassifiedStatement = {
+          from: 0,
+          to: text.length,
+          sql: text,
+          kind: "read",
+          destructive: null,
+          parameters: [],
+        };
         return Promise.resolve(text.trim() === "" ? [] : [statement]);
       }
       if (type === "statement.execute") {
