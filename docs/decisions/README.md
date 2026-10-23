@@ -62,3 +62,4 @@ started, not when it is merged.
 | 050 | [Find and the local filter run in the engine, on display text](050-find-and-local-filter-run-in-the-engine-on-display-text.md)                                         |
 | 054 | [The engine keeps sessions alive, times statements out and reconnects](054-the-engine-keeps-sessions-alive-times-statements-out-and-reconnects.md)                     |
 | 055 | [Connection URLs are manifest data](055-connection-urls-are-manifest-data.md)                                                                                          |
+| 058 | [A closing result holds the session](058-a-closing-result-holds-the-session.md)                                                                                        |

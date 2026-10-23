@@ -161,7 +161,9 @@ Running, or per data source under Advanced) cancels a console statement that run
 and imports are not cut by it and are never reconnected mid-way, they stop only when the database
 answers nothing for the Transfer stall timeout (Settings → Data Editor → Export and import). An
 open transaction is never replaced silently: if its connection drops, the error says its changes
-are gone.
+are gone. Running again while the last result still has rows to send waits for that result to
+close; one that cannot close within 5 seconds costs a reconnect, which Output reports. TiDB before
+6.1 cannot stop a statement safely, so Cancel there resets the session and says so.
 
 ![Connections](docs/media/connections.gif)
 
@@ -435,7 +437,7 @@ The manifest declares what the plugin can do, and the UI offers only what it dec
   "id": "postgres",
   "name": "PostgreSQL",
   "version": "0.0.0",
-  "apiVersion": "0.15.0",
+  "apiVersion": "0.16.0",
   "entry": "index.js",
   "capabilities": [
     "sql",

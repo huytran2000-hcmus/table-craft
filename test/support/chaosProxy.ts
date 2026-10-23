@@ -22,6 +22,8 @@ export interface ChaosProxy {
   reset(): void;
   /** Drops every byte in both directions from now on and never closes: a route that vanished. */
   blackhole(): void;
+  /** Blackholes only the links open now; new ones still pass: one connection's route vanished. */
+  strand(): void;
   close(): Promise<void>;
 }
 
@@ -29,6 +31,7 @@ interface Pipe {
   readonly to: Socket;
   readonly queue: Buffer[];
   flushing: boolean;
+  stranded: boolean;
 }
 
 /** Starts a proxy on a free loopback port that forwards to `target`. */
@@ -60,7 +63,7 @@ export async function chaosProxy(target: { readonly host: string; readonly port:
           pipe.queue.unshift(chunk);
           break;
         }
-        if (dropping || pipe.to.destroyed) continue;
+        if (dropping || pipe.stranded || pipe.to.destroyed) continue;
         if (!pipe.to.write(chunk)) await new Promise<void>((resolve) => pipe.to.once("drain", resolve));
       }
     } finally {
@@ -69,10 +72,10 @@ export async function chaosProxy(target: { readonly host: string; readonly port:
   }
 
   function forward(from: Socket, to: Socket): void {
-    const pipe: Pipe = { to, queue: [], flushing: false };
+    const pipe: Pipe = { to, queue: [], flushing: false, stranded: false };
     pipes.add(pipe);
     from.on("data", (chunk: Buffer) => {
-      if (dropping) return;
+      if (dropping || pipe.stranded) return;
       pipe.queue.push(chunk);
       void flush(pipe);
     });
@@ -121,6 +124,12 @@ export async function chaosProxy(target: { readonly host: string; readonly port:
     blackhole() {
       dropping = true;
       for (const pipe of pipes) pipe.queue.length = 0;
+    },
+    strand() {
+      for (const pipe of pipes) {
+        pipe.stranded = true;
+        pipe.queue.length = 0;
+      }
     },
     async close() {
       for (const socket of links) socket.destroy();

@@ -18,7 +18,8 @@
       "@table-craft/plugin-postgres/explain": ["plugins/postgres/src/explain.ts"],
       "@table-craft/plugin-mysql/explain": ["plugins/mysql/src/explain.ts"],
       "@table-craft/plugin-postgres/bulk": ["plugins/postgres/src/bulk.ts"],
-      "@table-craft/plugin-mysql/bulk": ["plugins/mysql/src/bulk.ts"]
+      "@table-craft/plugin-mysql/bulk": ["plugins/mysql/src/bulk.ts"],
+      "@table-craft/plugin-mysql/server": ["plugins/mysql/src/server.ts"]
     },
     "types": ["node"],
     "strict": true,

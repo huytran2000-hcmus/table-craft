@@ -92,7 +92,9 @@ export type InsertRow = readonly ParameterValue[];
 export interface Session {
   /**
    * Rejects with a `PluginError`: `cancelled` when `cancel` interrupted it, `connectionLost` when
-   * the connection was gone before the statement was sent, `statementFailed` otherwise. A session runs one statement at a time. `params` are bound by the driver to the
+   * the connection was gone before the statement was sent, `sessionBusy` when an earlier statement
+   * or its result has not finished closing, `statementFailed` otherwise. A session runs one
+   * statement at a time. `params` are bound by the driver to the
    * dialect's native placeholders in `sql`, as `SqlLanguage.bind` wrote them; never spliced.
    */
   execute(sql: string, params?: readonly ParameterValue[], options?: ExecuteOptions): Promise<ExecuteResult>;

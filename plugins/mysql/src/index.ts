@@ -49,6 +49,7 @@ import {
 import { insertStatement, MYSQL_IMPORT_TYPES, mysqlDecimal } from "./bulk.js";
 import { ANALYZE_VERBS, EXPLAIN_VERBS, explainStatement, planFormat, readJson, readTree } from "./explain.js";
 import { mysqlIntrospector } from "./introspect.js";
+import { killStatementFor } from "./server.js";
 
 const PLUGIN_ID = "mysql";
 const CAPABILITIES: readonly Capability[] = [
@@ -144,6 +145,16 @@ const CLOSED_MESSAGE = "the server closed the connection";
 const CLOSE_GRACE_MS = 3000;
 /** Rows buffered ahead of the reader before the connection is paused. */
 const FETCH_ROWS = 500;
+/**
+ * How long closing an abandoned result may take, killed or read to the end, before the connection
+ * is dropped. Longer than the engine's own grace, so the engine reports a slow close first.
+ */
+const ABANDON_BUDGET_MS = 10_000;
+const ABANDON_EXPIRED_MESSAGE = "an abandoned result could not be closed in time, so the connection was dropped";
+const RESET_MESSAGE = "the session was reset to stop a statement";
+const CANCELLED_MESSAGE = "The statement was cancelled.";
+const RESET_CANCELLED_MESSAGE =
+  "The statement was cancelled by resetting the session, as this server cannot stop it on its own; session state and any open transaction are gone.";
 /** `ER_QUERY_INTERRUPTED`, raised by `KILL QUERY` in a statement that checks for it. */
 const QUERY_INTERRUPTED = 1317;
 /** The `binary` collation id; a string type carrying it holds bytes, not text. */
@@ -294,7 +305,7 @@ function openConnection(config: MysqlConfig, keepAliveInitialDelayMs?: number): 
 }
 
 const READ_ONLY_SQL = "SET SESSION TRANSACTION READ ONLY";
-const VERSION_SQL = "SELECT VERSION() AS version";
+const IDENTITY_SQL = "SELECT VERSION() AS version, CONNECTION_ID() AS id";
 const CURRENT_DATABASE_SQL = "SELECT DATABASE() AS name";
 
 function query(
@@ -310,12 +321,38 @@ function query(
   });
 }
 
-/** Configures a fresh connection and reads what the server reports about itself. */
-async function prepareConnection(connection: mysql.Connection, options: ConnectOptions): Promise<string | null> {
+interface Identity {
+  readonly serverVersion: string | null;
+  /** What stops this connection's running statement from another connection; `null` when nothing safely does. */
+  readonly kill: string | null;
+}
+
+/**
+ * Configures a fresh connection and reads what the server reports about itself. The id comes from
+ * `CONNECTION_ID()`, not the handshake: a proxy in front of the server may hand out its own.
+ */
+async function prepareConnection(connection: mysql.Connection, options: ConnectOptions): Promise<Identity> {
   if (options.readOnly) await query(connection, READ_ONLY_SQL);
-  const rows = (await query(connection, VERSION_SQL)) as readonly { version?: unknown }[];
+  const rows = (await query(connection, IDENTITY_SQL)) as readonly { version?: unknown; id?: unknown }[];
   const version = rows[0]?.version;
-  return typeof version === "string" && version !== "" ? version : null;
+  const serverVersion = typeof version === "string" && version !== "" ? version : null;
+  const id = Number(rows[0]?.id ?? connection.threadId);
+  return { serverVersion, kill: Number.isSafeInteger(id) ? killStatementFor(serverVersion, id) : null };
+}
+
+/** Whether `work` settled within `ms`. */
+async function settlesWithin(work: Promise<unknown>, ms: number): Promise<boolean> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const expired = new Promise<boolean>((resolve) => {
+    timer = setTimeout(() => resolve(false), ms);
+  });
+  const settled = work.then(
+    () => true,
+    () => true,
+  );
+  const outcome = await Promise.race([settled, expired]);
+  clearTimeout(timer);
+  return outcome;
 }
 
 function closeConnection(connection: mysql.Connection): Promise<void> {
@@ -341,6 +378,9 @@ const NO_ROWS: AsyncIterable<Row> = {
 
 interface Running {
   cancelRequested: boolean;
+  /** Set when cancel had to drop the connection, so the statement's error says so. */
+  reset: boolean;
+  inFlight: InFlight | null;
 }
 
 interface TransactionState {
@@ -406,6 +446,7 @@ function isFatal(cause: unknown): boolean {
 class MysqlSession implements Session {
   readonly #config: MysqlConfig;
   readonly #connection: mysql.Connection;
+  readonly #kill: string | null;
   /** Set by the connection's `error` event; a broken connection is reported, not thrown at random. */
   #broken: Error | null = null;
   #running: Running | null = null;
@@ -416,10 +457,11 @@ class MysqlSession implements Session {
   readonly introspector: Introspector;
   readonly transactions: Transactions;
 
-  constructor(config: MysqlConfig, connection: mysql.Connection, serverVersion: string | null) {
+  constructor(config: MysqlConfig, connection: mysql.Connection, identity: Identity) {
     this.#config = config;
     this.#connection = connection;
-    this.serverVersion = serverVersion;
+    this.#kill = identity.kill;
+    this.serverVersion = identity.serverVersion;
     this.introspector = mysqlIntrospector(connection);
     const state = this.#transaction;
     this.transactions = {
@@ -449,11 +491,12 @@ class MysqlSession implements Session {
     if (this.#broken !== null) {
       throw new PluginError("connectionLost", `The connection was lost: ${this.#broken.message}`);
     }
-    if (this.#running !== null) throw new PluginError("statementFailed", BUSY_MESSAGE);
+    if (this.#running !== null) throw new PluginError("sessionBusy", BUSY_MESSAGE);
     await this.#cancelling.catch(() => undefined);
-    const running: Running = { cancelRequested: false };
+    const running: Running = { cancelRequested: false, reset: false, inFlight: null };
     this.#running = running;
     const inFlight = start(this.#connection, sql, params, options);
+    running.inFlight = inFlight;
     try {
       const fields = await inFlight.fields.catch((cause: unknown) => {
         if (transactionEffect(sql, DIALECT) === "end") this.#transaction.open = false;
@@ -465,7 +508,7 @@ class MysqlSession implements Session {
       const first = await inFlight.rows.next();
       if (running.cancelRequested) {
         await this.#finish(inFlight, first.done !== true);
-        throw new PluginError("cancelled", "The statement was cancelled.");
+        throw this.#cancelled(running);
       }
       if (fields === undefined) {
         const header = first.value as mysql.ResultSetHeader;
@@ -482,7 +525,7 @@ class MysqlSession implements Session {
   }
 
   async currentNamespace(): Promise<readonly string[] | null> {
-    if (this.#running !== null) throw new PluginError("statementFailed", BUSY_MESSAGE);
+    if (this.#running !== null) throw new PluginError("sessionBusy", BUSY_MESSAGE);
     const rows = (await query(this.#connection, CURRENT_DATABASE_SQL, "statementFailed")) as readonly {
       name?: unknown;
     }[];
@@ -494,7 +537,7 @@ class MysqlSession implements Session {
     if (this.#broken !== null) {
       throw new PluginError("connectionLost", `The connection was lost: ${this.#broken.message}`);
     }
-    if (this.#running !== null) throw new PluginError("statementFailed", BUSY_MESSAGE);
+    if (this.#running !== null) throw new PluginError("sessionBusy", BUSY_MESSAGE);
     await new Promise<void>((resolve, reject) => {
       // mysql2 answers a successful ping with no argument at all, not null.
       this.#connection.ping((error: mysql.QueryError | null | undefined) => {
@@ -508,10 +551,10 @@ class MysqlSession implements Session {
     if (this.#broken !== null) {
       throw new PluginError("connectionFailed", `The connection was lost: ${this.#broken.message}`);
     }
-    if (this.#running !== null) throw new PluginError("statementFailed", BUSY_MESSAGE);
+    if (this.#running !== null) throw new PluginError("sessionBusy", BUSY_MESSAGE);
     if (rows.length === 0) return;
     await this.#cancelling.catch(() => undefined);
-    const running: Running = { cancelRequested: false };
+    const running: Running = { cancelRequested: false, reset: false, inFlight: null };
     this.#running = running;
     const state = this.#transaction;
     const { sql, values } = insertStatement(target.table, target.columns, quoteIdentifier, rows);
@@ -535,6 +578,7 @@ class MysqlSession implements Session {
         throw cause;
       }
     } catch (cause) {
+      if (running.reset) throw this.#cancelled(running);
       if (isFatal(cause)) this.#broken ??= cause instanceof Error ? cause : new Error(String(cause));
       const lost = this.#lost();
       if (lost !== null)
@@ -589,7 +633,7 @@ class MysqlSession implements Session {
         }
       }
       exhausted = true;
-      if (running.cancelRequested) throw new PluginError("cancelled", "The statement was cancelled.");
+      if (running.cancelRequested) throw this.#cancelled(running);
     } finally {
       await this.#finish(inFlight, !exhausted);
       this.#running = null;
@@ -612,14 +656,14 @@ class MysqlSession implements Session {
     const state = this.#transaction;
     if (mode === state.mode) return;
     if (mode === "auto" && state.open) throw new PluginError("statementFailed", OPEN_TRANSACTION_MESSAGE);
-    if (this.#running !== null) throw new PluginError("statementFailed", BUSY_MESSAGE);
+    if (this.#running !== null) throw new PluginError("sessionBusy", BUSY_MESSAGE);
     await query(this.#connection, mode === "manual" ? MANUAL_SQL : AUTO_SQL, "statementFailed");
     state.mode = mode;
   }
 
   async #endTransaction(sql: string): Promise<void> {
     if (!this.#transaction.open) return;
-    if (this.#running !== null) throw new PluginError("statementFailed", BUSY_MESSAGE);
+    if (this.#running !== null) throw new PluginError("sessionBusy", BUSY_MESSAGE);
     try {
       await query(this.#connection, sql, "statementFailed");
     } finally {
@@ -628,22 +672,40 @@ class MysqlSession implements Session {
   }
 
   /**
-   * Leave the connection ready for the next statement. Abandoned rows are killed server-side
-   * first, because the text protocol has no way to stop a result set but to read it to the end.
+   * Leave the connection ready for the next statement. The text protocol has no way to stop a
+   * result set but to read it to the end, which mysql2 does, discarding, once the stream is
+   * destroyed; abandoned rows are killed server-side first where that is safe. Past
+   * `ABANDON_BUDGET_MS` the connection is dropped, so the next statement reports it lost.
    */
   async #finish(inFlight: InFlight, abandoned: boolean): Promise<void> {
-    if (abandoned) {
-      await this.#killQuery().catch(() => undefined);
-      inFlight.stream.destroy();
+    if (this.#broken !== null) return;
+    if (!abandoned) {
+      await inFlight.ended;
+      return;
     }
-    await inFlight.ended;
+    const closing = (async () => {
+      if (this.#kill !== null) await this.#killQuery(this.#kill).catch(() => undefined);
+      inFlight.stream.destroy();
+      await inFlight.ended;
+    })();
+    if (await settlesWithin(closing, ABANDON_BUDGET_MS)) return;
+    this.#drop(new Error(ABANDON_EXPIRED_MESSAGE));
+  }
+
+  #drop(reason: Error): void {
+    this.#broken ??= reason;
+    this.#connection.destroy();
+  }
+
+  #cancelled(running: Running): PluginError {
+    return new PluginError("cancelled", running.reset ? RESET_CANCELLED_MESSAGE : CANCELLED_MESSAGE);
   }
 
   #failure(cause: unknown, running: Running): PluginError {
     if (cause instanceof PluginError) return cause;
     const errno = (cause as { errno?: unknown }).errno;
     if (running.cancelRequested || errno === QUERY_INTERRUPTED) {
-      return new PluginError("cancelled", "The statement was cancelled.", { cause });
+      return new PluginError("cancelled", running.reset ? RESET_CANCELLED_MESSAGE : CANCELLED_MESSAGE, { cause });
     }
     return new PluginError("statementFailed", messageOf(cause), { cause });
   }
@@ -652,16 +714,24 @@ class MysqlSession implements Session {
     const running = this.#running;
     if (running === null) return Promise.resolve();
     running.cancelRequested = true;
-    this.#cancelling = this.#killQuery();
+    if (this.#kill === null) {
+      // Nothing stops the statement safely, so the session goes instead (decision 058).
+      running.reset = true;
+      const reason = new Error(RESET_MESSAGE);
+      this.#drop(reason);
+      running.inFlight?.stream.destroy(reason);
+      return Promise.resolve();
+    }
+    this.#cancelling = this.#killQuery(this.#kill);
     return this.#cancelling;
   }
 
   /** On a second connection, because the session's own is busy with the statement it kills. */
-  async #killQuery(): Promise<void> {
+  async #killQuery(statement: string): Promise<void> {
     const killer = await openConnection(this.#config);
     try {
       await new Promise<void>((resolve, reject) => {
-        killer.query(`KILL QUERY ${String(this.#connection.threadId)}`, (error) => {
+        killer.query(statement, (error) => {
           if (error === null) resolve();
           else reject(error);
         });

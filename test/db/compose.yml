@@ -48,3 +48,17 @@ services:
       interval: 1s
       timeout: 5s
       retries: 120
+
+  # TiDB 4.0, the oldest MySQL-compatible server users run against (plan 027): no plain KILL
+  # QUERY, no recursive CTE. One process on its embedded store; root has no password and the
+  # tests create what they need.
+  tidb:
+    image: pingcap/tidb:v4.0.14
+    platform: linux/amd64
+    ports:
+      - "127.0.0.1:${TABLE_CRAFT_TIDB_PORT:-54000}:4000"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:10080/status"]
+      interval: 1s
+      timeout: 5s
+      retries: 120

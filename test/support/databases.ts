@@ -5,6 +5,10 @@ const WRONG_PASSWORD = "not-the-password";
 const LOOPBACK = "127.0.0.1";
 const DEFAULT_POSTGRES_PORT = 55432;
 const DEFAULT_MYSQL_PORT = 53306;
+const DEFAULT_TIDB_PORT = 54000;
+/** TiDB starts with a passwordless `root` and a `test` database. */
+const TIDB_USER = "root";
+const TIDB_DATABASE = "test";
 
 /** `test/db/compose.yml` publishes on these unless a parallel worktree overrides them. */
 function portFromEnv(name: string, fallback: number): number {
@@ -26,6 +30,15 @@ export const MYSQL_CONFIG = {
   database: CREDENTIAL,
   user: CREDENTIAL,
   password: CREDENTIAL,
+} as const;
+
+/** A TiDB 4 server: no Global Kill, and `KILL QUERY` only warns (decision 058). */
+export const TIDB_CONFIG = {
+  host: LOOPBACK,
+  port: portFromEnv("TABLE_CRAFT_TIDB_PORT", DEFAULT_TIDB_PORT),
+  database: TIDB_DATABASE,
+  user: TIDB_USER,
+  password: "",
 } as const;
 
 export function withWrongPassword<Config extends { readonly password: string }>(config: Config): Config {

@@ -81,6 +81,7 @@ import type {
   TableQuery,
   TransactionState,
 } from "@table-craft/desktop/engine/protocol.js";
+import { STATEMENT_CANCELLED_MESSAGE } from "@table-craft/desktop/engine/protocol.js";
 import {
   connectionTarget,
   logResponse,
@@ -167,12 +168,9 @@ function statementFailed(cause: unknown, readOnly: boolean): EngineFailure {
     return new EngineFailure({ code: "connectionLost", message: cause.message, hint: RECONNECT_HINT }, cause);
   }
   if (isPluginError(cause) && cause.code === "cancelled") {
-    return new EngineFailure({
-      code: "cancelled",
-      message: "The statement was cancelled.",
-      hint: "Run it again when ready.",
-    });
+    return new EngineFailure({ code: "cancelled", message: cause.message, hint: "Run it again when ready." });
   }
+  if (isPluginError(cause) && cause.code === "sessionBusy") return sessionBusy();
   return new EngineFailure(
     { code: "statementFailed", message: messageOf(cause), hint: readOnly ? READ_ONLY_STATEMENT_HINT : STATEMENT_HINT },
     cause,
@@ -236,6 +234,15 @@ interface OpenSession {
    * resolve names a fresh session would resolve elsewhere, so an export must not re-run them.
    */
   moved: boolean;
+  /**
+   * The session's last result still closing (decision 058): the next statement waits for it, so
+   * the plugin never sees two at once. Null when nothing is closing.
+   */
+  closing: Promise<void> | null;
+  /** Rejects the statements waiting on `closing`, for a cancel that arrives before they run. */
+  readonly waiting: Set<() => void>;
+  /** Exports draining this session's cursor; the session runs nothing else meanwhile. */
+  exporting: number;
 }
 
 function samePath(a: readonly string[] | null, b: readonly string[] | null): boolean {
@@ -348,6 +355,38 @@ async function pingFailure(session: Session): Promise<string | null> {
  * the sessions close anyway, and their bounded close tears the sockets down (decision 040).
  */
 const RELEASE_GRACE_MS = 3_000;
+/**
+ * How long a statement waits for the session's last result to finish closing (decision 058). A
+ * close reads the rest of the result off the wire where the server cannot stop it (TiDB before
+ * 6.1), so past this the session is given up rather than awaited.
+ */
+const CURSOR_CLOSE_GRACE_MS = 5_000;
+
+const BUSY_HINT = "Run it again; the console reconnects first.";
+
+function sessionBusy(): EngineFailure {
+  return new EngineFailure({
+    code: "sessionBusy",
+    message: "The session was still busy with an earlier result, so it was dropped.",
+    hint: BUSY_HINT,
+  });
+}
+
+function exportDraining(): EngineFailure {
+  return new EngineFailure({
+    code: "sessionBusy",
+    message: "An export is still reading this console's result.",
+    hint: "Wait for the export to finish, or cancel it in Services, then run again.",
+  });
+}
+
+function waitCancelled(): EngineFailure {
+  return new EngineFailure({
+    code: "cancelled",
+    message: STATEMENT_CANCELLED_MESSAGE,
+    hint: "Run it again when ready.",
+  });
+}
 
 function settledWithin(work: Promise<unknown>, ms: number): Promise<void> {
   return new Promise((resolve) => {
@@ -929,12 +968,86 @@ export function createEngine(options: EngineOptions, now: () => number = Date.no
       await Promise.all(owned.map((handle) => results.release(handle)));
     }
 
-    /** Before the session runs anything else or its transaction ends, its open cursor closes. */
-    async function closeCursorOf(sessionId: string): Promise<void> {
+    /** Records `work` as closing `sessionId`'s last result, which the next statement waits for. */
+    function noteClosing(sessionId: string, work: Promise<unknown>): void {
+      const open = sessions.get(sessionId);
+      if (open === undefined) return;
+      const settled = work.then(
+        () => undefined,
+        () => undefined,
+      );
+      const previous = open.closing;
+      const closing = previous === null ? settled : Promise.all([previous, settled]).then(() => undefined);
+      open.closing = closing;
+      void closing.then(() => {
+        if (open.closing === closing) open.closing = null;
+      });
+    }
+
+    /** Starts closing the session's open cursor, if any; the session's next statement waits for it. */
+    function closeCursorOf(sessionId: string): Promise<void> {
       const handle = cursors.get(sessionId);
-      if (handle === undefined) return;
+      if (handle === undefined) return Promise.resolve();
       cursors.delete(sessionId);
-      await results.closeCursor(handle).catch(() => undefined);
+      const closed = results.closeCursor(handle).then(
+        () => undefined,
+        () => undefined,
+      );
+      noteClosing(sessionId, closed);
+      return closed;
+    }
+
+    /**
+     * Waits, within `CURSOR_CLOSE_GRACE_MS`, for the session's last result to close (decision 058).
+     * A close that outlasts it gives the session up and reconnects; with a transaction open that
+     * is the transaction-lost error. A cancel while waiting rejects before anything runs.
+     */
+    async function afterClose(sessionId: string, open: OpenSession): Promise<Reconnection | undefined> {
+      void closeCursorOf(sessionId);
+      const { closing } = open;
+      if (closing === null) return undefined;
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      let stop = (): void => undefined;
+      const outcome = await new Promise<"closed" | "timedOut" | "cancelled">((resolve) => {
+        stop = () => {
+          resolve("cancelled");
+        };
+        open.waiting.add(stop);
+        timer = setTimeout(() => {
+          resolve("timedOut");
+        }, CURSOR_CLOSE_GRACE_MS);
+        void closing.then(() => {
+          resolve("closed");
+        });
+      }).finally(() => {
+        clearTimeout(timer);
+        open.waiting.delete(stop);
+      });
+      if (outcome === "closed") return undefined;
+      if (outcome === "cancelled") throw waitCancelled();
+      sessionLog?.warn("result not closed", { graceMs: CURSOR_CLOSE_GRACE_MS });
+      if (abandon(sessionId, open, "result not closed").transaction) throw transactionLost();
+      return { ...(await reconnect(sessionId, open)), reason: "resultNotClosed" };
+    }
+
+    /** Whether the session has anything to wait for before its next statement. */
+    function mustSettle(sessionId: string, open: OpenSession): boolean {
+      if (open.exporting > 0) throw exportDraining();
+      return open.closing !== null || cursors.has(sessionId);
+    }
+
+    /**
+     * A plugin that refuses a statement as busy after the engine waited for every close is a bug
+     * (decision 058): logged with what the engine knew, then the session is replaced.
+     */
+    function busyRefused(sessionId: string, open: OpenSession): { transaction: boolean } {
+      sessionLog?.error("session busy", {
+        running: open.running,
+        cursorOpen: cursors.has(sessionId),
+        closing: open.closing !== null,
+        exporting: open.exporting,
+      });
+      return abandon(sessionId, open, "session busy");
     }
 
     function track(handle: string, state: ResultState): ResultState {
@@ -1037,13 +1150,15 @@ export function createEngine(options: EngineOptions, now: () => number = Date.no
         estimate: null,
         retryable: false,
         drains: handle,
-        open: () => drainCursor(handle, held),
+        open: () => drainCursor(sessionId, handle, held),
       };
     }
 
     /** The console's cursor, handed to the export until it closes its rows. */
-    function drainCursor(handle: string, held: readonly Row[]): Promise<ExportRows> {
-      return new Promise((resolve, reject) => {
+    function drainCursor(sessionId: string | undefined, handle: string, held: readonly Row[]): Promise<ExportRows> {
+      const owner = sessions.get(sessionId ?? "");
+      if (owner !== undefined) owner.exporting += 1;
+      return new Promise<ExportRows>((resolve, reject) => {
         let finish = (): void => undefined;
         const finished = new Promise<void>((settle) => {
           finish = settle;
@@ -1061,7 +1176,9 @@ export function createEngine(options: EngineOptions, now: () => number = Date.no
           });
           return finished;
         });
-        draining.catch(reject);
+        void draining.catch(reject).finally(() => {
+          if (owner !== undefined) owner.exporting -= 1;
+        });
       });
     }
 
@@ -1128,6 +1245,8 @@ export function createEngine(options: EngineOptions, now: () => number = Date.no
       open.lost = reason;
       sessionLog?.warn("session lost", { reason, transaction });
       void closeCursorOf(sessionId);
+      // The next statement runs on a new session, which has nothing of the old one's to wait for.
+      open.closing = null;
       void open.session.close().catch(() => undefined);
       return { transaction };
     }
@@ -1152,6 +1271,7 @@ export function createEngine(options: EngineOptions, now: () => number = Date.no
       open.opening = namespace;
       open.moved = false;
       open.lost = null;
+      open.closing = null;
       open.lastUsed = now();
       sessionLog?.info("session reconnected", { namespaceLost });
       return { namespace: namespace ?? null, namespaceLost };
@@ -1227,19 +1347,29 @@ export function createEngine(options: EngineOptions, now: () => number = Date.no
       failed: (cause: unknown) => EngineFailure,
       discard: (late: T) => void = () => undefined,
     ): Promise<{ value: T; reconnected: Reconnection | undefined }> {
-      // Awaited only when there is one: a needless await would let a cancel overtake the execute.
-      if (cursors.has(sessionId)) await closeCursorOf(sessionId);
-      let reconnected = needsCheck(open) ? await ensureLive(sessionId, open) : undefined;
+      // Awaited only when there is something to wait for: a needless await would let a cancel
+      // overtake the execute.
+      let reconnected = mustSettle(sessionId, open) ? await afterClose(sessionId, open) : undefined;
+      if (reconnected === undefined && needsCheck(open)) reconnected = await ensureLive(sessionId, open);
+      let busy: boolean;
       try {
         return { value: await watched(sessionId, open, run(open.session), timeoutSeconds, discard), reconnected };
       } catch (cause) {
-        if (reconnected !== undefined || !isPluginError(cause) || cause.code !== "connectionLost") throw failed(cause);
+        busy = isPluginError(cause) && cause.code === "sessionBusy";
+        const lost = isPluginError(cause) && cause.code === "connectionLost";
+        if (busy && reconnected !== undefined && busyRefused(sessionId, open).transaction) throw transactionLost();
+        if (reconnected !== undefined || !(busy || lost)) throw failed(cause);
       }
-      if (abandon(sessionId, open, "driver reported").transaction) throw transactionLost();
+      const { transaction } = busy ? busyRefused(sessionId, open) : abandon(sessionId, open, "driver reported");
+      if (transaction) throw transactionLost();
       reconnected = await reconnect(sessionId, open);
+      if (busy) reconnected = { ...reconnected, reason: "sessionBusy" };
       try {
         return { value: await watched(sessionId, open, run(open.session), timeoutSeconds, discard), reconnected };
       } catch (cause) {
+        if (isPluginError(cause) && cause.code === "sessionBusy" && busyRefused(sessionId, open).transaction) {
+          throw transactionLost();
+        }
         throw failed(cause);
       }
     }
@@ -1390,7 +1520,7 @@ export function createEngine(options: EngineOptions, now: () => number = Date.no
         });
       }
       const statements = editStatements(request.handle, request.edits);
-      await closeCursorOf(request.sessionId);
+      if (mustSettle(request.sessionId, open)) await afterClose(request.sessionId, open);
       return submitEdits(open.session, statements);
     }
 
@@ -1431,17 +1561,21 @@ export function createEngine(options: EngineOptions, now: () => number = Date.no
         });
       }
       if (open.lost !== null) await reconnect(sessionId, open);
+      if (mustSettle(sessionId, open)) await afterClose(sessionId, open);
+      const current = open.session.transactions ?? transactions;
       try {
-        await closeCursorOf(sessionId);
-        await change(open.session.transactions ?? transactions);
+        await change(current);
       } catch (cause) {
+        if (isPluginError(cause) && cause.code === "sessionBusy") {
+          throw busyRefused(sessionId, open).transaction ? transactionLost() : sessionBusy();
+        }
         throw new EngineFailure({ code: "statementFailed", message: messageOf(cause), hint }, cause);
       }
       const namespace = await namespaceOf(open);
       noteNamespace(open, namespace, false);
       return {
-        mode: transactions.mode,
-        transactionOpen: transactions.open,
+        mode: current.mode,
+        transactionOpen: current.open,
         ...(namespace === undefined ? {} : { namespace }),
       };
     }
@@ -1460,6 +1594,9 @@ export function createEngine(options: EngineOptions, now: () => number = Date.no
           moved: false,
           lastUsed: now(),
           lost: null,
+          closing: null,
+          waiting: new Set(),
+          exporting: 0,
         };
         const namespace = opening ?? null;
         sessions.set(sessionId, open);
@@ -1489,6 +1626,10 @@ export function createEngine(options: EngineOptions, now: () => number = Date.no
             hint: BUG_HINT,
           });
         }
+        if (open.waiting.size > 0) {
+          for (const stop of open.waiting) stop();
+          return null;
+        }
         if (open.running > 0) await open.session.cancel();
         return null;
       },
@@ -1508,8 +1649,12 @@ export function createEngine(options: EngineOptions, now: () => number = Date.no
         const owner = handles.get(handle);
         if (owner === undefined) return null;
         forget(handle);
-        if (cursors.get(owner) === handle) cursors.delete(owner);
-        await results.release(handle);
+        const released = results.release(handle);
+        if (cursors.get(owner) === handle) {
+          cursors.delete(owner);
+          noteClosing(owner, released);
+        }
+        await released;
         return null;
       },
       "result.fetchMore": async ({ handle, all, pageRows, fetchAllCap }) => {

@@ -1,0 +1,128 @@
+import { createRequire } from "node:module";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import mysql from "@table-craft/plugin-mysql";
+import { createEngine, type EngineConnection } from "@table-craft/desktop/engine/engine.js";
+import type { DatasourceConfig, EngineResponse, ExecutedStatement } from "@table-craft/desktop/engine/protocol.js";
+import { RESULT_FETCH_ALL_CAP, RESULT_PAGE_ROWS } from "@table-craft/desktop/engine/protocol.js";
+import { TIDB_CONFIG } from "../support/databases.js";
+import { MYSQL_MANIFEST } from "../support/manifests.js";
+import { tenThousandRows } from "../support/manyRows.js";
+
+/**
+ * Plan 027 on TiDB 4, where `KILL QUERY` is a no-op and a connection id is unique to one TiDB
+ * server only, so the plugin must never send a kill (decision 058).
+ */
+
+const PAGING = { pageRows: RESULT_PAGE_ROWS, fetchAllCap: RESULT_FETCH_ALL_CAP };
+const RUNS_IN_A_ROW = 3;
+const SLEEP_SQL = "SELECT SLEEP(30)";
+/** Long enough for TiDB to start the sleep, well short of it. */
+const STARTED_MS = 500;
+/** Cancel must stop the sleep by dropping the session, not wait it out. */
+const CANCEL_WITHIN_MS = 5_000;
+
+const LOADED = { status: "loaded", directory: "plugins/mysql", manifest: MYSQL_MANIFEST, plugin: mysql } as const;
+
+function resultOf<T>(response: EngineResponse): T {
+  if (response.type === "engine.error") throw new Error(`unexpected engine error: ${response.error.message}`);
+  return response.result as T;
+}
+
+interface Driver {
+  createConnection(options: unknown): Record<string, unknown>;
+}
+
+/** The plugin's own copy of mysql2, which the root workspace does not depend on. */
+const driver = createRequire(new URL("../../plugins/mysql/package.json", import.meta.url))("mysql2") as Driver;
+
+/** Every SQL text the plugin sends, on any connection it opens. */
+function spySql(): string[] {
+  const sent: string[] = [];
+  const create = driver.createConnection.bind(driver);
+  vi.spyOn(driver, "createConnection").mockImplementation((options) => {
+    const connection = create(options);
+    for (const method of ["query", "execute"] as const) {
+      const original = (connection[method] as (...args: unknown[]) => unknown).bind(connection);
+      connection[method] = (...args: unknown[]) => {
+        const first = args[0];
+        sent.push(typeof first === "string" ? first : String((first as { sql?: unknown }).sql));
+        return original(...args);
+      };
+    }
+    return connection;
+  });
+  return sent;
+}
+
+describe("tidb 4", () => {
+  const cleanup: (() => Promise<unknown>)[] = [];
+  afterEach(async () => {
+    for (const step of cleanup.splice(0).reverse()) await step().catch(() => undefined);
+    vi.restoreAllMocks();
+  });
+
+  function engine(): EngineConnection {
+    const datasource: DatasourceConfig = {
+      id: "tidb",
+      pluginId: "mysql",
+      config: TIDB_CONFIG,
+      readOnly: false,
+      keepAliveSeconds: 0,
+    };
+    const created = createEngine({ datasource, plugins: [LOADED] });
+    const connection = created.connect();
+    cleanup.push(() => created.close());
+    cleanup.push(() => connection.close());
+    return connection;
+  }
+
+  async function open(connection: EngineConnection): Promise<string> {
+    return resultOf<{ sessionId: string }>(await connection.handle({ id: 1, type: "session.open" })).sessionId;
+  }
+
+  it("givenUnfinishedResults_whenReleasedThenRun_thenNoKillIsSent", async () => {
+    const sent = spySql();
+    const connection = engine();
+    const sessionId = await open(connection);
+    for (let run = 0; run < RUNS_IN_A_ROW; run += 1) {
+      const unfinished = resultOf<ExecutedStatement>(
+        await connection.handle({ id: 2, type: "statement.execute", ...PAGING, sessionId, sql: tenThousandRows() }),
+      );
+      expect(unfinished.cursorOpen).toBe(true);
+      void connection.handle({ id: 3, type: "result.release", handle: unfinished.handle });
+
+      const response = await connection.handle({
+        id: 4,
+        type: "statement.execute",
+        ...PAGING,
+        sessionId,
+        sql: "SELECT 1",
+      });
+
+      expect(resultOf<ExecutedStatement>(response).firstWindow.rows).toHaveLength(1);
+    }
+    expect(sent).toContain("SELECT 1");
+    expect(sent.filter((sql) => /\bKILL\b/i.test(sql))).toEqual([]);
+  });
+
+  it("givenSleepRunning_whenCancel_thenStopsBySessionResetWithoutKill", async () => {
+    const sent = spySql();
+    const connection = engine();
+    const sessionId = await open(connection);
+    const started = Date.now();
+    const sleeping = connection.handle({ id: 5, type: "statement.execute", ...PAGING, sessionId, sql: SLEEP_SQL });
+    await new Promise((resolve) => setTimeout(resolve, STARTED_MS));
+
+    resultOf(await connection.handle({ id: 6, type: "statement.cancel", sessionId }));
+    const response = await sleeping;
+
+    expect(Date.now() - started).toBeLessThan(CANCEL_WITHIN_MS);
+    expect(response).toMatchObject({ type: "engine.error", error: { code: "cancelled" } });
+    expect(response.type === "engine.error" ? response.error.message : "").toMatch(/resetting the session/);
+    expect(sent.filter((sql) => /\bKILL\b/i.test(sql))).toEqual([]);
+
+    const next = await connection.handle({ id: 7, type: "statement.execute", ...PAGING, sessionId, sql: "SELECT 1" });
+
+    expect(resultOf<ExecutedStatement>(next).firstWindow.rows).toHaveLength(1);
+  });
+});

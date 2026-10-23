@@ -21,6 +21,11 @@ export const ENGINE_SHUTDOWN_MESSAGE = "engine.shutdown";
 export const ENGINE_PROBED_MESSAGE = "engine.probed";
 /** What an engine posts on its parent port for each log record; main alone writes the log (plan 017). */
 export const ENGINE_LOG_MESSAGE = "engine.log";
+/**
+ * A plain cancel's message. A `cancelled` error with any other message says what else the cancel
+ * did, such as resetting the session on a server that cannot stop a statement (decision 058).
+ */
+export const STATEMENT_CANCELLED_MESSAGE = "The statement was cancelled.";
 
 /** Mirrors `WireValue` in plugin-api. */
 export type WireValue =
@@ -538,6 +543,11 @@ export interface Reconnection {
   readonly namespace: CurrentNamespace;
   /** Whether the old session had moved away from where a session starts, by USE or a search path. */
   readonly namespaceLost: boolean;
+  /**
+   * Why the old session was replaced when it was not lost (decision 058): its last result did not
+   * close within the grace, or the plugin refused a statement as busy. Absent when it was lost.
+   */
+  readonly reason?: "resultNotClosed" | "sessionBusy";
 }
 
 /** Mirrors `CellInput` in core: text the database casts, `NULL`, or the column's default. */
@@ -978,6 +988,7 @@ export type EngineErrorCode =
   | "timedOut"
   | "statementTimedOut"
   | "connectionLost"
+  | "sessionBusy"
   | "exportFailed"
   | "importFailed"
   | "internal";

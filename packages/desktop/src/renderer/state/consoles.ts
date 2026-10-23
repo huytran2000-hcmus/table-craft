@@ -17,6 +17,7 @@ import type { HistoryEntry } from "@table-craft/desktop/preload/bridge.js";
 import type { EngineClient } from "@table-craft/desktop/renderer/engine/client.js";
 import { carriedLayout, type ColumnLayout } from "@table-craft/desktop/renderer/model/columnLayout.js";
 import {
+  cancelledText,
   executedText,
   explainedText,
   exportedText,
@@ -697,7 +698,7 @@ export function createConsolesStore(dependencies: ConsolesDependencies) {
           const error = toError(cause);
           ended(failureEnd(error, dependencies.now() - startedAt));
           const cancelled = error.code === "cancelled";
-          if (cancelled) log(id, { sql, message: "Cancelled", tone: "warning" });
+          if (cancelled) log(id, { sql, message: cancelledText(error), tone: "warning" });
           else logError(id, sql, error);
           const skipped = statements.length - index - 1;
           if (skipped > 0) {
@@ -872,7 +873,7 @@ export function createConsolesStore(dependencies: ConsolesDependencies) {
         const error = toError(cause);
         ended(failureEnd(error, dependencies.now() - startedAt));
         const cancelled = error.code === "cancelled";
-        if (cancelled) log(id, { sql, message: "Cancelled", tone: "warning" });
+        if (cancelled) log(id, { sql, message: cancelledText(error), tone: "warning" });
         else logError(id, sql, error);
         patch(id, { error, activeResult: OUTPUT_TAB });
         return cancelled ? "cancelled" : "failed";
@@ -1220,7 +1221,7 @@ export function createConsolesStore(dependencies: ConsolesDependencies) {
         } catch (cause) {
           const error = toError(cause);
           ended?.(failureEnd(error, dependencies.now() - statementStartedAt));
-          if (error.code === "cancelled") log(id, { sql, message: "Cancelled", tone: "warning" });
+          if (error.code === "cancelled") log(id, { sql, message: cancelledText(error), tone: "warning" });
           else logError(id, sql, error);
           patch(id, { error, activeResult: OUTPUT_TAB });
           outcome = error.code === "cancelled" ? "cancelled" : "failed";

@@ -19,7 +19,7 @@ its own MessagePort (decision 002).
 
 A plugin is a directory with `table-craft-plugin.json` and an ESM entry exporting a
 `DatasourcePlugin` (decisions 005 to 008). The contract lives in `@table-craft/plugin-api`.
-`API_VERSION` is `0.15.0`; while it is `0.x` the contract is unstable and every minor is a break.
+`API_VERSION` is `0.16.0`; while it is `0.x` the contract is unstable and every minor is a break.
 
 ### Discovery
 
@@ -167,7 +167,7 @@ interface Session {
   readonly serverVersion: string | null; // "17.4", "8.4.3", "3.53.4"
   execute(sql: string, params?: readonly ParameterValue[], options?: ExecuteOptions): Promise<ExecuteResult>; // one at a time; params bind the driver's placeholders; rejects with a PluginError
   readonly privateDatabase?: boolean; // another session on the same config sees another database (SQLite :memory:)
-  cancel?(): Promise<void>; // present exactly when `cancel` is declared; no-op when idle
+  cancel?(): Promise<void>; // present exactly when `cancel` is declared; no-op when idle; may drop the connection where nothing else stops the statement safely (decision 058)
   readonly introspector?: Introspector; // present exactly when `schemaTree` is declared
   readonly transactions?: Transactions; // present exactly when `transactions` is declared
   explain?(sql: string, options: ExplainOptions): Promise<ExplainedPlan>; // present exactly when `explain` is declared
@@ -200,7 +200,8 @@ class PluginError extends Error {
     | "introspectionFailed"
     | "definitionNotFound"
     | "explainUnsupported"
-    | "connectionLost"; // the connection was gone before the statement was sent
+    | "connectionLost" // the connection was gone before the statement was sent
+    | "sessionBusy"; // an earlier result still holds the session; the host drops it (decision 058)
 }
 
 class DefinitionNotFoundError extends PluginError {
@@ -225,8 +226,12 @@ interface Column {
 connection was gone, so the host can reconnect and run it without running it twice. Each bundled plugin carries its own copy of the plugin API,
 so the host recognises a `PluginError` with `isPluginError` (by name and code), not `instanceof`.
 `cancel` reaches the database on a short-lived second connection (`pg_cancel_backend`,
-`KILL QUERY`). Returning the rows iterator early closes the cursor or stream and leaves the session
-usable. A read-only session is set up by the plugin as it connects: PostgreSQL
+`KILL QUERY`, `KILL TIDB QUERY` on TiDB 6.1 and later); on TiDB before 6.1, where no kill is safe,
+it drops the connection and `execute` rejects `cancelled` saying the session was reset (decision
+058). Returning the rows iterator early closes the cursor or stream and leaves the session usable;
+the MySQL plugin reads an abandoned result to the end where it cannot kill it, and drops the
+connection if that takes longer than 10 s. `execute` on a session an earlier result still holds
+rejects `sessionBusy`, which the host treats as its own bug. A read-only session is set up by the plugin as it connects: PostgreSQL
 `SET SESSION CHARACTERISTICS AS TRANSACTION READ ONLY`, MySQL `SET SESSION TRANSACTION READ ONLY`,
 SQLite `PRAGMA query_only = ON`.
 
@@ -413,7 +418,12 @@ handles belong to the port that created them and are released when it closes.
 
 A statement reads its first page and keeps the cursor open; the session's next statement, a
 commit, rollback or mode switch, `result.release`, `session.close` and the engine's exit close it
-first (decision 025). `result.fetchMore` calls on one handle run one after another; a cursor error
+first (decision 025). A close still in flight holds the session's next request until it settles,
+at most `CURSOR_CLOSE_GRACE_MS` (5 s); past that the engine drops the session and reconnects, the
+answer's `reconnected.reason` is `resultNotClosed`, and an open transaction fails
+`transactionLost` instead. A plugin's `sessionBusy` is logged as an engine error and the request
+runs once on a fresh session (`reason: "sessionBusy"`). Cancel while the request waits cancels it
+before it reaches the plugin (decision 058). `result.fetchMore` calls on one handle run one after another; a cursor error
 closes it and answers `statementFailed`. An export runs as a task of the engine, not of the
 request: `export.start` answers at once, and the engine pushes `export.progress` (at most every
 250 ms) and one of `export.done`, `export.failed` or `export.cancelled` to every renderer port,
@@ -450,7 +460,7 @@ setting, limits a statement until its first page arrives: past it the engine can
 Before a statement on a session idle for the keepalive interval, a `keepAlive` plugin's `ping`
 runs, bounded by `PING_TIMEOUT_MS`; a failed ping, or an `execute` rejecting `connectionLost`,
 opens a new session, restores manual mode, and runs the statement there; the result carries
-`reconnected { namespace, namespaceLost }`. While a statement runs a whole keepalive interval, the
+`reconnected { namespace, namespaceLost, reason? }`. While a statement runs a whole keepalive interval, the
 engine opens a probe connection; one that neither connects nor fails within `PROBE_WINDOW_MS`
 fails the statement `connectionLost` and the next request reconnects. A session lost with a
 transaction open fails `connectionLost` instead of reconnecting silently. Exports and imports run

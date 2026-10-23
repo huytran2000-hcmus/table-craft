@@ -1,8 +1,9 @@
-import type {
-  CurrentNamespace,
-  EngineError,
-  Reconnection,
-  StatementKind,
+import {
+  STATEMENT_CANCELLED_MESSAGE,
+  type CurrentNamespace,
+  type EngineError,
+  type Reconnection,
+  type StatementKind,
 } from "@table-craft/desktop/engine/protocol.js";
 import type { DatasourceView } from "@table-craft/desktop/preload/bridge.js";
 import type { ConsoleSession } from "@table-craft/desktop/renderer/state/consoles.js";
@@ -197,19 +198,30 @@ export function tabLabel(title: string, datasourceName: string | undefined): str
   return datasourceName === undefined ? title : `${title} [${datasourceName}]`;
 }
 
-/**
- * The console toolbar's namespace label (plan 022): the database or schema itself, with the full
- * dotted path as its tooltip; null hides it.
- */
-/** What Output says when the engine replaced a lost session before a statement (decision 054). */
+const RECONNECTED_BECAUSE: Readonly<Record<NonNullable<Reconnection["reason"]> | "lost", string>> = {
+  lost: "Reconnected: the connection had been lost.",
+  resultNotClosed: "The previous result could not be closed in time; reconnected.",
+  sessionBusy: "The session was stuck on an earlier result; reconnected.",
+};
+
+/** What Output says for a cancelled statement, with what else the cancel did (decision 058). */
+export function cancelledText(error: EngineError): string {
+  return error.message === STATEMENT_CANCELLED_MESSAGE ? "Cancelled" : `Cancelled: ${error.message}`;
+}
+
+/** What Output says when the engine replaced a session before a statement (decisions 054, 058). */
 export function reconnectedText(reconnected: Reconnection): string {
-  const lost = "Reconnected: the connection had been lost.";
+  const lost = RECONNECTED_BECAUSE[reconnected.reason ?? "lost"];
   const where = namespaceLabel(reconnected.namespace)?.title;
   if (!reconnected.namespaceLost) return lost;
   const starts = where === undefined ? "The new session starts" : `The new session starts in ${where}`;
   return `${lost} ${starts}; the USE or search path set earlier no longer applies.`;
 }
 
+/**
+ * The console toolbar's namespace label (plan 022): the database or schema itself, with the full
+ * dotted path as its tooltip; null hides it.
+ */
 export function namespaceLabel(namespace: CurrentNamespace): { readonly text: string; readonly title: string } | null {
   const text = namespace?.at(-1);
   return namespace === null || text === undefined ? null : { text, title: namespace.join(".") };

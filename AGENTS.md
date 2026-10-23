@@ -15,8 +15,10 @@ Run from the repository root.
 - `bun install`
 - `bun run test` - Vitest, unit tests plus the plugin contract suite against SQLite
 - `bun run test:db` - the contract suite against PostgreSQL (port 55432) and MySQL (port 53306)
-  in `docker compose`, seeded from `test/db/schema/`. A second checkout (a parallel worktree) sets
-  `COMPOSE_PROJECT_NAME`, `TABLE_CRAFT_PG_PORT` and `TABLE_CRAFT_MYSQL_PORT` for every `test:db`,
+  in `docker compose`, seeded from `test/db/schema/`, plus the TiDB 4 suite (`test/db/tidb.test.ts`,
+  port 54000, root with no password, database `test`; an amd64 image, emulated on Apple silicon).
+  A second checkout (a parallel worktree) sets `COMPOSE_PROJECT_NAME`, `TABLE_CRAFT_PG_PORT`,
+  `TABLE_CRAFT_MYSQL_PORT` and `TABLE_CRAFT_TIDB_PORT` for every `test:db`,
   `test:smoke:db` and `docker compose` command so it gets its own containers
 - `bun run test:smoke` - build the app and drive it under Playwright; needs a display
 - `bun run test:smoke:db` - the same against PostgreSQL, MySQL and SQLite; set

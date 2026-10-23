@@ -12,6 +12,12 @@ export const PLUGIN_ERROR_CODES = [
    * again; `Session.ping` rejects with it too.
    */
   "connectionLost",
+  /**
+   * The session is still busy with an earlier statement or result and refused this one unsent
+   * (decision 058). The host waits for every close first, so this is a bug it logs and heals by
+   * reconnecting; never a message for the user.
+   */
+  "sessionBusy",
 ] as const;
 
 export type PluginErrorCode = (typeof PLUGIN_ERROR_CODES)[number];

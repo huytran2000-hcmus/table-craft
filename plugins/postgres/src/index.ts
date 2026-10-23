@@ -391,7 +391,7 @@ class PostgresSession implements Session {
     if (this.#broken !== null) {
       throw new PluginError("connectionLost", `The connection was lost: ${this.#broken.message}`);
     }
-    if (this.#running !== null) throw new PluginError("statementFailed", BUSY_MESSAGE);
+    if (this.#running !== null) throw new PluginError("sessionBusy", BUSY_MESSAGE);
     await this.#cancelling.catch(() => undefined);
     const running: Running = { cancelRequested: false };
     this.#running = running;
@@ -438,7 +438,7 @@ class PostgresSession implements Session {
   }
 
   async currentNamespace(): Promise<readonly string[] | null> {
-    if (this.#running !== null) throw new PluginError("statementFailed", BUSY_MESSAGE);
+    if (this.#running !== null) throw new PluginError("sessionBusy", BUSY_MESSAGE);
     try {
       const result = await this.#client.query<{ database: string; schema: string | null }>(CURRENT_NAMESPACE_SQL);
       const row = result.rows[0];
@@ -452,7 +452,7 @@ class PostgresSession implements Session {
     if (this.#broken !== null) {
       throw new PluginError("connectionLost", `The connection was lost: ${this.#broken.message}`);
     }
-    if (this.#running !== null) throw new PluginError("statementFailed", BUSY_MESSAGE);
+    if (this.#running !== null) throw new PluginError("sessionBusy", BUSY_MESSAGE);
     try {
       await this.#client.query(PING_SQL);
     } catch (cause) {
@@ -464,7 +464,7 @@ class PostgresSession implements Session {
     if (this.#broken !== null) {
       throw new PluginError("connectionFailed", `The connection was lost: ${this.#broken.message}`);
     }
-    if (this.#running !== null) throw new PluginError("statementFailed", BUSY_MESSAGE);
+    if (this.#running !== null) throw new PluginError("sessionBusy", BUSY_MESSAGE);
     if (rows.length === 0) return;
     await this.#cancelling.catch(() => undefined);
     const running: Running = { cancelRequested: false };
@@ -586,7 +586,7 @@ class PostgresSession implements Session {
 
   async #endTransaction(sql: string): Promise<void> {
     if (!this.#transaction.open) return;
-    if (this.#running !== null) throw new PluginError("statementFailed", BUSY_MESSAGE);
+    if (this.#running !== null) throw new PluginError("sessionBusy", BUSY_MESSAGE);
     try {
       await this.#client.query(sql);
     } catch (cause) {
