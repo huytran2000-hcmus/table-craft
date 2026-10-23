@@ -1879,12 +1879,12 @@ export function runPluginContract(plugin: DatasourcePlugin, fixture: ContractFix
 
       it("givenSwitchStatementForTarget_whenExecuted_thenCurrentNamespaceIsTarget", async () => {
         const { path } = namespaceSwitch();
-        const { statement, targets } = switcher();
+        const written = switcher();
         await withSession(plugin, fixture, async (session) => {
           const listed = (await session.introspector?.namespaces()) ?? [];
           const target = listed.find((namespace) => namespace.path.join(".") === path.join("."));
-          expect(target === undefined ? false : switchableTo(targets, target)).toBe(true);
-          const sql = statement(path);
+          expect(target === undefined ? false : switchableTo(written.targets, target)).toBe(true);
+          const sql = written.statement(path);
           expect(plugin.language?.classify(sql).setsNamespace).toBe(true);
           await collect((await session.execute(sql)).rows);
           expect(await current(session)).toEqual(path);

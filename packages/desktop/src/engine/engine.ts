@@ -34,6 +34,7 @@ import {
 } from "@table-craft/core";
 import {
   isPluginError,
+  switchableTo,
   type BoundStatement,
   type Capability,
   type Column,
@@ -45,6 +46,8 @@ import {
   type DdlScript,
   type Declaration,
   type InsertTarget,
+  type Namespace,
+  type NamespaceSwitch,
   type ObjectChange,
   type ObjectEditor,
   type Relation,
@@ -62,6 +65,7 @@ import type {
   ClassifiedStatement,
   ConditionColumn,
   CurrentNamespace,
+  SwitchStatement,
   DatasourceConfig,
   EngineError,
   EngineMethod,
@@ -964,6 +968,30 @@ export function createEngine(options: EngineOptions, now: () => number = Date.no
       });
     }
     return editor;
+  }
+
+  function namespaceSwitch(): NamespaceSwitch {
+    const { plugin } = loadedPlugin(options.plugins, options.datasource.pluginId);
+    const switcher = plugin.language?.namespaceSwitch;
+    if (!plugin.capabilities.includes("currentNamespace") || switcher === undefined) {
+      throw new EngineFailure({
+        code: "invalidRequest",
+        message: "This datasource's plugin does not declare the currentNamespace capability.",
+        hint: BUG_HINT,
+      });
+    }
+    return switcher;
+  }
+
+  async function switchTargets(refresh: boolean | undefined): Promise<Namespace[]> {
+    const { targets } = namespaceSwitch();
+    const namespaces = await introspect(({ cache }) => cache.namespaces(refresh));
+    return namespaces.filter((namespace) => switchableTo(targets, namespace));
+  }
+
+  function switchStatement(path: readonly string[]): SwitchStatement {
+    const switcher = namespaceSwitch();
+    return { sql: switcher.statement(path), transactional: switcher.transactional };
   }
 
   /** Read afresh: a design or a diff from a stale cache would undo what another session changed. */
@@ -1961,6 +1989,8 @@ export function createEngine(options: EngineOptions, now: () => number = Date.no
       "objects.script": ({ change }) => objectScript(change),
       "objects.apply": ({ change, statements: previewed }) => applyObjectChange(change, previewed),
       "catalog.namespaces": ({ refresh }) => introspect(({ cache }) => cache.namespaces(refresh)),
+      "namespace.targets": ({ refresh }) => switchTargets(refresh),
+      "namespace.switchStatement": ({ path }) => Promise.resolve(switchStatement(path)),
       "catalog.describe": ({ path, refresh }) => introspect(({ cache }) => cache.describe(path, refresh)),
       "catalog.qualifiedName": ({ path, name }) =>
         introspect(({ session }) => session.introspector?.qualifiedName(path, name) ?? name),

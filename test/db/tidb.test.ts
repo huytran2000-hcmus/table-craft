@@ -2,7 +2,13 @@ import { createRequire } from "node:module";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import mysql from "@table-craft/plugin-mysql";
 import { createEngine, type EngineConnection } from "@table-craft/desktop/engine/engine.js";
-import type { DatasourceConfig, EngineResponse, ExecutedStatement } from "@table-craft/desktop/engine/protocol.js";
+import type {
+  DatasourceConfig,
+  EngineResponse,
+  ExecutedStatement,
+  Namespace,
+  SwitchStatement,
+} from "@table-craft/desktop/engine/protocol.js";
 import { RESULT_FETCH_ALL_CAP, RESULT_PAGE_ROWS } from "@table-craft/desktop/engine/protocol.js";
 import { TIDB_CONFIG } from "../support/databases.js";
 import { MYSQL_MANIFEST } from "../support/manifests.js";
@@ -20,6 +26,8 @@ const SLEEP_SQL = "SELECT SLEEP(30)";
 const STARTED_MS = 500;
 /** Cancel must stop the sleep by dropping the session, not wait it out. */
 const CANCEL_WITHIN_MS = 5_000;
+/** Plan 029: a database name near MySQL's 64-character limit, which the switcher label shows whole. */
+const LONG_DATABASE = "plan_029_a_database_whose_name_runs_long_enough_to_test_labels";
 
 const LOADED = { status: "loaded", directory: "plugins/mysql", manifest: MYSQL_MANIFEST, plugin: mysql } as const;
 
@@ -124,5 +132,28 @@ describe("tidb 4", () => {
     const next = await connection.handle({ id: 7, type: "statement.execute", ...PAGING, sessionId, sql: "SELECT 1" });
 
     expect(resultOf<ExecutedStatement>(next).firstWindow.rows).toHaveLength(1);
+  });
+
+  it("givenLongNamedDatabase_whenSwitchedThroughEngine_thenNamespaceIsIt", async () => {
+    const connection = engine();
+    const sessionId = await open(connection);
+    const run = async (sql: string) =>
+      resultOf<ExecutedStatement>(
+        await connection.handle({ id: 8, type: "statement.execute", ...PAGING, sessionId, sql }),
+      );
+    await run(`DROP DATABASE IF EXISTS \`${LONG_DATABASE}\``);
+    await run(`CREATE DATABASE \`${LONG_DATABASE}\``);
+    cleanup.push(() => run(`DROP DATABASE IF EXISTS \`${LONG_DATABASE}\``));
+
+    const targets = resultOf<readonly Namespace[]>(
+      await connection.handle({ id: 9, type: "namespace.targets", refresh: true }),
+    );
+    const { sql } = resultOf<SwitchStatement>(
+      await connection.handle({ id: 10, type: "namespace.switchStatement", path: [LONG_DATABASE] }),
+    );
+    const switched = await run(sql);
+
+    expect(targets.map((target) => target.path)).toContainEqual([LONG_DATABASE]);
+    expect(switched.namespace).toEqual([LONG_DATABASE]);
   });
 });

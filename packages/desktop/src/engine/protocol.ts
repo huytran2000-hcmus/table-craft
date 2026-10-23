@@ -137,6 +137,12 @@ export interface Namespace {
   readonly current: boolean;
 }
 
+/** A namespace switch as the plugin writes it; `transactional` when a rollback undoes it. */
+export interface SwitchStatement {
+  readonly sql: string;
+  readonly transactional: boolean;
+}
+
 /** Mirrors `ColumnMeta` in plugin-api. */
 export interface ColumnMeta {
   readonly name: string;
@@ -1030,6 +1036,13 @@ export interface EngineCalls {
    * engine's introspection session (decision 022). Needs `schemaTree`.
    */
   "catalog.namespaces": { params: { readonly refresh?: boolean }; result: readonly Namespace[] };
+  /**
+   * The namespaces a console can switch to, in catalog order: `catalog.namespaces` narrowed to the
+   * plugin's switch targets. Needs `currentNamespace`.
+   */
+  "namespace.targets": { params: { readonly refresh?: boolean }; result: readonly Namespace[] };
+  /** The plugin's statement that switches a session to `path` (decision 060). Needs `currentNamespace`. */
+  "namespace.switchStatement": { params: { readonly path: readonly string[] }; result: SwitchStatement };
   /** One namespace's objects, from the engine's cache unless `refresh`. Needs `schemaTree`. */
   "catalog.describe": {
     params: { readonly path: readonly string[]; readonly refresh?: boolean };

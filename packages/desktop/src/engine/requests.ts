@@ -260,6 +260,8 @@ export const engineRequestSchema = z.discriminatedUnion("type", [
   z.strictObject({ id: requestId, type: z.literal("import.resume"), taskId, stallSeconds }),
   z.strictObject({ id: requestId, type: z.literal("import.list") }),
   z.strictObject({ id: requestId, type: z.literal("catalog.namespaces"), refresh: z.boolean().optional() }),
+  z.strictObject({ id: requestId, type: z.literal("namespace.targets"), refresh: z.boolean().optional() }),
+  z.strictObject({ id: requestId, type: z.literal("namespace.switchStatement"), path: namespacePath }),
   z.strictObject({
     id: requestId,
     type: z.literal("catalog.describe"),
