@@ -623,7 +623,7 @@ describe("query parameters", () => {
 
   it("givenDetectionOff_whenRun_thenRunsVerbatim", async () => {
     const settings = useSettings.getState().settings;
-    useSettings.setState({ settings: { ...settings, console: { parameters: false } } });
+    useSettings.setState({ settings: { ...settings, console: { ...settings.console, parameters: false } } });
     try {
       const { store, askParameters, bound, executed } = await opened("SELECT :id");
 

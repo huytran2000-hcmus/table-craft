@@ -332,6 +332,7 @@ describe("diagnostics", () => {
     unavailableReason: null,
     capabilities: [],
     highlight: "postgresql",
+    url: null,
     fields: [
       { key: "host", label: "Host", kind: "text" },
       { key: "password", label: "Password", kind: "password", secret: true },

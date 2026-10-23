@@ -35,6 +35,8 @@ export const INVOKE_CHANNELS = {
   saveDatasource: "table-craft:datasources.save",
   deleteDatasource: "table-craft:datasources.delete",
   testDatasource: "table-craft:datasources.test",
+  parseDatasourceUrl: "table-craft:datasources.parse-url",
+  datasourceUrl: "table-craft:datasources.url",
   listPlugins: "table-craft:plugins.list",
   connectEngine: "table-craft:engine.connect",
   disconnectEngine: "table-craft:engine.disconnect",
@@ -104,6 +106,27 @@ export interface ConnectionField {
 
 export type ConfigValue = string | number | boolean;
 
+/** Mirrors `ConnectionUrlSpec` in plugin-api: how the plugin's connection URLs read (decision 055). */
+export interface ConnectionUrlSpec {
+  readonly schemes: readonly string[];
+  readonly form: "server" | "file";
+  readonly parts: Readonly<Partial<Record<"host" | "port" | "database" | "user" | "password" | "path", string>>>;
+  readonly params?:
+    | readonly {
+        readonly name: string;
+        readonly key: string;
+        readonly values?: Readonly<Record<string, string>> | undefined;
+      }[]
+    | undefined;
+}
+
+/** What a pasted connection URL fills in; `secrets` is what the user pasted, for the secret fields. */
+export interface ParsedUrl {
+  readonly values: Readonly<Record<string, ConfigValue>>;
+  readonly secrets: Readonly<Record<string, string>>;
+  readonly ignored: readonly string[];
+}
+
 /** An installed plugin as the Data Sources dialog lists it; read from its manifest only. */
 export interface PluginInfo {
   readonly id: string;
@@ -114,6 +137,8 @@ export interface PluginInfo {
   readonly fields: readonly ConnectionField[];
   /** The manifest's SQL dialect for the editor, e.g. `postgresql`; null when the manifest is unreadable. */
   readonly highlight: string | null;
+  /** The manifest's connection URL; null when the plugin reads none. */
+  readonly url: ConnectionUrlSpec | null;
 }
 
 /** A datasource as `datasources.json` holds it: no secret value, ever (decision 010). */
@@ -125,6 +150,10 @@ export interface Datasource {
   readonly folder: string | null;
   readonly color: DatasourceColor | null;
   readonly readOnly: boolean;
+  /** Seconds before TCP keepalive and the idle ping (decision 054); absent is 30, 0 is off. */
+  readonly keepAliveSeconds?: number | undefined;
+  /** Overrides Settings → Console's statement timeout; absent follows it, 0 is no limit. */
+  readonly statementTimeoutSeconds?: number | undefined;
   readonly comment: string;
   /** The non-secret connection fields, by key. */
   readonly config: Readonly<Record<string, ConfigValue>>;
@@ -296,6 +325,10 @@ export interface TableCraftBridge {
   deleteDatasource(id: string): Promise<InvokeResult<null>>;
   /** Test Connection: a throwaway engine connects once; stored secrets are merged in main. */
   testDatasource(request: SaveDatasourceRequest): Promise<InvokeResult<ProbeResult>>;
+  /** Reads a pasted connection URL with the plugin's manifest (decision 055); fails with what it expected. */
+  parseDatasourceUrl(pluginId: string, url: string): Promise<InvokeResult<ParsedUrl>>;
+  /** The saved data source as a connection URL, without its secrets, for Copy as URL. */
+  datasourceUrl(id: string): Promise<InvokeResult<string>>;
   listPlugins(): Promise<InvokeResult<readonly PluginInfo[]>>;
   /**
    * Starts or reuses the datasource's engine. On `connected`, the port arrives as a window

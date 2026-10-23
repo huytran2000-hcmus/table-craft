@@ -16,7 +16,7 @@ const LOADED_SQLITE: PluginLoadResult = {
 function connection() {
   const path = seededSqliteFile();
   return createEngine({
-    datasource: { id: "seeded", pluginId: "sqlite", config: { path }, readOnly: false },
+    datasource: { id: "seeded", pluginId: "sqlite", config: { path }, readOnly: false, keepAliveSeconds: 0 },
     plugins: [LOADED_SQLITE],
   }).connect();
 }

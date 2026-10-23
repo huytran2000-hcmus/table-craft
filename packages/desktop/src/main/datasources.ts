@@ -8,6 +8,7 @@ import {
   type Datasource,
   type DatasourceDraft,
 } from "@table-craft/desktop/preload/bridge.js";
+import { KEEPALIVE_SECONDS_RANGE, STATEMENT_TIMEOUT_SECONDS_RANGE } from "@table-craft/desktop/settings/settings.js";
 
 export const DATASOURCES_FILE = "datasources.json";
 /** Bumped with a migration in `migrate` whenever the file's shape changes (decision 010). */
@@ -25,6 +26,13 @@ const datasourceSchema = z.strictObject({
   folder: z.string().min(1).nullable(),
   color: z.enum(DATASOURCE_COLORS).nullable(),
   readOnly: z.boolean(),
+  keepAliveSeconds: z.number().int().min(KEEPALIVE_SECONDS_RANGE.min).max(KEEPALIVE_SECONDS_RANGE.max).optional(),
+  statementTimeoutSeconds: z
+    .number()
+    .int()
+    .min(STATEMENT_TIMEOUT_SECONDS_RANGE.min)
+    .max(STATEMENT_TIMEOUT_SECONDS_RANGE.max)
+    .optional(),
   comment: z.string(),
   config: z.record(z.string(), configValue),
   secretModes: z.record(z.string(), z.enum(SECRET_MODES)),
@@ -102,6 +110,8 @@ export function toDatasource(draft: DatasourceDraft, id: string, fields: readonl
     folder: normalizeFolder(draft.folder),
     color: draft.color,
     readOnly: draft.readOnly,
+    ...(draft.keepAliveSeconds === undefined ? {} : { keepAliveSeconds: draft.keepAliveSeconds }),
+    ...(draft.statementTimeoutSeconds === undefined ? {} : { statementTimeoutSeconds: draft.statementTimeoutSeconds }),
     comment: draft.comment,
     config,
     secretModes,

@@ -28,7 +28,13 @@ const LOADED_SQLITE: PluginLoadResult = {
   manifest: SQLITE_MANIFEST,
   plugin: sqlite,
 };
-const DATASOURCE = { id: "scratch", pluginId: "sqlite", config: { path: ":memory:" }, readOnly: false };
+const DATASOURCE = {
+  id: "scratch",
+  pluginId: "sqlite",
+  config: { path: ":memory:" },
+  readOnly: false,
+  keepAliveSeconds: 0,
+};
 const ROWS_1200 = "WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 1200) SELECT i FROM n";
 
 const CANCELLABLE_ID = "cancellable";
@@ -69,7 +75,7 @@ function connectedToCancellable(plugin: DatasourcePlugin) {
     plugin,
   };
   return createEngine({
-    datasource: { id: "c", pluginId: CANCELLABLE_ID, config: {}, readOnly: false },
+    datasource: { id: "c", pluginId: CANCELLABLE_ID, config: {}, readOnly: false, keepAliveSeconds: 0 },
     plugins: [loaded],
   }).connect();
 }
@@ -227,7 +233,7 @@ describe("engine", () => {
 
   it("givenReadOnlyDatasource_whenWriting_thenStatementFailedWithReadOnlyHint", async () => {
     const connection = createEngine({
-      datasource: { ...DATASOURCE, readOnly: true },
+      datasource: { ...DATASOURCE, readOnly: true, keepAliveSeconds: 0 },
       plugins: [LOADED_SQLITE],
     }).connect();
     const sessionId = await openSession(connection);
@@ -358,7 +364,13 @@ function countingSqlite(): { engine: ReturnType<typeof createEngine>; opened: ()
     },
   };
   const engine = createEngine({
-    datasource: { id: "seeded", pluginId: "sqlite", config: { path: seededSqliteFile() }, readOnly: false },
+    datasource: {
+      id: "seeded",
+      pluginId: "sqlite",
+      config: { path: seededSqliteFile() },
+      readOnly: false,
+      keepAliveSeconds: 0,
+    },
     plugins: [{ status: "loaded", directory: SQLITE_DIRECTORY, manifest: SQLITE_MANIFEST, plugin }],
   });
   return { engine, opened: () => opened, closed: () => closed };

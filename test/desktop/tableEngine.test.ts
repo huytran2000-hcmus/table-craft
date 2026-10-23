@@ -26,7 +26,7 @@ const EDIT_PROBE = "edit_probe";
 function seededEngine(readOnly = false) {
   const path = seededSqliteFile();
   return createEngine({
-    datasource: { id: "seeded", pluginId: "sqlite", config: { path }, readOnly },
+    datasource: { id: "seeded", pluginId: "sqlite", config: { path }, readOnly, keepAliveSeconds: 0 },
     plugins: [LOADED_SQLITE],
   });
 }

@@ -342,6 +342,7 @@ back to its default without affecting the others.
 | `editor.format.indentWidth`            | 1–8 spaces                                                         | 2             |
 | `editor.format.linesBetweenStatements` | 0–5 blank lines                                                    | 1             |
 | `console.parameters`                   | `true`, `false`; ask for `:name`, `?` and `$1` values before a run | `true`        |
+| `console.statementTimeoutSeconds`      | 0–86,400; a console statement running longer is cancelled; 0 waits | 0             |
 | `data.nullText`                        | 1–16 characters                                                    | `<null>`      |
 | `data.groupDigits`                     | `true`, `false`                                                    | `false`       |
 | `data.pageRows`                        | 10–10,000                                                          | 500           |
@@ -386,13 +387,15 @@ The manifest declares what the plugin can do, and the UI offers only what it dec
 - `explainAnalyze`: runs a statement and returns its plan with actual rows and times.
 - `currentNamespace`: reports which database or schema a console is in, so completion follows
   `USE` and `SET search_path`.
+- `keepAlive`: turns on TCP keepalive when asked and answers a ping, so an idle console notices a
+  dropped connection and reconnects.
 
 ```json
 {
   "id": "postgres",
   "name": "PostgreSQL",
   "version": "0.0.0",
-  "apiVersion": "0.13.0",
+  "apiVersion": "0.14.0",
   "entry": "index.js",
   "capabilities": [
     "sql",
@@ -402,14 +405,20 @@ The manifest declares what the plugin can do, and the UI offers only what it dec
     "ddl",
     "explain",
     "explainAnalyze",
-    "currentNamespace"
+    "currentNamespace",
+    "keepAlive"
   ],
   "highlight": "postgresql",
   "connection": {
     "fields": [
       { "key": "host", "label": "Host", "kind": "text", "default": "localhost", "required": true },
       { "key": "password", "label": "Password", "kind": "password", "secret": true }
-    ]
+    ],
+    "url": {
+      "schemes": ["postgresql", "postgres"],
+      "form": "server",
+      "parts": { "host": "host", "password": "password" }
+    }
   }
 }
 ```

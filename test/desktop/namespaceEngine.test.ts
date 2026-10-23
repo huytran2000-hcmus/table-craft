@@ -20,7 +20,7 @@ const PLUGIN_ID = "switching";
 const PAGING = { pageRows: RESULT_PAGE_ROWS, fetchAllCap: RESULT_FETCH_ALL_CAP };
 const USE = /^USE\s+(\w+)$/i;
 const KNOWN = new Set(["main", "archive"]);
-const DATASOURCE = { id: "s", pluginId: PLUGIN_ID, config: { path: ":memory:" }, readOnly: false };
+const DATASOURCE = { id: "s", pluginId: PLUGIN_ID, config: { path: ":memory:" }, readOnly: false, keepAliveSeconds: 0 };
 
 /**
  * SQLite with a pretend `USE`: the switch is held in the fake, which counts how often the engine

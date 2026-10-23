@@ -51,6 +51,8 @@ import {
   type StatementSpan,
   type TransactionMode,
   type WireValue,
+  type ConnectionUrlSpec,
+  type ParsedConnectionUrl,
 } from "@table-craft/plugin-api";
 import * as protocol from "@table-craft/desktop/engine/protocol.js";
 import * as bridge from "@table-craft/desktop/preload/bridge.js";
@@ -60,6 +62,11 @@ describe("engine protocol", () => {
     expect(protocol.RESULT_WINDOW_ROWS).toBe(RESULT_WINDOW_ROWS);
     expect(protocol.RESULT_PAGE_ROWS).toBe(RESULT_PAGE_ROWS);
     expect(protocol.RESULT_FETCH_ALL_CAP).toBe(RESULT_FETCH_ALL_CAP);
+  });
+
+  it("givenConnectionUrlTypes_whenComparedWithPluginApi_thenIdentical", () => {
+    expectTypeOf<bridge.ConnectionUrlSpec>().toEqualTypeOf<ConnectionUrlSpec>();
+    expectTypeOf<bridge.ParsedUrl>().toEqualTypeOf<ParsedConnectionUrl>();
   });
 
   it("givenHistoryTypes_whenComparedWithCore_thenIdentical", () => {
@@ -100,7 +107,7 @@ describe("engine protocol", () => {
 
   it("givenExecutedStatement_whenComparedWithCoreSummary_thenCarriesEveryField", () => {
     expectTypeOf<
-      Omit<protocol.ExecutedStatement, "firstWindow" | "transactionOpen" | "namespace">
+      Omit<protocol.ExecutedStatement, "firstWindow" | "transactionOpen" | "namespace" | "reconnected">
     >().toEqualTypeOf<ResultSummary>();
   });
 

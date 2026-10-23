@@ -43,7 +43,15 @@ export interface Column {
 
 /** Mirrors `Capability` in plugin-api. The renderer branches on these, never on a plugin id (decision 007). */
 export type Capability =
-  "sql" | "cancel" | "schemaTree" | "transactions" | "ddl" | "explain" | "explainAnalyze" | "currentNamespace";
+  | "sql"
+  | "cancel"
+  | "schemaTree"
+  | "transactions"
+  | "ddl"
+  | "explain"
+  | "explainAnalyze"
+  | "currentNamespace"
+  | "keepAlive";
 
 /** What the SQL Generator writes: `create` is the relation's definition, the rest mirror `GeneratedStatement` in plugin-api. */
 export type GeneratorStatement = "create" | "drop" | "select" | "insert" | "update";
@@ -205,6 +213,11 @@ export interface DatasourceConfig {
   readonly config: unknown;
   /** Every session asks the database to refuse writes (decision 011). */
   readonly readOnly: boolean;
+  /**
+   * Seconds of silence before TCP keepalive probes on every session this host opens, and how long a
+   * console session may idle before the engine pings it; 0 turns both off (decision 054).
+   */
+  readonly keepAliveSeconds: number;
 }
 
 /** `serve` answers renderer ports until the last closes; `probe` tests one connection and exits. */
@@ -354,6 +367,16 @@ export interface ExecutedStatement extends ResultState {
    * switched one (decision 048). Absent, the console keeps the namespace it had.
    */
   readonly namespace?: CurrentNamespace;
+  /** Present when the engine replaced a lost session before running the statement (decision 054). */
+  readonly reconnected?: Reconnection;
+}
+
+/** A lost session the engine replaced with a new one under the same `sessionId`. */
+export interface Reconnection {
+  /** Where the new session starts. */
+  readonly namespace: CurrentNamespace;
+  /** Whether the old session had moved away from where a session starts, by USE or a search path. */
+  readonly namespaceLost: boolean;
 }
 
 /** Mirrors `CellInput` in core: text the database casts, `NULL`, or the column's default. */
@@ -495,6 +518,7 @@ export interface ExplainedStatement {
   readonly plan: ExplainedPlan;
   /** Whether the session's transaction is open after the explain, as `ExecutedStatement` reports it. */
   readonly transactionOpen: boolean;
+  readonly reconnected?: Reconnection;
 }
 
 export interface OpenedSession {
@@ -519,6 +543,14 @@ export interface ResultPaging {
   readonly fetchAllCap: number;
 }
 
+/**
+ * How long the statement may run before the engine cancels it with `statementTimedOut`; 0 or absent
+ * for no limit. The renderer resolves it from the data source and Settings (decision 054).
+ */
+export interface StatementLimit {
+  readonly timeoutSeconds?: number;
+}
+
 /** The engine's calls: what each request carries and what its response answers with. */
 export interface EngineCalls {
   "session.open": { params: Record<never, never>; result: OpenedSession };
@@ -533,7 +565,8 @@ export interface EngineCalls {
       readonly sessionId: string;
       readonly sql: string;
       readonly parameters?: Readonly<Record<string, ParameterValue>>;
-    } & ResultPaging;
+    } & ResultPaging &
+      StatementLimit;
     result: ExecutedStatement;
   };
   /** Cancels the statement running in the session, if any; its `statement.execute` fails with `cancelled`. */
@@ -552,7 +585,7 @@ export interface EngineCalls {
    * (decision 031) and `statement.cancel` stops it. Needs `explain`, and `explainAnalyze` for `analyze`.
    */
   "statement.explain": {
-    params: { readonly sessionId: string; readonly sql: string; readonly analyze: boolean };
+    params: { readonly sessionId: string; readonly sql: string; readonly analyze: boolean } & StatementLimit;
     result: ExplainedStatement;
   };
   /** Switching to `auto` while a transaction is open fails with `statementFailed`. Needs `transactions`. */
@@ -645,7 +678,8 @@ export interface EngineCalls {
       readonly relation: string;
       readonly where: string;
       readonly orderBy: string;
-    } & ResultPaging;
+    } & ResultPaging &
+      StatementLimit;
     result: TableQuery;
   };
   /** `SELECT COUNT(*)` with the WHERE bar, on the engine's own session so the editor's cursor stays open. */
@@ -730,6 +764,8 @@ export type EngineErrorCode =
   | "invalidRequest"
   | "editRejected"
   | "timedOut"
+  | "statementTimedOut"
+  | "connectionLost"
   | "exportFailed"
   | "internal";
 

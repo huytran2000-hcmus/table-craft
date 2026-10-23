@@ -8,7 +8,7 @@ import { createLogger, type LogRecord } from "@table-craft/desktop/log/record.js
 import { createHostRegistry, PROBE_TIMEOUT_MS } from "@table-craft/desktop/main/hosts.js";
 import { fakeHostDependencies } from "../support/fakeHosts.js";
 
-const DATASOURCE = { id: "pg", pluginId: "postgres", config: { host: "db" }, readOnly: true };
+const DATASOURCE = { id: "pg", pluginId: "postgres", config: { host: "db" }, readOnly: true, keepAliveSeconds: 0 };
 
 function registry() {
   const dependencies = fakeHostDependencies();

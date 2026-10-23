@@ -7,6 +7,7 @@ import {
   INDENT_WIDTH_RANGE,
   LINES_BETWEEN_STATEMENTS_RANGE,
   PAGE_ROWS_RANGE,
+  STATEMENT_TIMEOUT_SECONDS_RANGE,
 } from "@table-craft/desktop/settings/settings.js";
 
 const requestId = z.number().int().nonnegative();
@@ -28,6 +29,12 @@ const paging = {
   pageRows: z.number().int().min(PAGE_ROWS_RANGE.min).max(PAGE_ROWS_RANGE.max),
   fetchAllCap: z.number().int().min(FETCH_ALL_CAP_RANGE.min).max(FETCH_ALL_CAP_RANGE.max),
 };
+const timeoutSeconds = z
+  .number()
+  .int()
+  .min(STATEMENT_TIMEOUT_SECONDS_RANGE.min)
+  .max(STATEMENT_TIMEOUT_SECONDS_RANGE.max)
+  .optional();
 const cellInput = z.discriminatedUnion("kind", [
   z.strictObject({ kind: z.literal("text"), text: z.string() }),
   z.strictObject({ kind: z.literal("null") }),
@@ -56,6 +63,7 @@ export const engineRequestSchema = z.discriminatedUnion("type", [
     sql: z.string(),
     parameters: z.record(z.string(), z.string().nullable()).optional(),
     ...paging,
+    timeoutSeconds,
   }),
   z.strictObject({ id: requestId, type: z.literal("statement.cancel"), sessionId }),
   z.strictObject({ id: requestId, type: z.literal("script.split"), text: z.string() }),
@@ -80,6 +88,7 @@ export const engineRequestSchema = z.discriminatedUnion("type", [
     sessionId,
     sql: z.string(),
     analyze: z.boolean(),
+    timeoutSeconds,
   }),
   z.strictObject({
     id: requestId,
@@ -154,6 +163,7 @@ export const engineRequestSchema = z.discriminatedUnion("type", [
     where: z.string(),
     orderBy: z.string(),
     ...paging,
+    timeoutSeconds,
   }),
   z.strictObject({ id: requestId, type: z.literal("table.count"), path: namespacePath, relation, where: z.string() }),
   z.strictObject({

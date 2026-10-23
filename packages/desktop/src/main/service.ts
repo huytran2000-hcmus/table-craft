@@ -1,4 +1,5 @@
 import type { QueryHistory } from "@table-craft/core";
+import { ConnectionUrlError, formatConnectionUrl, parseConnectionUrl } from "@table-craft/plugin-api";
 import type { ConsoleFiles } from "@table-craft/desktop/main/consoleFiles.js";
 import type { DatasourceConfig, ProbeResult } from "@table-craft/desktop/engine/protocol.js";
 import { toDatasource, type DatasourceStore } from "@table-craft/desktop/main/datasources.js";
@@ -11,10 +12,12 @@ import type {
   Datasource,
   DatasourceList,
   DatasourceView,
+  ParsedUrl,
   PluginInfo,
   SaveDatasourceRequest,
   SecretMode,
 } from "@table-craft/desktop/preload/bridge.js";
+import { DEFAULT_KEEPALIVE_SECONDS } from "@table-craft/desktop/settings/settings.js";
 
 /** A failure the user can act on; ipc hands its message and hint to the renderer as they are. */
 export class DatasourceError extends Error {
@@ -55,6 +58,10 @@ export interface DatasourceService<Target> {
   save(request: SaveDatasourceRequest): Promise<DatasourceView>;
   delete(id: string): Promise<void>;
   test(request: SaveDatasourceRequest): Promise<ProbeResult>;
+  /** Reads a pasted URL for the plugin's form; the password comes back only to fill the field it was pasted for. */
+  parseUrl(pluginId: string, url: string): ParsedUrl;
+  /** The saved data source's connection URL, without secrets. */
+  url(id: string): string;
   connect(datasourceId: string, typed: Readonly<Record<string, string>>, target: Target): Promise<ConnectResult>;
   disconnect(datasourceId: string): Promise<void>;
 }
@@ -222,15 +229,47 @@ export async function createDatasourceService<Target>(
   }
 
   function engineConfig(datasource: Datasource, values: Readonly<Record<string, string>>): DatasourceConfig {
+    const keepAliveSeconds = datasource.keepAliveSeconds ?? DEFAULT_KEEPALIVE_SECONDS;
     if (ephemeral !== null && datasource.id === ephemeral.id && options.ephemeral !== null) {
-      return { id: datasource.id, pluginId: datasource.pluginId, config: options.ephemeral.config, readOnly: false };
+      return {
+        id: datasource.id,
+        pluginId: datasource.pluginId,
+        config: options.ephemeral.config,
+        readOnly: false,
+        keepAliveSeconds,
+      };
     }
     return {
       id: datasource.id,
       pluginId: datasource.pluginId,
       config: { ...datasource.config, ...values },
       readOnly: datasource.readOnly,
+      keepAliveSeconds,
     };
+  }
+
+  function urlForm(pluginId: string) {
+    const plugin = availablePlugin(pluginId);
+    if (plugin.url === null) {
+      throw new DatasourceError(`${plugin.name} has no connection URL.`, "Fill in the fields instead.");
+    }
+    return { connection: { fields: plugin.fields, url: plugin.url } };
+  }
+
+  function parseUrl(pluginId: string, url: string): ParsedUrl {
+    try {
+      return parseConnectionUrl(urlForm(pluginId), url);
+    } catch (cause) {
+      if (cause instanceof ConnectionUrlError) {
+        throw new DatasourceError(cause.message, "Paste the whole URL, or fill in the fields instead.");
+      }
+      throw cause;
+    }
+  }
+
+  function urlOf(id: string): string {
+    const datasource = find(id);
+    return formatConnectionUrl(urlForm(datasource.pluginId), datasource.config);
   }
 
   async function test(request: SaveDatasourceRequest): Promise<ProbeResult> {
@@ -290,6 +329,8 @@ export async function createDatasourceService<Target>(
     save,
     delete: remove,
     test,
+    parseUrl,
+    url: urlOf,
     connect,
     disconnect: (datasourceId) => hosts.stop(datasourceId),
   };

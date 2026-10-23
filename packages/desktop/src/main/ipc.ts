@@ -37,6 +37,7 @@ const saveRequest = z.strictObject({
 }) satisfies z.ZodType<SaveDatasourceRequest>;
 
 const idRequest = z.strictObject({ id: z.string().min(1) });
+const parseUrlRequest = z.strictObject({ pluginId: z.string().min(1), url: z.string() });
 const connectRequest = z.strictObject({
   datasourceId: z.string().min(1),
   secrets: z.record(z.string(), z.string()).optional(),
@@ -170,6 +171,8 @@ export function registerIpc<Sender>(ipc: InvokeRegistrar<Sender>, options: IpcOp
     return null;
   });
   handle(INVOKE_CHANNELS.testDatasource, saveRequest, (request) => service.test(request));
+  handle(INVOKE_CHANNELS.parseDatasourceUrl, parseUrlRequest, ({ pluginId, url }) => service.parseUrl(pluginId, url));
+  handle(INVOKE_CHANNELS.datasourceUrl, idRequest, ({ id }) => service.url(id));
   handle(INVOKE_CHANNELS.connectEngine, connectRequest, ({ datasourceId, secrets }, sender) =>
     service.connect(datasourceId, secrets ?? {}, sender),
   );

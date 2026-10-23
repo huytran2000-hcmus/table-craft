@@ -67,6 +67,11 @@ export interface EditorSettings {
 export interface ConsoleSettings {
   /** Prompt for `:name`, `?` and `$1` before a run and bind the values (decision 043); off runs SQL verbatim. */
   readonly parameters: boolean;
+  /**
+   * How long a console statement may run before the engine cancels it; 0 for no limit. A data
+   * source's own timeout overrides it (decision 054).
+   */
+  readonly statementTimeoutSeconds: number;
 }
 
 /** The levels Settings → Advanced offers; `error` and `warn` are always written (plan 017 decision 3). */
@@ -107,6 +112,11 @@ export const EXPORT_STALL_SECONDS_RANGE: NumberRange = { min: 10, max: 3_600 };
 export const NULL_TEXT_LENGTH: NumberRange = { min: 1, max: 16 };
 export const INDENT_WIDTH_RANGE: NumberRange = { min: 1, max: 8 };
 export const LINES_BETWEEN_STATEMENTS_RANGE: NumberRange = { min: 0, max: 5 };
+/** 0 is no limit; the top is one day. */
+export const STATEMENT_TIMEOUT_SECONDS_RANGE: NumberRange = { min: 0, max: 86_400 };
+/** 0 turns keepalive off; the top is the two hours an OS waits by default (decision 054). */
+export const KEEPALIVE_SECONDS_RANGE: NumberRange = { min: 0, max: 7_200 };
+export const DEFAULT_KEEPALIVE_SECONDS = 30;
 /** Longer than any installed family's name; guards a hand-edited file, not a real font. */
 export const FONT_FAMILY_MAX_LENGTH = 128;
 
@@ -127,6 +137,7 @@ export const DEFAULT_SETTINGS: Settings = {
   },
   console: {
     parameters: true,
+    statementTimeoutSeconds: 0,
   },
   data: {
     nullText: "<null>",
@@ -204,6 +215,14 @@ export function exportStallSecondsError(seconds: number): string | null {
   return rangeError(seconds, EXPORT_STALL_SECONDS_RANGE, "The export stall timeout");
 }
 
+export function statementTimeoutSecondsError(seconds: number): string | null {
+  return rangeError(seconds, STATEMENT_TIMEOUT_SECONDS_RANGE, "The statement timeout");
+}
+
+export function keepAliveSecondsError(seconds: number): string | null {
+  return rangeError(seconds, KEEPALIVE_SECONDS_RANGE, "The keepalive interval");
+}
+
 export function nullTextError(nullText: string): string | null {
   if (nullText.length < NULL_TEXT_LENGTH.min || nullText.length > NULL_TEXT_LENGTH.max) {
     return `NULL text must be ${NULL_TEXT_LENGTH.min} to ${NULL_TEXT_LENGTH.max} characters.`;
@@ -268,6 +287,9 @@ export function readSettings(input: unknown): Settings {
     editor: { format: readFormat(editor.format, defaults.editor.format) },
     console: {
       parameters: typeof console.parameters === "boolean" ? console.parameters : defaults.console.parameters,
+      statementTimeoutSeconds: inRange(console.statementTimeoutSeconds, STATEMENT_TIMEOUT_SECONDS_RANGE)
+        ? console.statementTimeoutSeconds
+        : defaults.console.statementTimeoutSeconds,
     },
     data: {
       nullText:

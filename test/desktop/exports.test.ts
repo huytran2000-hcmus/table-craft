@@ -27,7 +27,9 @@ const ROWS_1200 = "WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM 
 const ENDLESS = "WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n) SELECT i, hex(randomblob(64)) FROM n";
 
 function harness(path: string): ExportHarness {
-  return exportHarness({ id: "export", pluginId: "sqlite", config: { path }, readOnly: false }, [LOADED_SQLITE]);
+  return exportHarness({ id: "export", pluginId: "sqlite", config: { path }, readOnly: false, keepAliveSeconds: 0 }, [
+    LOADED_SQLITE,
+  ]);
 }
 
 describe("engine exports", () => {

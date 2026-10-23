@@ -29,6 +29,7 @@ import {
   type Column,
   type ColumnMeta,
   type CompletionCatalog,
+  type ConnectOptions,
   type CompletionRequest,
   type CompletionResult,
   type Declaration,
@@ -59,6 +60,7 @@ import type {
   GeneratorStatement,
   ParameterValue,
   ProbeResult,
+  Reconnection,
   ReferencingKey,
   RequestOf,
   ResultOf,
@@ -75,6 +77,7 @@ import {
 } from "@table-craft/desktop/engine/requestLog.js";
 import { exportTasks, type ExportJob, type ExportRows } from "@table-craft/desktop/engine/exports.js";
 import { engineRequestSchema, readRequestId } from "@table-craft/desktop/engine/requests.js";
+import { SessionLost, StatementTimedOut, watchStatement, type LostReason } from "@table-craft/desktop/engine/watch.js";
 import type { Logger, LogFields } from "@table-craft/desktop/log/record.js";
 
 const SESSION_PREFIX = "session-";
@@ -142,7 +145,14 @@ const FORMAT_HINT = "The text is unchanged; fix what the reason points at and re
 const READ_ONLY_STATEMENT_HINT =
   "This data source is read-only, so writes are refused; clear Read-only in its properties to write.";
 
+const RECONNECT_HINT = "Run it again; the console reconnects first.";
+const UNKNOWN_OUTCOME_HINT = "Run it again to reconnect, but check first whether it took effect.";
+
 function statementFailed(cause: unknown, readOnly: boolean): EngineFailure {
+  if (cause instanceof EngineFailure) return cause;
+  if (isPluginError(cause) && cause.code === "connectionLost") {
+    return new EngineFailure({ code: "connectionLost", message: cause.message, hint: RECONNECT_HINT }, cause);
+  }
   if (isPluginError(cause) && cause.code === "cancelled") {
     return new EngineFailure({
       code: "cancelled",
@@ -197,12 +207,17 @@ interface Introspection {
 }
 
 interface OpenSession {
-  readonly session: Session;
+  /** Replaced, under the same session id, when the engine reconnects (decision 054). */
+  session: Session;
   readonly capabilities: readonly Capability[];
   /** Statements in flight: `statement.execute` calls that have not answered yet. */
   running: number;
   /** Where the session started, as `currentNamespace` read it; undefined when it could not say. */
-  readonly opening: CurrentNamespace | undefined;
+  opening: CurrentNamespace | undefined;
+  /** When the session last finished a statement, for the idle ping. */
+  lastUsed: number;
+  /** Why the session was given up, so the next statement reconnects; null while it is usable. */
+  lost: string | null;
   /**
    * Whether a statement may have moved the session off `opening` (decision 048). Its reads then
    * resolve names a fresh session would resolve elsewhere, so an export must not re-run them.
@@ -215,9 +230,22 @@ function samePath(a: readonly string[] | null, b: readonly string[] | null): boo
   return a.length === b.length && a.every((part, index) => part === b[index]);
 }
 
-function connectDatasource(options: EngineOptions): Promise<Session> {
-  const { pluginId, config, readOnly } = options.datasource;
-  return openSession(options.plugins, pluginId, config, { readOnly }).catch((cause: unknown) => {
+const MS_PER_SECOND = 1_000;
+
+/** Every connection the engine opens asks for TCP keepalive at the data source's interval (decision 054). */
+function connectOptions(datasource: DatasourceConfig, readOnly: boolean): ConnectOptions {
+  const { keepAliveSeconds } = datasource;
+  return keepAliveSeconds > 0 ? { readOnly, keepAliveInitialDelayMs: keepAliveSeconds * MS_PER_SECOND } : { readOnly };
+}
+
+function connectDatasource(options: EngineOptions, readOnly = options.datasource.readOnly): Promise<Session> {
+  const { datasource } = options;
+  return openSession(
+    options.plugins,
+    datasource.pluginId,
+    datasource.config,
+    connectOptions(datasource, readOnly),
+  ).catch((cause: unknown) => {
     throw connectionFailed(cause);
   });
 }
@@ -241,9 +269,67 @@ export async function probeDatasource(options: EngineOptions, now: () => number 
 
 const TRANSACTION_HINT = "Check the connection, then try again; the transaction may already have ended.";
 
-/** TCP keepalive on an export's own connection, so a dead peer is noticed by the OS too (decision 040). */
-const EXPORT_KEEPALIVE_MS = 10_000;
-const MS_PER_SECOND = 1_000;
+/** How long an idle session's ping may take before the engine reconnects instead (decision 054). */
+const PING_TIMEOUT_MS = 5_000;
+/** How long a timed-out statement may take to end once cancelled before its session is dropped. */
+const CANCEL_GRACE_MS = 5_000;
+/**
+ * How long a probe connection may stay silent while a statement runs. A reachable server accepts
+ * or refuses within milliseconds; TCP keepalive alone cannot tell, because a hop that answers TCP
+ * itself (Docker Desktop, an SSH tunnel) keeps the statement's socket looking alive.
+ */
+const PROBE_WINDOW_MS = 5_000;
+
+const LOST_REASONS: Readonly<Record<LostReason, string>> = {
+  cancelUnanswered: "cancel unanswered",
+  serverUnreachable: "server unreachable",
+};
+
+function transactionLost(): EngineFailure {
+  return new EngineFailure({
+    code: "connectionLost",
+    message: "The connection was lost with a transaction open; its uncommitted changes are gone.",
+    hint: "Run again to reconnect, then repeat the transaction's statements.",
+  });
+}
+
+function lostInFlight(cause: SessionLost, timeoutSeconds: number): EngineFailure {
+  const message =
+    cause.reason === "cancelUnanswered"
+      ? `The statement timed out after ${String(timeoutSeconds)} s and the server did not answer the cancel, so the connection was dropped.`
+      : "The connection was lost while the statement ran; it may have completed on the server.";
+  return new EngineFailure({ code: "connectionLost", message, hint: UNKNOWN_OUTCOME_HINT }, cause);
+}
+
+function timedOut(seconds: number): EngineFailure {
+  return new EngineFailure({
+    code: "statementTimedOut",
+    message: `The statement timed out after ${String(seconds)} s and was cancelled.`,
+    hint: "Raise the statement timeout in the data source's Advanced settings, or in Settings → Console.",
+  });
+}
+
+/** Null when `session` answered its ping in time; else why it counts as lost. */
+async function pingFailure(session: Session): Promise<string | null> {
+  if (session.ping === undefined) return null;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const silence = new Promise<string>((resolve) => {
+    timer = setTimeout(() => {
+      resolve("ping timed out");
+    }, PING_TIMEOUT_MS);
+  });
+  try {
+    return await Promise.race([
+      session.ping().then(
+        () => null,
+        () => "ping failed",
+      ),
+      silence,
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
 /**
  * Closing a cursor waits for the server to answer, which a dead or silent link never does; past this
  * the sessions close anyway, and their bounded close tears the sockets down (decision 040).
@@ -314,6 +400,7 @@ function countOf(value: WireValue | undefined): number {
 
 export function createEngine(options: EngineOptions, now: () => number = Date.now): Engine {
   const log = options.log ?? null;
+  const sessionLog = log?.child("session") ?? null;
   let target: LogFields | null = null;
 
   /** Classified for the record only; a plugin that cannot classify leaves the kind unknown. */
@@ -505,13 +592,7 @@ export function createEngine(options: EngineOptions, now: () => number = Date.no
 
   /** An export's rows from `sql` on a read-only session of its own, every byte of binary values in full. */
   async function exportRowsOf(sql: string): Promise<ExportRows> {
-    const { pluginId, config } = options.datasource;
-    const session = await openSession(options.plugins, pluginId, config, {
-      readOnly: true,
-      keepAliveInitialDelayMs: EXPORT_KEEPALIVE_MS,
-    }).catch((cause: unknown) => {
-      throw connectionFailed(cause);
-    });
+    const session = await connectDatasource(options, true);
     try {
       const result = await session.execute(sql, [], { fullBytes: true });
       return { rows: result.rows, close: () => session.close() };
@@ -777,11 +858,149 @@ export function createEngine(options: EngineOptions, now: () => number = Date.no
       return handle;
     }
 
+    const keepAliveMs = options.datasource.keepAliveSeconds * MS_PER_SECOND;
+
+    function pings(open: OpenSession): boolean {
+      return keepAliveMs > 0 && open.capabilities.includes("keepAlive") && open.session.ping !== undefined;
+    }
+
+    /** Whether the session must prove itself before a statement: given up, or idle a keepalive interval. */
+    function needsCheck(open: OpenSession): boolean {
+      return open.lost !== null || (pings(open) && now() - open.lastUsed >= keepAliveMs);
+    }
+
+    /**
+     * Gives the session up: its socket is torn down (the plugins' close is bounded) and the next
+     * statement reconnects. A transaction open on it is gone, which the caller must say rather
+     * than heal silently.
+     */
+    function abandon(sessionId: string, open: OpenSession, reason: string): { transaction: boolean } {
+      const transaction = open.session.transactions?.open === true;
+      open.lost = reason;
+      sessionLog?.warn("session lost", { reason, transaction });
+      void closeCursorOf(sessionId);
+      void open.session.close().catch(() => undefined);
+      return { transaction };
+    }
+
+    /** A fresh session in place of the lost one, in the same transaction mode; its namespace is read afresh. */
+    async function reconnect(sessionId: string, open: OpenSession): Promise<Reconnection> {
+      const mode = open.session.transactions?.mode;
+      const session = await connectDatasource(options);
+      try {
+        if (mode === "manual") await session.transactions?.setMode("manual");
+      } catch (cause) {
+        await session.close().catch(() => undefined);
+        throw new EngineFailure({ code: "connectionFailed", message: messageOf(cause), hint: RECONNECT_HINT }, cause);
+      }
+      const namespace = await namespaceOf({ session, capabilities: open.capabilities });
+      if (sessions.get(sessionId) !== open) {
+        await session.close().catch(() => undefined);
+        sessionFor(sessionId);
+      }
+      const namespaceLost = open.moved;
+      open.session = session;
+      open.opening = namespace;
+      open.moved = false;
+      open.lost = null;
+      open.lastUsed = now();
+      sessionLog?.info("session reconnected", { namespaceLost });
+      return { namespace: namespace ?? null, namespaceLost };
+    }
+
+    /** Pings an idle session and reconnects a lost one; undefined when the session was fine. */
+    async function ensureLive(sessionId: string, open: OpenSession): Promise<Reconnection | undefined> {
+      if (open.lost === null) {
+        const reason = await pingFailure(open.session);
+        if (reason === null) {
+          open.lastUsed = now();
+          return undefined;
+        }
+        if (abandon(sessionId, open, reason).transaction) throw transactionLost();
+      }
+      return reconnect(sessionId, open);
+    }
+
+    function probeServer(): Promise<void> {
+      return connectDatasource(options, true).then((session) => {
+        void session.close().catch(() => undefined);
+      });
+    }
+
+    /** `work` on `open`'s session under the statement timeout and, while it runs, the liveness probe. */
+    async function watched<T>(
+      sessionId: string,
+      open: OpenSession,
+      work: Promise<T>,
+      timeoutSeconds: number,
+      discard: (late: T) => void,
+    ): Promise<T> {
+      const { session } = open;
+      const cancel =
+        open.capabilities.includes("cancel") && session.cancel !== undefined
+          ? () => session.cancel?.() ?? Promise.resolve()
+          : undefined;
+      const probing = keepAliveMs > 0 && open.capabilities.includes("keepAlive");
+      try {
+        return await watchStatement(work, {
+          timeoutSeconds,
+          ...(cancel === undefined ? {} : { cancel }),
+          graceMs: CANCEL_GRACE_MS,
+          probeEveryMs: probing ? keepAliveMs : 0,
+          ...(probing ? { probe: probeServer } : {}),
+          probeWindowMs: PROBE_WINDOW_MS,
+        });
+      } catch (cause) {
+        if (cause instanceof StatementTimedOut) {
+          sessionLog?.info("statement timed out", { seconds: timeoutSeconds });
+          throw timedOut(timeoutSeconds);
+        }
+        if (cause instanceof SessionLost) {
+          work.then(discard, () => undefined);
+          const lost = open.session === session && open.lost === null;
+          const transaction = lost && abandon(sessionId, open, LOST_REASONS[cause.reason]).transaction;
+          throw transaction ? transactionLost() : lostInFlight(cause, timeoutSeconds);
+        }
+        throw cause;
+      }
+    }
+
+    /**
+     * Runs `run` on a session known to be alive: an idle one is pinged first, a lost one replaced,
+     * and a statement the plugin refused because the connection was already gone runs once more
+     * on a fresh session, since it never reached the server.
+     */
+    async function onLiveSession<T>(
+      sessionId: string,
+      open: OpenSession,
+      timeoutSeconds: number,
+      run: (session: Session) => Promise<T>,
+      failed: (cause: unknown) => EngineFailure,
+      discard: (late: T) => void = () => undefined,
+    ): Promise<{ value: T; reconnected: Reconnection | undefined }> {
+      // Awaited only when there is one: a needless await would let a cancel overtake the execute.
+      if (cursors.has(sessionId)) await closeCursorOf(sessionId);
+      let reconnected = needsCheck(open) ? await ensureLive(sessionId, open) : undefined;
+      try {
+        return { value: await watched(sessionId, open, run(open.session), timeoutSeconds, discard), reconnected };
+      } catch (cause) {
+        if (reconnected !== undefined || !isPluginError(cause) || cause.code !== "connectionLost") throw failed(cause);
+      }
+      if (abandon(sessionId, open, "driver reported").transaction) throw transactionLost();
+      reconnected = await reconnect(sessionId, open);
+      try {
+        return { value: await watched(sessionId, open, run(open.session), timeoutSeconds, discard), reconnected };
+      } catch (cause) {
+        throw failed(cause);
+      }
+    }
+
     async function runStatement(
       sessionId: string,
       sql: string,
       parameters: Readonly<Record<string, ParameterValue>> | undefined,
       paging: ResultPaging,
+      timeoutSeconds: number,
     ): Promise<ExecutedStatement> {
       const open = sessionFor(sessionId);
       let bound: BoundStatement = { sql, params: [] };
@@ -792,14 +1011,14 @@ export function createEngine(options: EngineOptions, now: () => number = Date.no
       }
       open.running += 1;
       try {
-        // Awaited only when there is one: a needless await would let a cancel overtake the execute.
-        if (cursors.has(sessionId)) await closeCursorOf(sessionId);
-        const summary = await open.session
-          .execute(bound.sql, bound.params)
-          .then((result) => results.put(result, paging))
-          .catch((cause: unknown) => {
-            throw statementFailed(cause, options.datasource.readOnly);
-          });
+        const { value: summary, reconnected } = await onLiveSession(
+          sessionId,
+          open,
+          timeoutSeconds,
+          (session) => session.execute(bound.sql, bound.params).then((result) => results.put(result, paging)),
+          (cause) => statementFailed(cause, options.datasource.readOnly),
+          (late) => void results.release(late.handle),
+        );
         if (sessions.get(sessionId) !== open) {
           // The session closed while the statement ran; nobody is left to release this result.
           await results.release(summary.handle);
@@ -820,9 +1039,11 @@ export function createEngine(options: EngineOptions, now: () => number = Date.no
           firstWindow: results.window(summary.handle, 0),
           transactionOpen: open.session.transactions?.open ?? false,
           ...(namespace === undefined ? {} : { namespace }),
+          ...(reconnected === undefined ? {} : { reconnected }),
         };
       } finally {
         open.running -= 1;
+        open.lastUsed = now();
       }
     }
 
@@ -838,14 +1059,25 @@ export function createEngine(options: EngineOptions, now: () => number = Date.no
       }
       open.running += 1;
       try {
-        if (cursors.has(request.sessionId)) await closeCursorOf(request.sessionId);
-        const plan = await open.session.explain(request.sql, { analyze: request.analyze }).catch((cause: unknown) => {
-          throw explainFailed(cause, options.datasource.readOnly);
-        });
+        const { value: plan, reconnected } = await onLiveSession(
+          request.sessionId,
+          open,
+          request.timeoutSeconds ?? 0,
+          (session) => {
+            if (session.explain === undefined) throw new Error("The session lost its explain method.");
+            return session.explain(request.sql, { analyze: request.analyze });
+          },
+          (cause) => explainFailed(cause, options.datasource.readOnly),
+        );
         sessionFor(request.sessionId);
-        return { plan, transactionOpen: open.session.transactions?.open ?? false };
+        return {
+          plan,
+          transactionOpen: open.session.transactions?.open ?? false,
+          ...(reconnected === undefined ? {} : { reconnected }),
+        };
       } finally {
         open.running -= 1;
+        open.lastUsed = now();
       }
     }
 
@@ -853,7 +1085,7 @@ export function createEngine(options: EngineOptions, now: () => number = Date.no
       const open = sessionFor(request.sessionId);
       const { relation, qualified } = await relationOf(request.path, request.relation);
       const sql = tableSelect(qualified, request);
-      const statement = await runStatement(request.sessionId, sql, undefined, request);
+      const statement = await runStatement(request.sessionId, sql, undefined, request, request.timeoutSeconds ?? 0);
       const catalogued = statement.columns.map((column) => relation.columns.find((meta) => meta.name === column.name));
       const columns = catalogued.map(
         (meta, index) => meta ?? reportedColumn(statement.columns[index] ?? { name: "", type: null }, index),
@@ -949,9 +1181,10 @@ export function createEngine(options: EngineOptions, now: () => number = Date.no
           hint: BUG_HINT,
         });
       }
+      if (open.lost !== null) await reconnect(sessionId, open);
       try {
         await closeCursorOf(sessionId);
-        await change(transactions);
+        await change(open.session.transactions ?? transactions);
       } catch (cause) {
         throw new EngineFailure({ code: "statementFailed", message: messageOf(cause), hint }, cause);
       }
@@ -970,7 +1203,15 @@ export function createEngine(options: EngineOptions, now: () => number = Date.no
         const { manifest, plugin } = loadedPlugin(options.plugins, options.datasource.pluginId);
         const sessionId = `${SESSION_PREFIX}${nextSession++}`;
         const opening = await namespaceOf({ session, capabilities: plugin.capabilities });
-        const open: OpenSession = { session, capabilities: plugin.capabilities, running: 0, opening, moved: false };
+        const open: OpenSession = {
+          session,
+          capabilities: plugin.capabilities,
+          running: 0,
+          opening,
+          moved: false,
+          lastUsed: now(),
+          lost: null,
+        };
         const namespace = opening ?? null;
         sessions.set(sessionId, open);
         return {
@@ -988,8 +1229,8 @@ export function createEngine(options: EngineOptions, now: () => number = Date.no
         await open.session.close();
         return null;
       },
-      "statement.execute": ({ sessionId, sql, parameters, pageRows, fetchAllCap }) =>
-        runStatement(sessionId, sql, parameters, { pageRows, fetchAllCap }),
+      "statement.execute": ({ sessionId, sql, parameters, pageRows, fetchAllCap, timeoutSeconds }) =>
+        runStatement(sessionId, sql, parameters, { pageRows, fetchAllCap }, timeoutSeconds ?? 0),
       "statement.cancel": async ({ sessionId }) => {
         const open = sessionFor(sessionId);
         if (!open.capabilities.includes("cancel") || open.session.cancel === undefined) {

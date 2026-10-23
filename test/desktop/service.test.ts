@@ -246,6 +246,7 @@ describe("datasource service", () => {
       pluginId: "postgres",
       config: ephemeral.config,
       readOnly: false,
+      keepAliveSeconds: 30,
     });
     await expect(datasources.save({ datasource: { ...PG_DRAFT, id: "pg" }, secrets: {} })).rejects.toThrow(
       "TABLE_CRAFT_DATASOURCE",

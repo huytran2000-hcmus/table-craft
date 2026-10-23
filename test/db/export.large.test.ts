@@ -152,7 +152,7 @@ for (const target of TARGETS) {
       const directory = await mkdtemp(join(tmpdir(), "table-craft-large-"));
       cleanup.push(() => rm(directory, { recursive: true, force: true }));
       const engine = exportHarness(
-        { id: target.name, pluginId: target.name, config: { ...target.config }, readOnly: false },
+        { id: target.name, pluginId: target.name, config: { ...target.config }, readOnly: false, keepAliveSeconds: 0 },
         [target.plugin],
       );
       cleanup.push(() => engine.close());

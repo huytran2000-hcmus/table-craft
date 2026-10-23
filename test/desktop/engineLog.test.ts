@@ -23,7 +23,13 @@ async function loggedSession(emit: (event: EngineEvent) => void = () => undefine
   const records: LogRecord[] = [];
   const connection = createEngine(
     {
-      datasource: { id: "scratch", pluginId: "sqlite", config: { path: ":memory:" }, readOnly: false },
+      datasource: {
+        id: "scratch",
+        pluginId: "sqlite",
+        config: { path: ":memory:" },
+        readOnly: false,
+        keepAliveSeconds: 0,
+      },
       plugins: [LOADED_SQLITE],
       log: createLogger({ process: "engine", scope: "engine", sink: (record) => records.push(record) }),
     },

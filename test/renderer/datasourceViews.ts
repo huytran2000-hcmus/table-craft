@@ -41,6 +41,12 @@ export const POSTGRES_PLUGIN: PluginInfo = {
   capabilities: ["sql", "cancel", "schemaTree"],
   fields: POSTGRES_FIELDS,
   highlight: "postgresql",
+  url: {
+    schemes: ["postgresql", "postgres"],
+    form: "server",
+    parts: { host: "host", port: "port", database: "database", user: "user", password: "password" },
+    params: [{ name: "sslmode", key: "sslMode", values: { disable: "disable", require: "require" } }],
+  },
 };
 
 export const SQLITE_PLUGIN: PluginInfo = {
@@ -50,4 +56,5 @@ export const SQLITE_PLUGIN: PluginInfo = {
   capabilities: ["sql"],
   fields: [{ key: "path", label: "File", kind: "file", required: true }],
   highlight: "sqlite",
+  url: { schemes: ["sqlite", "file"], form: "file", parts: { path: "path" } },
 };
