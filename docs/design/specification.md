@@ -118,6 +118,9 @@ interface SqlLanguage {
   updateDefault(defaultExpression: string | null): string; // SET col = <this>: DEFAULT, or SQLite's expression
   generate(statement: GeneratedStatement, relation: Relation, qualifiedName: string): string; // sqlGenerator
   explainable?(sql: string, options: ExplainOptions): Explainability; // present exactly when `explain` is declared
+  format(text: string, options: FormatOptions): string; // { keywordCase, indentWidth, linesBetweenStatements }; throws when it cannot
+  parameters(statement: string): readonly SqlParameter[]; // { name, from, to, style }, outside literals and comments
+  bind(statement: string, values: Readonly<Record<string, ParameterValue>>): BoundStatement; // { sql, params }
 }
 
 interface ExplainOptions {
@@ -134,7 +137,7 @@ interface ConnectOptions {
 
 interface Session {
   readonly serverVersion: string | null; // "17.4", "8.4.3", "3.53.4"
-  execute(sql: string): Promise<ExecuteResult>; // one at a time; rejects with a PluginError
+  execute(sql: string, params?: readonly ParameterValue[]): Promise<ExecuteResult>; // one at a time; params bind the driver's placeholders; rejects with a PluginError
   cancel?(): Promise<void>; // present exactly when `cancel` is declared; no-op when idle
   readonly introspector?: Introspector; // present exactly when `schemaTree` is declared
   readonly transactions?: Transactions; // present exactly when `transactions` is declared
@@ -223,6 +226,24 @@ mode `transactionEffect` tracks an explicit `BEGIN`, `START TRANSACTION`, `COMMI
 and on MySQL a DDL statement's implicit commit closes the transaction. Closing a session with a
 transaction open rolls it back.
 
+`sqlFormatter(options)` gives `format` over `sql-formatter`, bundled into each plugin (decision
+042). It formats statement by statement as the plugin's dialect, cases keywords and data types as
+`keywordCase` says (`upper`, `lower`, `preserve`), indents by `indentWidth` (1–8) and puts
+`linesBetweenStatements` (0–5) blank lines between statements. A multi-line block comment is kept
+byte for byte; a MySQL script with `DELIMITER` is refused rather than reflowed.
+
+`sqlParameters(options)` gives `parameters` and `bind` over the same tokenizer (decision 043), so a
+marker inside a string, a quoted identifier, a comment, a dollar quote or a `::cast` is never one:
+
+| Plugin     | Styles        | Native placeholder | `bind` turns `:id … :id` into |
+| ---------- | ------------- | ------------------ | ----------------------------- |
+| PostgreSQL | `:name`, `$1` | `$1`               | `$1 … $1`, one value          |
+| MySQL      | `:name`, `?`  | `?`                | `? … ?`, the value twice      |
+| SQLite     | `:name`, `?`  | `?`                | `? … ?`, the value twice      |
+
+A `?` is named `?1`, `?2`… by position within its statement. `bind` rejects `statementFailed` when
+a value is missing. Values are text or `null`; the database converts text as it would a literal.
+
 ### Catalog
 
 The namespace is the unit of introspection (decision 022). A `Namespace` is
@@ -304,8 +325,9 @@ handles belong to the port that created them and are released when it closes.
 | Request                 | Params                                                                         | Result                                                                                                         |
 | ----------------------- | ------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------- |
 | `session.open`          | none                                                                           | `{ sessionId, pluginName, capabilities, serverVersion }`                                                       |
-| `script.split`          | `text`                                                                         | `ClassifiedStatement[]`: `{ from, to, sql, kind, destructive }`                                                |
-| `statement.execute`     | `sessionId`, `sql`, `pageRows`, `fetchAllCap`                                  | `{ handle, columns, typeClasses, rowCount, complete, cursorOpen, rowsAffected, firstWindow, transactionOpen }` |
+| `script.split`          | `text`                                                                         | `ClassifiedStatement[]`: `{ from, to, sql, kind, destructive, parameters }`                                    |
+| `sql.format`            | `text`, `options: FormatOptions`                                               | the formatted text, or `formatFailed`                                                                          |
+| `statement.execute`     | `sessionId`, `sql`, `parameters?`, `pageRows`, `fetchAllCap`                   | `{ handle, columns, typeClasses, rowCount, complete, cursorOpen, rowsAffected, firstWindow, transactionOpen }` |
 | `sql.explainable`       | `sql`, `analyze`                                                               | `Explainability`: `{ ok: true, writes }` or `{ ok: false, reason }`; no session; needs `explain`               |
 | `statement.explain`     | `sessionId`, `sql`, `analyze`                                                  | `{ plan: ExplainedPlan, transactionOpen }`; needs `explain`, or `explainAnalyze` to analyse; see Explain       |
 | `transaction.setMode`   | `sessionId`, `mode`                                                            | `{ mode, transactionOpen }`                                                                                    |
@@ -586,8 +608,22 @@ with `renderer/model/statementAt.ts`:
 The statement about to run flashes in the editor. Statements run one after another on the
 console's session; the first error or cancel stops the batch, and Output says how many were
 skipped. Before anything runs, every destructive statement in the batch is listed in one dialog
-with its reason, Execute or Cancel; Cancel runs nothing and logs `Cancelled; nothing ran.`. While
-that dialog, or Explain Analyse's, is open the console's status reads `Waiting for confirmation…`,
+with its reason, Execute or Cancel; Cancel runs nothing and logs `Cancelled; nothing ran.`.
+
+When `console.parameters` is on and the batch has parameters, the Parameters dialog asks next: one
+row per distinct name across the batch (each `?` numbered `?1`, `?2`… across the whole batch), a
+value or NULL, and the statements with their markers highlighted. Run sends the values as
+`statement.execute`'s `parameters`, keyed by each statement's own names; the engine binds them with
+the plugin's `bind` and the driver's placeholders, never into the text. Cancel runs nothing and
+logs `Cancelled; nothing ran.`. The console remembers the values for the next prompt, the history
+records them with the statement, and restoring it from Query History seeds them. With the setting
+off the text runs verbatim. Explain sends its statement verbatim. Rerun asks again.
+
+`console.reformat` (Reformat Code, ⌥⌘L) sends the selection, or the whole text when there is none,
+to `sql.format` with the `editor.format` settings and replaces it in one undoable edit; the caret
+stays on the token it was on. A failure is logged to Output with the reason and leaves the text.
+
+While the destructive, Parameters or Explain Analyse dialog is open the console's status reads `Waiting for confirmation…`,
 and the run's timer starts when it is answered. Run on a disconnected console connects first
 (decision 021).
 
@@ -975,11 +1011,12 @@ Console, then Synchronize and Copy Qualified Name; a column's starts with Quick 
 Plan 011, decision 030. Main keeps the query history in `<userData>/history.sqlite`, opened with
 `node:sqlite` by core's `history/` (`openQueryHistory`): one table `entries` (`id`,
 `datasource_id`, `sql`, `started_at`, `duration_ms`, `outcome` success, error or cancelled,
-`row_count`, `message`, `source` console or table), `user_version` 1, WAL. A file that does not
-open as that schema is renamed `history.sqlite.corrupt-<ms>` and a fresh one is created. Each
+`row_count`, `message`, `source` console or table, `parameters` the bound values as JSON or
+`NULL`), `user_version` 2, WAL. A version 1 file gains the `parameters` column in place, its rows
+kept (plan 019). A file that does not open as either schema is renamed `history.sqlite.corrupt-<ms>` and a fresh one is created. Each
 datasource keeps its newest `HISTORY_LIMIT = 10_000` entries; recording prunes the oldest. Search
 answers distinct statement texts, newest first, at most `HISTORY_SEARCH_LIMIT = 200`, each with its
-last start, duration, outcome, row count and message and how many times it ran; the query matches
+last start, duration, outcome, row count, message and parameters and how many times it ran; the query matches
 anywhere in the text, case-insensitively and literally (`%` and `_` are plain characters).
 Deleting a datasource clears its history, and its confirmation says so.
 
@@ -987,7 +1024,7 @@ The renderer records, fire-and-forget over `history.record`; a failed write is l
 goes on. Recorded: every statement a console runs (Run, Run All, Rerun) when it succeeds, fails or
 is cancelled, with the duration of the statement alone, its row count (rows retrieved, else rows
 affected) and the error's message. Not recorded: statements a failure skipped, a batch whose
-destructive confirmation was declined, `Nothing to run`, table loads and counts, and anything on the
+destructive confirmation or Parameters dialog was declined, `Nothing to run`, table loads and counts, and anything on the
 `TABLE_CRAFT_DATASOURCE` datasource. A table submit is one entry with source `table` whose text is
 its statements, each ending in `;`, one per line; a failed one is recorded with outcome error and
 the database's message, its text previewed again from the same edits.
@@ -1193,20 +1230,26 @@ Plan 013, decisions 012 and 032. Preferences are `<userData>/settings.json`, own
       "grid": { "family": null, "sizePx": 12 }
     }
   },
+  "editor": { "format": { "keywordCase": "upper", "indentWidth": 2, "linesBetweenStatements": 1 } },
+  "console": { "parameters": true },
   "data": { "nullText": "<null>", "groupDigits": false, "pageRows": 500, "fetchAllCap": 100000 }
 }
 ```
 
-| Field                       | Values                                                                   | Default       |
-| --------------------------- | ------------------------------------------------------------------------ | ------------- |
-| `appearance.theme`          | `system`, `dark`, `light`, `highContrast`, `user:<file stem>`            | `system`      |
-| `appearance.density`        | `comfortable`, `compact`                                                 | `comfortable` |
-| `appearance.systemTitleBar` | boolean; read once when the window is created                            | `false`       |
-| `appearance.fonts.*`        | `{ family: string \| null, sizePx: 8–32 }`; `null` is the built-in stack | 13, 13, 12    |
-| `data.nullText`             | 1–16 characters                                                          | `<null>`      |
-| `data.groupDigits`          | boolean                                                                  | `false`       |
-| `data.pageRows`             | 10–10,000                                                                | 500           |
-| `data.fetchAllCap`          | 1,000–1,000,000, at least `pageRows`                                     | 100,000       |
+| Field                                  | Values                                                                   | Default       |
+| -------------------------------------- | ------------------------------------------------------------------------ | ------------- |
+| `appearance.theme`                     | `system`, `dark`, `light`, `highContrast`, `user:<file stem>`            | `system`      |
+| `appearance.density`                   | `comfortable`, `compact`                                                 | `comfortable` |
+| `appearance.systemTitleBar`            | boolean; read once when the window is created                            | `false`       |
+| `appearance.fonts.*`                   | `{ family: string \| null, sizePx: 8–32 }`; `null` is the built-in stack | 13, 13, 12    |
+| `editor.format.keywordCase`            | `upper`, `lower`, `preserve`                                             | `upper`       |
+| `editor.format.indentWidth`            | 1–8 spaces                                                               | 2             |
+| `editor.format.linesBetweenStatements` | 0–5 blank lines                                                          | 1             |
+| `console.parameters`                   | boolean; ask for `:name`, `?` and `$1` values before a run               | `true`        |
+| `data.nullText`                        | 1–16 characters                                                          | `<null>`      |
+| `data.groupDigits`                     | boolean                                                                  | `false`       |
+| `data.pageRows`                        | 10–10,000                                                                | 500           |
+| `data.fetchAllCap`                     | 1,000–1,000,000, at least `pageRows`                                     | 100,000       |
 
 Each field is read on its own: a missing or out-of-range one takes its default and the rest stand.
 A file that is not JSON, not an object or from a newer version is renamed to

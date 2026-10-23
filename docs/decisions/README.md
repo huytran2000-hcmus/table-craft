@@ -48,3 +48,5 @@ started, not when it is merged.
 | 035 | [Plans and evidence stay local](035-plans-and-evidence-stay-local.md)                                                                                                  |
 | 036 | [README media is recorded by a script](036-readme-media-is-recorded-by-a-script.md)                                                                                    |
 | 037 | [The product is named TableCraft](037-the-product-is-named-tablecraft.md)                                                                                              |
+| 042 | [Reformat is the plugin's language, over `sql-formatter`](042-reformat-is-the-plugins-language-over-sql-formatter.md)                                                  |
+| 043 | [Query parameters are found by the plugin and bound by the driver](043-query-parameters-are-found-by-the-plugin-and-bound-by-the-driver.md)                            |
