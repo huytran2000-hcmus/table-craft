@@ -17,6 +17,9 @@ import {
   type CoreErrorCode,
   type EditableIdentity,
   type ExtractorKind,
+  type FilterChip,
+  type FindQuery,
+  type FoundMatch,
   type HistoryEntry,
   type HistoryStatement,
   type ImportErrorPolicy as CoreImportErrorPolicy,
@@ -25,10 +28,13 @@ import {
   type OrderTerm,
   type ResultState,
   type ResultSummary,
+  type ResultWindow,
   type RowEdit,
   type SortKey,
   type SubmittedEdits,
   type TypeClass,
+  type ViewSpec,
+  type ViewState,
 } from "@table-craft/core";
 import {
   CAPABILITIES,
@@ -89,6 +95,15 @@ describe("engine protocol", () => {
     expectTypeOf<protocol.TypeClass>().toEqualTypeOf<TypeClass>();
     expectTypeOf<protocol.ExtractorKind>().toEqualTypeOf<ExtractorKind>();
     expect(protocol.EXTRACTOR_KINDS).toEqual(EXTRACTOR_KINDS);
+  });
+
+  it("givenViewTypes_whenComparedWithCore_thenIdentical", () => {
+    expectTypeOf<protocol.FindQuery>().toEqualTypeOf<FindQuery>();
+    expectTypeOf<protocol.FilterChip>().toEqualTypeOf<FilterChip>();
+    expectTypeOf<protocol.ViewSpec>().toEqualTypeOf<ViewSpec>();
+    expectTypeOf<protocol.ViewState>().toEqualTypeOf<ViewState>();
+    expectTypeOf<protocol.FoundMatch>().toEqualTypeOf<FoundMatch>();
+    expectTypeOf<protocol.ResultWindow>().toEqualTypeOf<ResultWindow>();
   });
 
   it("givenProtocolWireTypes_whenComparedWithPluginApi_thenIdentical", () => {

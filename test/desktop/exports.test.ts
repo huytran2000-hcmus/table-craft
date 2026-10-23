@@ -106,6 +106,37 @@ describe("engine exports", () => {
     expect(JSON.parse(await readFile(path, "utf8"))).toEqual([{ b: "x" }]);
   });
 
+  it("givenFilteredReadResult_whenExportedShownOnly_thenShownRowsFromMemory", async () => {
+    const directory = await folder();
+    const path = join(directory, "shown.csv");
+    const { connection, finished } = open(seededSqliteFile());
+    const sessionId = await openSession(connection);
+    const { handle } = await execute(connection, sessionId, ROWS_1200);
+    await connection.handle({
+      id: 4,
+      type: "result.view",
+      handle,
+      spec: {
+        find: { text: "7", caseSensitive: false, regex: false, wholeCell: true },
+        rowsOnly: true,
+        filters: [],
+        columns: [0],
+        formats: { groupDigits: false },
+      },
+    });
+
+    const task = await start(connection, {
+      source: { kind: "result", handle, columns: [0], shownOnly: true },
+      format: "csv",
+      path,
+    });
+    const done = await finished(task.taskId);
+
+    expect(task).toMatchObject({ origin: "memory", estimate: 1, retryable: false });
+    expect(done).toMatchObject({ state: "done", rows: 1 });
+    expect(await readFile(path, "utf8")).toBe("i\n7\n");
+  });
+
   it("givenTableSource_whenExported_thenColumnSubset", async () => {
     const directory = await folder();
     const path = join(directory, "edit_probe.sql");

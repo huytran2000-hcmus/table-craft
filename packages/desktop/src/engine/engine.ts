@@ -963,12 +963,32 @@ export function createEngine(options: EngineOptions, now: () => number = Date.no
      * export's own when it is a read that sees what any session sees; else the rows held when
      * the cursor is done; else the console's own cursor, drained.
      */
+    /** The rows a local filter shows, from memory: they are already decided (decision 050). */
+    function shownJob(handle: string, projection: readonly number[], format: ExportFormat, path: string): ExportJob {
+      const table = tables.get(handle)?.table;
+      const language = sqlLanguage();
+      const shown = results.shownRows(handle);
+      return {
+        path,
+        format,
+        columns: chosenColumns(handle, projection),
+        projection,
+        encoder: table === undefined ? { dialect: language } : { dialect: language, table },
+        origin: "memory",
+        estimate: shown.length,
+        retryable: false,
+        drains: null,
+        open: () => Promise.resolve({ rows: heldRows(shown), close: () => Promise.resolve() }),
+      };
+    }
+
     function resultJob(
-      source: { handle: string; columns: readonly number[] },
+      source: { handle: string; columns: readonly number[]; shownOnly?: boolean },
       format: ExportFormat,
       path: string,
     ): ExportJob {
       const handle = ownedHandle(source.handle);
+      if (source.shownOnly === true) return shownJob(handle, source.columns, format, path);
       const language = sqlLanguage();
       const columns = chosenColumns(handle, source.columns);
       const owner = sessions.get(handles.get(handle) ?? "");
@@ -1511,10 +1531,14 @@ export function createEngine(options: EngineOptions, now: () => number = Date.no
         }
         return Promise.resolve(results.sort(handle, keys));
       },
+      "result.view": ({ handle, spec }) => Promise.resolve(results.setView(ownedHandle(handle), spec)),
+      "result.viewState": ({ handle }) => Promise.resolve(results.viewState(ownedHandle(handle))),
+      "result.findMatch": ({ handle, from, backward }) =>
+        Promise.resolve(results.findMatch(ownedHandle(handle), from, backward)),
       "result.extract": ({ handle, extractor, rows, columns }) => {
         const chosen = chosenColumns(ownedHandle(handle), columns);
         const writer = rowWriter(extractor, chosen, { dialect: sqlLanguage() });
-        const picked = rowsIn(results.rows(handle), rows);
+        const picked = rowsIn(results.shownRows(handle), rows);
         const body = picked.map((row, index) => writer.row(project(row, columns), index)).join("");
         return Promise.resolve(writer.start() + body + writer.end(picked.length));
       },

@@ -11,10 +11,12 @@ import type {
   ExecutedStatement,
   Explainability,
   ExplainedStatement,
+  FoundMatch,
   Namespace,
   ResultState,
   ResultWindow,
   TransactionState,
+  ViewState,
 } from "@table-craft/desktop/engine/protocol.js";
 import { RESULT_FETCH_ALL_CAP, RESULT_PAGE_ROWS, RESULT_WINDOW_ROWS } from "@table-craft/desktop/engine/protocol.js";
 import { fakeManifest, SQLITE_MANIFEST } from "../support/manifests.js";
@@ -889,5 +891,43 @@ describe("engine results", () => {
     });
 
     expect(resultOf<string>(text)).toBe(`INSERT INTO MY_TABLE ("a b", "blob") VALUES ('it''s', X'00ff');\n`);
+  });
+
+  it("givenLocalFilter_whenWindowedFoundAndExtracted_thenOnlyShownRows", async () => {
+    const connection = connected();
+    const sessionId = await openSession(connection);
+    const { handle } = await execute(
+      connection,
+      sessionId,
+      "SELECT 1 AS id, 'apple' AS name UNION ALL SELECT 2, 'pear' UNION ALL SELECT 3, 'apricot'",
+    );
+
+    const view = await connection.handle({
+      id: 5,
+      type: "result.view",
+      handle,
+      spec: {
+        find: { text: "ap", caseSensitive: false, regex: false, wholeCell: false },
+        rowsOnly: true,
+        filters: [{ column: 0, op: "notEquals", text: "1" }],
+        columns: [0, 1],
+        formats: { groupDigits: false },
+      },
+    });
+    const window = await connection.handle({ id: 6, type: "result.window", handle, offset: 0, limit: 500 });
+    const found = await connection.handle({ id: 7, type: "result.findMatch", handle, from: null, backward: false });
+    const text = await connection.handle({
+      id: 8,
+      type: "result.extract",
+      handle,
+      extractor: "csv",
+      rows: [{ from: 0, to: 1 }],
+      columns: [1],
+    });
+
+    expect(resultOf<ViewState>(view)).toEqual({ shown: 1, filtered: true, sources: [2], matches: 1, error: null });
+    expect(resultOf<ResultWindow>(window)).toEqual({ offset: 0, rows: [[3, "apricot"]], matches: [0, 1] });
+    expect(resultOf<FoundMatch>(found)).toEqual({ index: 0, row: 0, column: 1 });
+    expect(resultOf<string>(text)).toBe("name\napricot\n");
   });
 });

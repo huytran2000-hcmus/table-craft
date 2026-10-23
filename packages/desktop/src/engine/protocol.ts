@@ -253,9 +253,11 @@ export interface EngineProbed {
   readonly result: ProbeResult;
 }
 
+/** Mirrors `ResultWindow` in core; `matches` are flat `row, column` pairs while a find is set. */
 export interface ResultWindow {
   readonly offset: number;
   readonly rows: readonly Row[];
+  readonly matches?: readonly number[];
 }
 
 /** Mirrors `TypeClass` in core: what a column holds, for its header glyph. */
@@ -277,11 +279,56 @@ export interface SortKey {
   readonly direction: SortDirection;
 }
 
+/** Mirrors `FindQuery` in core: what the grid's find bar looks for (decision 050). */
+export interface FindQuery {
+  readonly text: string;
+  readonly caseSensitive: boolean;
+  readonly regex: boolean;
+  readonly wholeCell: boolean;
+}
+
+/** Mirrors `FilterChip` in core: a local quick filter; `text` is the value's database text. */
+export type FilterChip =
+  | { readonly column: number; readonly op: "equals" | "notEquals"; readonly text: string }
+  | { readonly column: number; readonly op: "isNull" | "isNotNull" };
+
+export type FilterOp = FilterChip["op"];
+
+/** Mirrors `DisplayFormats` in core. */
+export interface DisplayFormats {
+  readonly groupDigits: boolean;
+}
+
+/** Mirrors `ViewSpec` in core: the find query and filters, over the columns the grid draws. */
+export interface ViewSpec {
+  readonly find: FindQuery | null;
+  readonly rowsOnly: boolean;
+  readonly filters: readonly FilterChip[];
+  readonly columns: readonly number[];
+  readonly formats: DisplayFormats;
+}
+
+/** Mirrors `ViewState` in core: rows shown, held positions when filtered, and the match count. */
+export interface ViewState {
+  readonly shown: number;
+  readonly filtered: boolean;
+  readonly sources: readonly number[] | null;
+  readonly matches: number;
+  readonly error: string | null;
+}
+
+/** Mirrors `FoundMatch` in core. */
+export interface FoundMatch {
+  readonly index: number;
+  readonly row: number;
+  readonly column: number;
+}
+
 /** Mirrors `EXTRACTOR_KINDS` in core: the formats Copy and Export write. */
 export const EXTRACTOR_KINDS = ["csv", "tsv", "json", "sqlInsert", "markdown"] as const;
 export type ExtractorKind = (typeof EXTRACTOR_KINDS)[number];
 
-/** Rows `from` up to but not including `to`, in the result's current sort order. */
+/** Rows `from` up to but not including `to`, in the result's current sort order and view. */
 export interface RowRange {
   readonly from: number;
   readonly to: number;
@@ -300,7 +347,13 @@ export type ExportFailureReason = (typeof EXPORT_FAILURE_REASONS)[number];
  * result's column indices, or a whole table by path and name, with column names.
  */
 export type ExportSource =
-  | { readonly kind: "result"; readonly handle: string; readonly columns: readonly number[] }
+  | {
+      readonly kind: "result";
+      readonly handle: string;
+      readonly columns: readonly number[];
+      /** Write only the rows a local filter shows, from memory (decision 050). */
+      readonly shownOnly?: boolean;
+    }
   | {
       readonly kind: "table";
       readonly path: readonly string[];
@@ -720,6 +773,22 @@ export interface EngineCalls {
   "result.stopFetch": { params: { readonly handle: string }; result: ResultState };
   /** Sorts the held rows in the engine; windows read through the new order. No keys restores it. */
   "result.sort": { params: { readonly handle: string; readonly keys: readonly SortKey[] }; result: ResultState };
+  /**
+   * Sets the find query and local filters later windows, copies and shown-only exports see; null
+   * clears them (decision 050). Recomputed in the engine after every fetch and sort.
+   */
+  "result.view": { params: { readonly handle: string; readonly spec: ViewSpec | null }; result: ViewState };
+  /** The view as it stands, after a fetch or sort changed the held rows. */
+  "result.viewState": { params: { readonly handle: string }; result: ViewState };
+  /** The match after `from` (before it, `backward`), wrapping; null when nothing matches. */
+  "result.findMatch": {
+    params: {
+      readonly handle: string;
+      readonly from: { readonly row: number; readonly column: number } | null;
+      readonly backward: boolean;
+    };
+    result: FoundMatch | null;
+  };
   /** The given rows and columns as `extractor` text, for the clipboard. */
   "result.extract": {
     params: {

@@ -21,9 +21,32 @@ const relation = z.string().min(1);
 const taskId = z.string().min(1);
 const stallSeconds = z.number().int().min(EXPORT_STALL_SECONDS_RANGE.min).max(EXPORT_STALL_SECONDS_RANGE.max);
 const exportSource = z.discriminatedUnion("kind", [
-  z.strictObject({ kind: z.literal("result"), handle, columns }),
+  z.strictObject({ kind: z.literal("result"), handle, columns, shownOnly: z.boolean().optional() }),
   z.strictObject({ kind: z.literal("table"), path: namespacePath, relation, columns: z.array(z.string().min(1)) }),
 ]);
+/** Longer than any search a person types; bounds the regular expression the engine compiles. */
+const MAX_FIND_LENGTH = 1_000;
+const viewSpec = z.strictObject({
+  find: z
+    .strictObject({
+      text: z.string().max(MAX_FIND_LENGTH),
+      caseSensitive: z.boolean(),
+      regex: z.boolean(),
+      wholeCell: z.boolean(),
+    })
+    .nullable(),
+  rowsOnly: z.boolean(),
+  filters: z.array(
+    z.discriminatedUnion("op", [
+      z.strictObject({ column: index, op: z.literal("equals"), text: z.string() }),
+      z.strictObject({ column: index, op: z.literal("notEquals"), text: z.string() }),
+      z.strictObject({ column: index, op: z.literal("isNull") }),
+      z.strictObject({ column: index, op: z.literal("isNotNull") }),
+    ]),
+  ),
+  columns,
+  formats: z.strictObject({ groupDigits: z.boolean() }),
+});
 const GENERATOR_STATEMENTS = ["create", ...GENERATED_STATEMENTS] as const;
 const file = z.string().min(1);
 const oneCharacter = z.string().length(1);
@@ -144,6 +167,15 @@ export const engineRequestSchema = z.discriminatedUnion("type", [
     type: z.literal("result.sort"),
     handle,
     keys: z.array(z.strictObject({ column: index, direction: z.enum(["asc", "desc"]) })),
+  }),
+  z.strictObject({ id: requestId, type: z.literal("result.view"), handle, spec: viewSpec.nullable() }),
+  z.strictObject({ id: requestId, type: z.literal("result.viewState"), handle }),
+  z.strictObject({
+    id: requestId,
+    type: z.literal("result.findMatch"),
+    handle,
+    from: z.strictObject({ row: index, column: index }).nullable(),
+    backward: z.boolean(),
   }),
   z.strictObject({
     id: requestId,
