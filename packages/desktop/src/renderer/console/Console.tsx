@@ -51,11 +51,10 @@ export function Console({ consoleId }: { readonly consoleId: string }) {
         {capabilities.includes("transactions") ? <TxControls session={session} /> : null}
         <span className="shrink-0 text-ink-muted">{STATUS_TEXT[status]}</span>
         {error === null ? null : (
-          // Only the room the datasource and namespace leave: they say where the console is, and
-          // Output holds the whole error.
+          // The room the datasource label leaves, but never none; Output holds the whole error.
           <span
             role="alert"
-            className="min-w-0 flex-1 basis-0 truncate text-danger"
+            className="min-w-24 flex-1 basis-0 truncate text-danger"
             title={`${error.message} ${error.hint}`}
           >
             {error.message} <span className="text-ink-muted">{error.hint}</span>
@@ -71,21 +70,26 @@ export function Console({ consoleId }: { readonly consoleId: string }) {
           </button>
         )}
         {datasource === undefined ? null : (
-          <span data-testid="console-datasource" className="ml-auto flex min-w-0 items-center gap-1 text-ink-muted">
-            {datasource.readOnly ? <ReadOnlyIcon aria-hidden className="size-icon shrink-0" /> : null}
-            <span className="truncate">
+          // The datasource name truncates first: the namespace and plugin say where the console runs,
+          // and a long error beside them once squeezed the namespace out of sight (plan 022).
+          <span
+            data-testid="console-datasource"
+            className="ml-auto flex min-w-0 items-center overflow-hidden whitespace-pre text-ink-muted"
+          >
+            {datasource.readOnly ? <ReadOnlyIcon aria-hidden className="mr-1 size-icon shrink-0" /> : null}
+            <span className="min-w-0 truncate">
               {datasource.readOnly ? "read-only · " : ""}
               {datasource.name}
-              {namespace === null ? null : (
-                <>
-                  {" · "}
-                  <span data-testid="console-namespace" className="text-ink" title={namespace.title}>
-                    {namespace.text}
-                  </span>
-                </>
-              )}
-              {plugin === undefined ? "" : ` · ${plugin.name}`}
             </span>
+            {namespace === null ? null : (
+              <span className="shrink-0">
+                {" · "}
+                <span data-testid="console-namespace" className="text-ink" title={namespace.title}>
+                  {namespace.text}
+                </span>
+              </span>
+            )}
+            {plugin === undefined ? null : <span className="shrink-0">{` · ${plugin.name}`}</span>}
           </span>
         )}
       </div>
