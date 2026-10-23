@@ -30,6 +30,7 @@ const CHOSEN: Settings = {
   console: { parameters: false },
   data: { nullText: "∅", groupDigits: true, pageRows: 100, fetchAllCap: 2_000, exportStallSeconds: 300 },
   log: { level: "debug" },
+  updates: { checkAutomatically: false },
 };
 
 function store(files = memoryFiles()) {

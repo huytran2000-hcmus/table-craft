@@ -1,5 +1,6 @@
+import { execFile, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { existsSync } from "node:fs";
+import { accessSync, constants as fsConstants, existsSync, readFileSync } from "node:fs";
 import { mkdir, readdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { release } from "node:os";
 import { basename, dirname, join } from "node:path";
@@ -11,6 +12,7 @@ import {
   ipcMain,
   Menu,
   MessageChannelMain,
+  net,
   nativeTheme,
   safeStorage,
   screen,
@@ -53,6 +55,24 @@ import {
   type SettingsService,
 } from "@table-craft/desktop/main/settings.js";
 import { createThemeFolder } from "@table-craft/desktop/main/themes.js";
+import { UPDATE_TEST_BUILD } from "@table-craft/desktop/main/update/build.js";
+import { bundlePathFrom, type InstallFacts } from "@table-craft/desktop/main/update/eligibility.js";
+import {
+  drainSwapLog,
+  readUpdateMemory,
+  SWAP_LOG_FILE,
+  UPDATE_STATE_FILE,
+  writeUpdateMemory,
+} from "@table-craft/desktop/main/update/memory.js";
+import { CHECK_INTERVAL_MS, RELEASES_PAGE_URL, updateEndpoint } from "@table-craft/desktop/main/update/overrides.js";
+import { createUpdateSchedule, type UpdateSchedule } from "@table-craft/desktop/main/update/schedule.js";
+import {
+  createUpdater,
+  loggableUrl,
+  removeLeftovers,
+  UPDATE_SCOPE,
+  type Updater,
+} from "@table-craft/desktop/main/update/updater.js";
 import { DENSITIES, resolveTheme, type DensityTokens, type Theme } from "@table-craft/desktop/appearance/themes.js";
 import { ENGINE_PORT_MESSAGE, type DatasourceConfig } from "@table-craft/desktop/engine/protocol.js";
 import { DEFAULT_LOG_LEVEL, enabled, LOG_READ_LIMIT, type LogRecord } from "@table-craft/desktop/log/record.js";
@@ -64,12 +84,17 @@ import {
   type EngineExited,
   type PluginInfo,
   type SettingsChanged,
+  type UpdateState,
   type WindowState,
 } from "@table-craft/desktop/preload/bridge.js";
 
-const APP_NAME = "TableCraft";
+/**
+ * A test build is named apart, so its `safeStorage` keychain item ("<name> Safe Storage") and
+ * default profile never touch a real install's (plan 020 live test).
+ */
+const APP_NAME = UPDATE_TEST_BUILD ? "TableCraft Update Test" : "TableCraft";
 /** The profile folder keeps the name it had before the product was TableCraft (decision 037). */
-const USER_DATA_DIRECTORY = "table-craft";
+const USER_DATA_DIRECTORY = UPDATE_TEST_BUILD ? "table-craft-update-test" : "table-craft";
 const WINDOW_WIDTH = 1200;
 const WINDOW_HEIGHT = 800;
 const USER_PLUGINS_DIR = "plugins";
@@ -100,6 +125,12 @@ const MAC_PLATFORM = "darwin";
 // this, userData and so the user plugin root would be `Electron`.
 app.setName(APP_NAME);
 app.setPath(USER_DATA, process.env[USER_DATA_ENV] || join(app.getPath(APP_DATA), USER_DATA_DIRECTORY));
+/**
+ * One instance per profile (plan 020): two would share the log file and race an update's swap.
+ * Chromium keys the lock on userData, so smoke runs with their own profiles still run side by side.
+ */
+const primaryInstance = app.requestSingleInstanceLock();
+if (!primaryInstance) app.exit(0);
 
 let settingsService: SettingsService | null = null;
 let installedPlugins: readonly PluginInfo[] = [];
@@ -188,7 +219,7 @@ const paths = appPaths({
   resourcesPath: process.resourcesPath,
   distDirectory: dirname(import.meta.dirname),
 });
-const appVersion = app.isPackaged ? app.getVersion() : DEVELOPMENT_VERSION;
+const appVersion = appVersionOf();
 const appInfo: AppInfo = {
   name: APP_NAME,
   version: appVersion,
@@ -230,7 +261,7 @@ const cipher: Cipher = {
 
 function broadcast(
   channel: string,
-  payload: DatasourceList | EngineExited | SettingsChanged | readonly LogRecord[],
+  payload: DatasourceList | EngineExited | SettingsChanged | UpdateState | readonly LogRecord[],
 ): void {
   for (const window of BrowserWindow.getAllWindows()) window.webContents.send(channel, payload);
 }
@@ -269,6 +300,15 @@ const closeGuard = createCloseGuard<BrowserWindow>({ quit: () => app.quit() });
 const customTitleBars = new WeakSet<BrowserWindow>();
 /** Restart Now asked to quit; `will-quit` turns it into a relaunch, a refused close cancels it. */
 let relaunchRequested = false;
+/** Restart to Update asked to quit; like a relaunch, a refused close cancels it (plan 020). */
+let installRequested = false;
+let updater: Updater | null = null;
+let updateSchedule: UpdateSchedule | null = null;
+const updateLog = mainLog.child(UPDATE_SCOPE, { current: appVersionOf() });
+
+function appVersionOf(): string {
+  return app.isPackaged ? app.getVersion() : DEVELOPMENT_VERSION;
+}
 
 function densityOf(settings: SettingsService): DensityTokens {
   return DENSITIES[settings.snapshot().settings.appearance.density];
@@ -348,7 +388,10 @@ function createWindow(settings: SettingsService): void {
   const sendState = () => window.webContents.send(CHANNELS.windowState, windowStateOf(window));
   window.on("enter-full-screen", sendState);
   window.on("leave-full-screen", sendState);
-  window.once("ready-to-show", () => window.show());
+  window.once("ready-to-show", () => {
+    window.show();
+    updateSchedule?.start();
+  });
   closeGuard.guard(window);
   void window.loadFile(paths.rendererIndex);
 }
@@ -443,7 +486,98 @@ async function exportDiagnostics(sender: WebContents, inputs: DiagnosticsInputs)
   return path;
 }
 
+function writableDirectory(directory: string): boolean {
+  try {
+    accessSync(directory, fsConstants.W_OK);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function runToCompletion(command: string, args: readonly string[]): Promise<{ code: number | null; output: string }> {
+  return new Promise((resolve) => {
+    execFile(command, [...args], (error, stdout, stderr) => {
+      const code = error === null ? 0 : typeof error.code === "number" ? error.code : null;
+      resolve({ code, output: `${stdout}${stderr}`.trim() });
+    });
+  });
+}
+
+/** The updater and its schedule (plan 020); its state goes to every window on `CHANNELS.updateState`. */
+async function startUpdater(directory: string, settings: SettingsService): Promise<Updater> {
+  await drainSwapLog(join(directory, SWAP_LOG_FILE), files, updateLog.child(UPDATE_SCOPE, { step: "swap" }));
+  const endpoint = updateEndpoint(process.env, !app.isPackaged || UPDATE_TEST_BUILD, (path) =>
+    readFileSync(path, UTF8),
+  );
+  if (endpoint.overridden) {
+    updateLog.warn("update endpoint overridden for testing", {
+      manifestUrl: loggableUrl(endpoint.manifestUrl),
+      testBuild: UPDATE_TEST_BUILD,
+    });
+  }
+  const facts: InstallFacts = {
+    platform: process.platform,
+    arch: process.arch,
+    packaged: app.isPackaged,
+    currentVersion: appVersion,
+    executablePath: process.execPath,
+    appImagePath: process.env.APPIMAGE,
+    writable: writableDirectory,
+  };
+  const statePath = join(directory, UPDATE_STATE_FILE);
+  const created = createUpdater({
+    currentVersion: appVersion,
+    manifestUrl: endpoint.manifestUrl,
+    trust: endpoint.trust,
+    facts,
+    tempDirectory: app.getPath("temp"),
+    swapLogPath: join(directory, SWAP_LOG_FILE),
+    pid: process.pid,
+    fetch: (url, init) => net.fetch(url, { signal: init.signal }),
+    run: runToCompletion,
+    spawnDetached(command, args) {
+      spawn(command, [...args], { detached: true, stdio: "ignore" }).unref();
+    },
+    readMemory: async () => readUpdateMemory(await files.readText(statePath)),
+    writeMemory: (memory) => files.writeText(statePath, writeUpdateMemory(memory)),
+    onState: (state) => broadcast(CHANNELS.updateState, state),
+    log: updateLog,
+    newId: randomUUID,
+  });
+  const bundlePath = process.platform === MAC_PLATFORM && app.isPackaged ? bundlePathFrom(process.execPath) : null;
+  if (bundlePath !== null) await removeLeftovers({ kind: "macBundle", bundlePath }, updateLog);
+  // A development run checks on its own only when pointed at a test release.
+  const automaticAllowed = app.isPackaged || endpoint.overridden;
+  updateSchedule = createUpdateSchedule({
+    check: () => void created.check("automatic"),
+    enabled: automaticAllowed && settings.snapshot().settings.updates.checkAutomatically,
+    firstDelayMs: endpoint.firstCheckMs,
+    intervalMs: CHECK_INTERVAL_MS,
+    timers: {
+      setTimeout: (run, ms) => setTimeout(run, ms),
+      clearTimeout: (timer) => clearTimeout(timer as NodeJS.Timeout),
+      setInterval: (run, ms) => setInterval(run, ms),
+      clearInterval: (timer) => clearInterval(timer as NodeJS.Timeout),
+    },
+  });
+  const allowAutomatic = automaticAllowed;
+  settingsListeners.push((changed) => updateSchedule?.setEnabled(allowAutomatic && changed.updates.checkAutomatically));
+  return created;
+}
+
+/** Called with the saved settings after every write; the updater's schedule listens. */
+const settingsListeners: ((settings: SettingsChanged["settings"]) => void)[] = [];
+
+app.on("second-instance", () => {
+  const [window] = BrowserWindow.getAllWindows();
+  if (window === undefined) return;
+  if (window.isMinimized()) window.restore();
+  window.focus();
+});
+
 void app.whenReady().then(async () => {
+  if (!primaryInstance) return;
   app.setAboutPanelOptions({ applicationName: APP_NAME, applicationVersion: appVersion });
   if (process.platform === MAC_PLATFORM && !app.isPackaged) app.dock?.setIcon(paths.icon);
   const directory = app.getPath(USER_DATA);
@@ -490,6 +624,7 @@ void app.whenReady().then(async () => {
     onChanged(changed) {
       applyWindowAppearance(settings);
       broadcast(CHANNELS.settingsChanged, changed);
+      for (const listener of settingsListeners) listener(changed.settings);
     },
   });
   settingsService = settings;
@@ -499,6 +634,8 @@ void app.whenReady().then(async () => {
   if (datasourcesWarning !== null)
     mainLog.child("datasources").warn("datasources file set aside", { warning: datasourcesWarning });
   forwardAppendedRecords();
+  const updates = await startUpdater(directory, settings);
+  updater = updates;
   nativeTheme.on("updated", () => {
     if (settings.snapshot().settings.appearance.theme === "system") applyWindowAppearance(settings);
   });
@@ -517,7 +654,10 @@ void app.whenReady().then(async () => {
     revealFile: (path) => shell.showItemInFolder(path),
     answerClose(sender, proceed) {
       const window = BrowserWindow.fromWebContents(sender);
-      if (!proceed) relaunchRequested = false;
+      if (!proceed) {
+        relaunchRequested = false;
+        installRequested = false;
+      }
       if (window !== null) closeGuard.answer(window, proceed);
     },
     appInfo: () => appInfo,
@@ -555,6 +695,24 @@ void app.whenReady().then(async () => {
           runs: () => history.recentRuns(DIAGNOSTICS_HISTORY_RUNS),
         }),
     },
+    updates: {
+      state: () => updates.state(),
+      check: () => updates.check("manual"),
+      download() {
+        void updates.download();
+      },
+      cancel: () => updates.cancel(),
+      install() {
+        if (!updates.ready()) return;
+        installRequested = true;
+        app.quit();
+      },
+      skip: () => updates.skip(),
+      dismiss: () => updates.dismiss(),
+      openNotes() {
+        void shell.openExternal(updates.notesUrl() ?? RELEASES_PAGE_URL);
+      },
+    },
   });
   installApplicationMenu(() => BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0] ?? null);
   createWindow(settings);
@@ -569,8 +727,34 @@ app.on("window-all-closed", () => {
 
 app.on("before-quit", () => closeGuard.beforeQuit());
 
-app.on("will-quit", () => {
+app.on("will-quit", (event) => {
   hosts.closeAll();
+  updateSchedule?.stop();
+  const pending = updater;
+  if (pending !== null && (installRequested || pending.holdsFiles())) {
+    // The swap or the cleanup is asynchronous; quitting waits for it, then exits for good.
+    event.preventDefault();
+    void finishUpdate(pending, installRequested).finally(() => app.exit(0));
+    return;
+  }
   // Scheduled only now that every window has agreed to close, so a refused close never relaunches later.
   if (relaunchRequested) app.relaunch();
 });
+
+/** Hands the staged update over on Restart to Update; otherwise removes whatever was staged. */
+async function finishUpdate(pending: Updater, install: boolean): Promise<void> {
+  try {
+    if (!install) {
+      await pending.discard();
+      if (relaunchRequested) app.relaunch();
+      return;
+    }
+    const outcome = await pending.install();
+    if (outcome.relaunch === "self") app.relaunch({ execPath: outcome.executable, args: process.argv.slice(1) });
+    if (outcome.relaunch === "none" && relaunchRequested) app.relaunch();
+  } catch (cause) {
+    updateLog.error("update could not be installed", { err: cause });
+  } finally {
+    await logHub.writer.drain();
+  }
+}

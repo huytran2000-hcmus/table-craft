@@ -25,6 +25,8 @@ export const CHANNELS = {
   windowState: "table-craft:window.state-changed",
   /** Main to every window: records were written to the log; the payload is a `LogRecord[]`. */
   logAppended: "table-craft:log.appended",
+  /** Main to every window: the updater moved; the payload is the whole `UpdateState` (plan 020). */
+  updateState: "table-craft:update.state",
 } as const;
 
 /** Renderer to main, through `ipcRenderer.invoke`; each answers with an `InvokeResult`. */
@@ -59,6 +61,14 @@ export const INVOKE_CHANNELS = {
   logRead: "table-craft:log.read",
   logReveal: "table-craft:log.reveal",
   exportDiagnostics: "table-craft:diagnostics.export",
+  updateState: "table-craft:update.state",
+  updateCheck: "table-craft:update.check",
+  updateDownload: "table-craft:update.download",
+  updateCancel: "table-craft:update.cancel",
+  updateInstall: "table-craft:update.install",
+  updateSkip: "table-craft:update.skip",
+  updateDismiss: "table-craft:update.dismiss",
+  updateOpenNotes: "table-craft:update.open-notes",
 } as const;
 
 /** The `window.postMessage` kind preload uses to hand a port on; contextBridge cannot carry one. */
@@ -226,6 +236,47 @@ export interface AppInfo {
   readonly chromium: string;
 }
 
+/** The release an update offers; its URLs stay in main, which opens them itself (plan 020). */
+export interface UpdateRelease {
+  readonly version: string;
+  /** Bytes of the download for this platform; 0 when there is none. */
+  readonly size: number;
+}
+
+/**
+ * The updater's one state (plan 020 decision 8), pushed whole on `CHANNELS.updateState`. The
+ * renderer never derives a phase from two fields; `current` is this build's version in every phase.
+ */
+export type UpdateState =
+  | { readonly phase: "idle"; readonly current: string }
+  | { readonly phase: "checking"; readonly current: string }
+  | { readonly phase: "available"; readonly current: string; readonly release: UpdateRelease }
+  | {
+      readonly phase: "downloading";
+      readonly current: string;
+      readonly release: UpdateRelease;
+      readonly received: number;
+      readonly total: number;
+    }
+  | { readonly phase: "ready"; readonly current: string; readonly release: UpdateRelease }
+  | {
+      readonly phase: "error";
+      readonly current: string;
+      /** The release the failure was about; null when the check itself failed. */
+      readonly release: UpdateRelease | null;
+      readonly message: string;
+      /** Whether Retry can help: a network failure or a bad download, not a bad signature. */
+      readonly retryable: boolean;
+    }
+  | {
+      readonly phase: "ineligible";
+      readonly current: string;
+      readonly release: UpdateRelease;
+      readonly message: string;
+    };
+
+export type UpdatePhase = UpdateState["phase"];
+
 /** The window's frame (decision 034), fixed at creation, and whether it is full screen now. */
 export interface WindowState {
   readonly fullScreen: boolean;
@@ -303,4 +354,18 @@ export interface TableCraftBridge {
   onLogAppended(listener: (records: readonly LogRecord[]) => void): () => void;
   /** Asks for a path, then writes the diagnostics zip there; the path written, or null when cancelled. */
   exportDiagnostics(): Promise<InvokeResult<string | null>>;
+  updateState(): Promise<InvokeResult<UpdateState>>;
+  onUpdateState(listener: (state: UpdateState) => void): () => void;
+  /** Help → Check for Updates: checks now, even a skipped version, and answers with the state it ends in. */
+  updateCheck(): Promise<InvokeResult<UpdateState>>;
+  updateDownload(): Promise<InvokeResult<null>>;
+  updateCancel(): Promise<InvokeResult<null>>;
+  /** Restart to Update: quits through the close guard, swaps in the staged version and starts it. */
+  updateInstall(): Promise<InvokeResult<null>>;
+  /** Skip This Version: remembered, so automatic checks stay quiet about it. */
+  updateSkip(): Promise<InvokeResult<null>>;
+  /** Clears an error or a not-installable notice until the next check. */
+  updateDismiss(): Promise<InvokeResult<null>>;
+  /** Opens the offered release's notes page in the browser. */
+  updateOpenNotes(): Promise<InvokeResult<null>>;
 }

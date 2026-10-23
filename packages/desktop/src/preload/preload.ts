@@ -10,6 +10,7 @@ import {
   type InvokeResult,
   type SettingsChanged,
   type TableCraftBridge,
+  type UpdateState,
   type WindowState,
 } from "@table-craft/desktop/preload/bridge.js";
 import type { LogRecord } from "@table-craft/desktop/log/record.js";
@@ -84,6 +85,15 @@ const bridge: TableCraftBridge = {
   logReveal: () => invoke(INVOKE_CHANNELS.logReveal),
   onLogAppended: (listener) => subscribe<readonly LogRecord[]>(CHANNELS.logAppended, listener),
   exportDiagnostics: () => invoke(INVOKE_CHANNELS.exportDiagnostics),
+  updateState: () => invoke(INVOKE_CHANNELS.updateState),
+  onUpdateState: (listener) => subscribe<UpdateState>(CHANNELS.updateState, listener),
+  updateCheck: () => invoke(INVOKE_CHANNELS.updateCheck),
+  updateDownload: () => invoke(INVOKE_CHANNELS.updateDownload),
+  updateCancel: () => invoke(INVOKE_CHANNELS.updateCancel),
+  updateInstall: () => invoke(INVOKE_CHANNELS.updateInstall),
+  updateSkip: () => invoke(INVOKE_CHANNELS.updateSkip),
+  updateDismiss: () => invoke(INVOKE_CHANNELS.updateDismiss),
+  updateOpenNotes: () => invoke(INVOKE_CHANNELS.updateOpenNotes),
 };
 
 contextBridge.exposeInMainWorld(BRIDGE_KEY, bridge);

@@ -319,6 +319,7 @@ back to its default without affecting the others.
 | `data.fetchAllCap`                     | 1,000–1,000,000, at least `pageRows`                               | 100,000       |
 | `log.level`                            | `info`, `debug`                                                    | `info`        |
 | `data.exportStallSeconds`              | 10–3,600; an export that receives nothing this long fails          | 120           |
+| `updates.checkAutomatically`           | `true`, `false`; look for a new version after launch and daily     | `true`        |
 
 A theme of your own is a JSON file in `themes/` in the profile folder. It names a built-in theme as
 its base and overrides any of its colour tokens; it then appears as `user:<file stem>`, here

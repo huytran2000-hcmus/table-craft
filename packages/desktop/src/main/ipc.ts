@@ -16,6 +16,7 @@ import {
   type InvokeResult,
   type MenuPoint,
   type SaveDatasourceRequest,
+  type UpdateState,
   type WindowState,
 } from "@table-craft/desktop/preload/bridge.js";
 import type { Logger, LogRecord } from "@table-craft/desktop/log/record.js";
@@ -97,6 +98,19 @@ export interface IpcOptions<Sender> {
   /** Main's `ipc` logger: rejected payloads and failed handlers are written here (plan 017). */
   readonly log: Logger;
   readonly logs: LogChannels<Sender>;
+  readonly updates: UpdateChannels;
+}
+
+/** The updater behind the `update.*` channels (plan 020); URLs never come from the renderer. */
+export interface UpdateChannels {
+  state(): UpdateState;
+  check(): Promise<UpdateState>;
+  download(): void;
+  cancel(): Promise<void>;
+  install(): void;
+  skip(): Promise<void>;
+  dismiss(): void;
+  openNotes(): void;
 }
 
 /** The log and diagnostics behind the `log.*` and `diagnostics.export` channels (plan 017). */
@@ -224,6 +238,45 @@ export function registerIpc<Sender>(ipc: InvokeRegistrar<Sender>, options: IpcOp
     return null;
   });
   handle(INVOKE_CHANNELS.exportDiagnostics, noRequest, (_request, sender) => logs.exportDiagnostics(sender));
+
+  const { updates } = options;
+  const done = (run: () => unknown) => async () => {
+    await run();
+    return null;
+  };
+  handle(INVOKE_CHANNELS.updateState, noRequest, () => updates.state());
+  handle(INVOKE_CHANNELS.updateCheck, noRequest, () => updates.check());
+  // The download outlives the request; its progress and outcome arrive on `CHANNELS.updateState`.
+  handle(
+    INVOKE_CHANNELS.updateDownload,
+    noRequest,
+    done(() => updates.download()),
+  );
+  handle(
+    INVOKE_CHANNELS.updateCancel,
+    noRequest,
+    done(() => updates.cancel()),
+  );
+  handle(
+    INVOKE_CHANNELS.updateInstall,
+    noRequest,
+    done(() => updates.install()),
+  );
+  handle(
+    INVOKE_CHANNELS.updateSkip,
+    noRequest,
+    done(() => updates.skip()),
+  );
+  handle(
+    INVOKE_CHANNELS.updateDismiss,
+    noRequest,
+    done(() => updates.dismiss()),
+  );
+  handle(
+    INVOKE_CHANNELS.updateOpenNotes,
+    noRequest,
+    done(() => updates.openNotes()),
+  );
 
   const { history } = options;
   handle(INVOKE_CHANNELS.historyRecord, historyEntry, (entry) => {

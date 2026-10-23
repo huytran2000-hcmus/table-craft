@@ -138,6 +138,8 @@ export const APPLICATION_MENU: readonly MenuEntry[] = [
       { kind: "action", label: "Show Log", actionId: "log.show" },
       { kind: "action", label: "Reveal Log File", actionId: "log.reveal" },
       { kind: "action", label: "Export Diagnostics…", actionId: "diagnostics.export" },
+      SEPARATOR,
+      { kind: "action", label: "Check for Updates…", actionId: "update.check" },
       { kind: "separator", only: "notMac" },
       { kind: "action", label: "About TableCraft", actionId: "app.about", only: "notMac" },
     ],

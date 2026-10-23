@@ -78,6 +78,11 @@ export interface LogSettings {
   readonly level: LogLevelChoice;
 }
 
+export interface UpdateSettings {
+  /** Look for a new version after launch and once a day; installing always waits for a click (plan 020). */
+  readonly checkAutomatically: boolean;
+}
+
 export interface Settings {
   readonly version: typeof SETTINGS_VERSION;
   readonly appearance: AppearanceSettings;
@@ -85,6 +90,7 @@ export interface Settings {
   readonly console: ConsoleSettings;
   readonly data: DataSettings;
   readonly log: LogSettings;
+  readonly updates: UpdateSettings;
 }
 
 export type FontRole = keyof FontSettings;
@@ -131,6 +137,9 @@ export const DEFAULT_SETTINGS: Settings = {
   },
   log: {
     level: "info",
+  },
+  updates: {
+    checkAutomatically: true,
   },
 };
 
@@ -234,6 +243,7 @@ export function readSettings(input: unknown): Settings {
   const editor = record(root.editor);
   const console = record(root.console);
   const log = record(root.log);
+  const updates = record(root.updates);
   const defaults = DEFAULT_SETTINGS;
   const pageRows = inRange(data.pageRows, PAGE_ROWS_RANGE) ? data.pageRows : defaults.data.pageRows;
   const fetchAllCap =
@@ -275,6 +285,12 @@ export function readSettings(input: unknown): Settings {
       level: LOG_LEVEL_CHOICES.includes(log.level as LogLevelChoice)
         ? (log.level as LogLevelChoice)
         : defaults.log.level,
+    },
+    updates: {
+      checkAutomatically:
+        typeof updates.checkAutomatically === "boolean"
+          ? updates.checkAutomatically
+          : defaults.updates.checkAutomatically,
     },
   };
 }
