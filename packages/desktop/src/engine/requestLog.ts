@@ -52,6 +52,9 @@ const SCOPES: Readonly<Record<string, string>> = {
   "export.start": "export",
   "export.cancel": "export",
   "export.retry": "export",
+  "import.start": "import",
+  "import.cancel": "import",
+  "import.resume": "import",
   "edits.submit": "edits",
 };
 const DEFAULT_SCOPE = "request";
@@ -107,6 +110,21 @@ function summary(request: LoggedRequest, result: unknown, context: RequestContex
       ];
     case "export.cancel":
       return ["export cancel requested", { ...base, taskId: request.taskId }];
+    case "import.start":
+    case "import.resume":
+      return [
+        "import started",
+        {
+          ...base,
+          taskId: value.taskId,
+          transaction: record(value.transaction).mode,
+          size: value.size,
+          resumeFrom: value.resumeFrom,
+          resumeOf: request.taskId,
+        },
+      ];
+    case "import.cancel":
+      return ["import cancel requested", { ...base, taskId: request.taskId }];
     case "edits.submit":
       return [
         "edits submitted",
@@ -127,6 +145,8 @@ const FAILURE_MESSAGES: Readonly<Record<string, string>> = {
   "statement.execute": "statement failed",
   "export.start": "export refused",
   "export.retry": "export refused",
+  "import.start": "import refused",
+  "import.resume": "import refused",
   "edits.submit": "edits rejected",
 };
 

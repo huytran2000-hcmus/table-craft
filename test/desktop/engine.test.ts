@@ -221,7 +221,7 @@ describe("engine", () => {
 
     expect(resultOf(response)).toMatchObject({
       pluginName: "SQLite",
-      capabilities: ["sql", "schemaTree", "transactions", "ddl", "explain"],
+      capabilities: ["sql", "schemaTree", "transactions", "ddl", "explain", "bulkInsert"],
     });
   });
 
@@ -344,7 +344,11 @@ describe("engine", () => {
 });
 
 /** The seeded fixture, through a plugin that counts the sessions it opens and closes. */
-function countingSqlite(): { engine: ReturnType<typeof createEngine>; opened: () => number; closed: () => number } {
+function countingSqlite(brokenSessions = 0): {
+  engine: ReturnType<typeof createEngine>;
+  opened: () => number;
+  closed: () => number;
+} {
   let opened = 0;
   let closed = 0;
   const plugin: DatasourcePlugin = {
@@ -352,9 +356,15 @@ function countingSqlite(): { engine: ReturnType<typeof createEngine>; opened: ()
     connect: async (config, options) => {
       opened += 1;
       const session = await sqlite.connect(config, options);
+      const lost = (): never => {
+        throw new PluginError("introspectionFailed", "Client has encountered a connection error and is not queryable");
+      };
       return {
         execute: (sql) => session.execute(sql),
-        introspector: session.introspector,
+        introspector:
+          opened <= brokenSessions && session.introspector !== undefined
+            ? { ...session.introspector, namespaces: lost, describe: lost }
+            : session.introspector,
         serverVersion: session.serverVersion,
         close: () => {
           closed += 1;
@@ -397,6 +407,15 @@ describe("engine catalog", () => {
     expect(opened()).toBe(1);
     expect(resultOf<DescribedCatalog>(left).introspectedAt).toBe(resultOf<DescribedCatalog>(right).introspectedAt);
     expect(resultOf<DescribedCatalog>(left).catalog.relations.map((relation) => relation.name)).toContain("orders");
+  });
+
+  it("givenIntrospectionLinkDropped_whenDescribed_thenFreshSessionAnswers", async () => {
+    const { engine, opened, closed } = countingSqlite(1);
+
+    const response = await engine.connect().handle({ id: 1, type: "catalog.describe", path: ["main"] });
+
+    expect(resultOf<DescribedCatalog>(response).catalog.relations.map((relation) => relation.name)).toContain("orders");
+    expect([opened(), closed()]).toEqual([2, 1]);
   });
 
   it("givenUnknownNamespace_whenDescribed_thenIntrospectionFailedWithHint", async () => {

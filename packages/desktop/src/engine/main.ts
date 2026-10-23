@@ -74,9 +74,9 @@ async function exitAfterClosing(): Promise<never> {
   process.exit(0);
 }
 
-/** An export outlives the window that started it; the engine leaves once none runs and no port came back. */
+/** An export or import outlives the window that started it; the engine leaves once none runs and no port came back. */
 async function exitWhenSettled(): Promise<void> {
-  await engine?.exportsSettled();
+  await engine?.tasksSettled();
   if (lifetime.idle) await exitAfterClosing();
 }
 

@@ -7,6 +7,8 @@ import {
   EXTRACTOR_KINDS,
   HISTORY_OUTCOMES,
   HISTORY_SOURCES,
+  IMPORT_ENCODINGS,
+  IMPORT_FAILURE_REASONS,
   RESULT_FETCH_ALL_CAP,
   RESULT_PAGE_ROWS,
   RESULT_WINDOW_ROWS,
@@ -17,6 +19,9 @@ import {
   type ExtractorKind,
   type HistoryEntry,
   type HistoryStatement,
+  type ImportErrorPolicy as CoreImportErrorPolicy,
+  type ImportFormat as CoreImportFormat,
+  type ImportTransaction as CoreImportTransaction,
   type OrderTerm,
   type ResultState,
   type ResultSummary,
@@ -28,7 +33,9 @@ import {
 import {
   CAPABILITIES,
   COMPLETION_KINDS,
+  IMPORT_KINDS,
   MANIFEST_FILE,
+  type ImportKind,
   type Capability,
   type Column,
   type ColumnMeta,
@@ -142,6 +149,16 @@ describe("engine protocol", () => {
     expectTypeOf<protocol.CompletionResult>().toEqualTypeOf<CompletionResult>();
     expectTypeOf<protocol.Declaration>().toEqualTypeOf<Declaration>();
     expect(protocol.COMPLETION_KINDS).toEqual(COMPLETION_KINDS);
+  });
+
+  it("givenImportTypes_whenComparedWithCoreAndPluginApi_thenIdentical", () => {
+    expectTypeOf<protocol.ImportFormat>().toEqualTypeOf<CoreImportFormat>();
+    expectTypeOf<protocol.ImportTransaction>().toEqualTypeOf<CoreImportTransaction>();
+    expectTypeOf<protocol.ImportErrorPolicy>().toEqualTypeOf<CoreImportErrorPolicy>();
+    expectTypeOf<protocol.ImportKind>().toEqualTypeOf<ImportKind>();
+    expect(protocol.IMPORT_ENCODINGS).toEqual(IMPORT_ENCODINGS);
+    expect(protocol.IMPORT_FAILURE_REASONS).toEqual(IMPORT_FAILURE_REASONS);
+    expect(protocol.IMPORT_KINDS).toEqual(IMPORT_KINDS);
   });
 
   it("givenExplainTypes_whenComparedWithPluginApi_thenIdentical", () => {

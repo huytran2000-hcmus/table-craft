@@ -3,15 +3,21 @@ import {
   CatalogCache,
   completionCatalog,
   CoreError,
+  CsvError,
   EditRejectedError,
   editableIdentity,
+  fileChunks,
+  fileSize,
+  formatProblem,
   generateEdits,
   loadedPlugin,
   matchCondition,
   openSession,
   orderClause,
+  previewFile,
   project,
   ResultStore,
+  RowsRefused,
   rowWriter,
   submitEdits,
   tableCount,
@@ -33,6 +39,7 @@ import {
   type CompletionRequest,
   type CompletionResult,
   type Declaration,
+  type InsertTarget,
   type Relation,
   type ResolveRequest,
   type Row,
@@ -58,6 +65,11 @@ import type {
   ExportTask,
   FormatOptions,
   GeneratorStatement,
+  ImportEncoding,
+  ImportFormat,
+  ImportPreview,
+  ImportTask,
+  NewImportColumn,
   ParameterValue,
   ProbeResult,
   Reconnection,
@@ -76,6 +88,7 @@ import {
   type RequestContext,
 } from "@table-craft/desktop/engine/requestLog.js";
 import { exportTasks, type ExportJob, type ExportRows } from "@table-craft/desktop/engine/exports.js";
+import { importTasks, type ImportJob, type ImportSession } from "@table-craft/desktop/engine/imports.js";
 import { engineRequestSchema, readRequestId } from "@table-craft/desktop/engine/requests.js";
 import { SessionLost, StatementTimedOut, watchStatement, type LostReason } from "@table-craft/desktop/engine/watch.js";
 import type { Logger, LogFields } from "@table-craft/desktop/log/record.js";
@@ -97,11 +110,11 @@ export interface EngineConnection {
 }
 
 export interface Engine {
-  /** `emit` receives every export event, whichever connection started the task (decision 040). */
+  /** `emit` receives every export and import event, whichever connection started the task (decisions 040, 046). */
   connect(emit?: (event: EngineEvent) => void): EngineConnection;
-  /** Resolves once no export runs, so a reloading window does not cut one short. */
-  exportsSettled(): Promise<void>;
-  /** Closes what the engine holds for every connection: export tasks and the introspection session. */
+  /** Resolves once no export or import runs, so a reloading window does not cut one short. */
+  tasksSettled(): Promise<void>;
+  /** Closes what the engine holds for every connection: export and import tasks and the introspection session. */
   close(): Promise<void>;
 }
 
@@ -368,6 +381,19 @@ const EMPTY_COMPLETION_CATALOG: CompletionCatalog = {
   referencing: () => Promise.resolve([]),
 };
 
+const FORMAT_OPTIONS_HINT = "Check the format options (encoding, delimiter, quote) against the file.";
+const FILE_HINT = "Check that the file exists and that TableCraft may read it, then choose it again.";
+const READ_ONLY_IMPORT = "This data source is read-only, so it cannot be imported into.";
+const READ_ONLY_IMPORT_HINT = "Clear Read-only in the data source's properties to import.";
+const PRIVATE_IMPORT =
+  "An in-memory database cannot be imported into: the import's own connection would see another database.";
+const PRIVATE_IMPORT_HINT = "Save the database to a file, or insert the rows from a console.";
+
+/** Reads a result to its end, so a statement run for its effect has finished. */
+async function drained(result: { readonly rows: AsyncIterable<Row> }): Promise<void> {
+  for await (const row of result.rows) void row;
+}
+
 const STALE_CATALOG_REASON = "The table's columns differ from the cached catalog; synchronize to edit it.";
 const SERVER_SORT_HINT = "Sort a table editor on the server: click the column header or edit ORDER BY.";
 
@@ -483,12 +509,27 @@ export function createEngine(options: EngineOptions, now: () => number = Date.no
     return introspection;
   }
 
+  /**
+   * A failed read is tried once more on a fresh session. The contract cannot tell a dropped link from
+   * a refused read, and without this one dropped link (an import's network failure, a server
+   * restart) would fail every catalog call until the datasource is reconnected.
+   */
   async function introspect<T>(read: (open: Introspection) => Promise<T> | T): Promise<T> {
-    const open = await catalog();
+    const opening = catalog();
+    const open = await opening;
     try {
       return await read(open);
     } catch (cause) {
-      throw introspectionFailed(cause);
+      if (!isPluginError(cause)) throw cause;
+      if (introspection === opening) {
+        introspection = null;
+        void open.session.close().catch(() => undefined);
+      }
+      try {
+        return await read(await catalog());
+      } catch (again) {
+        throw introspectionFailed(again);
+      }
     }
   }
 
@@ -675,6 +716,193 @@ export function createEngine(options: EngineOptions, now: () => number = Date.no
     }
   }
 
+  const imports = importTasks(log === null ? {} : { log: log.child("import") });
+
+  /** The language of a plugin that declares `bulkInsert`, which has `importType` and `createTable`. */
+  function importLanguage(): Required<Pick<SqlLanguage, "importType" | "createTable">> {
+    const { plugin } = loadedPlugin(options.plugins, options.datasource.pluginId);
+    const language = plugin.language;
+    if (
+      !plugin.capabilities.includes("bulkInsert") ||
+      language?.importType === undefined ||
+      language.createTable === undefined
+    ) {
+      throw new EngineFailure({
+        code: "invalidRequest",
+        message: "This datasource's plugin does not declare the bulkInsert capability.",
+        hint: BUG_HINT,
+      });
+    }
+    return { importType: language.importType.bind(language), createTable: language.createTable.bind(language) };
+  }
+
+  async function importable(file: string, format: ImportFormat): Promise<number> {
+    if (!isAbsolute(file)) {
+      throw new EngineFailure({
+        code: "invalidRequest",
+        message: `Import needs an absolute path, not "${file}".`,
+        hint: BUG_HINT,
+      });
+    }
+    const problem = formatProblem(format);
+    if (problem !== null)
+      throw new EngineFailure({ code: "invalidRequest", message: problem, hint: FORMAT_OPTIONS_HINT });
+    try {
+      return await fileSize(file);
+    } catch (cause) {
+      throw new EngineFailure(
+        { code: "importFailed", message: `Cannot read ${file}: ${messageOf(cause)}`, hint: FILE_HINT },
+        cause,
+      );
+    }
+  }
+
+  async function previewImport(file: string, format: ImportFormat): Promise<ImportPreview> {
+    const language = importLanguage();
+    const size = await importable(file, format);
+    try {
+      const preview = await previewFile(fileChunks(file), format);
+      return {
+        names: preview.names,
+        rows: preview.rows,
+        kinds: preview.columns.map((column) => column.kind),
+        types: preview.columns.map((column) => language.importType(column)),
+        encoding: (preview.encoding ?? "utf-8") as ImportEncoding,
+        ragged: preview.ragged,
+        size,
+      };
+    } catch (cause) {
+      const where = cause instanceof CsvError ? ` (line ${String(cause.line)})` : "";
+      throw new EngineFailure(
+        { code: "importFailed", message: `${messageOf(cause)}${where}`, hint: FORMAT_OPTIONS_HINT },
+        cause,
+      );
+    }
+  }
+
+  async function newTableDdl(
+    path: readonly string[],
+    relation: string,
+    columns: readonly NewImportColumn[],
+  ): Promise<{ qualified: string; ddl: string }> {
+    const language = importLanguage();
+    const qualified = await introspect(
+      ({ session }) => session.introspector?.qualifiedName(path, relation) ?? relation,
+    );
+    return {
+      qualified,
+      ddl: language.createTable(
+        qualified,
+        columns.map(({ name, type }) => ({ name, type })),
+      ),
+    };
+  }
+
+  /**
+   * The import's own writable session in manual mode, with TCP keepalive like every connection
+   * (decision 054). It never enters `sessions`, so the statement timeout, the idle ping and the
+   * reconnect never touch it: a reconnect mid-import would lose the open transaction, and only the
+   * stall watchdog may end an import (decision 046).
+   */
+  async function importSession(target: InsertTarget): Promise<ImportSession> {
+    const { pluginId, config } = options.datasource;
+    const session = await openSession(options.plugins, pluginId, config, connectOptions(options.datasource, false));
+    const insertRows = session.insertRows?.bind(session);
+    const { transactions } = session;
+    if (transactions === undefined || insertRows === undefined) {
+      await session.close().catch(() => undefined);
+      throw new Error("A bulkInsert session needs transactions and insertRows.");
+    }
+    try {
+      await transactions.setMode("manual");
+    } catch (cause) {
+      await session.close().catch(() => undefined);
+      throw cause;
+    }
+    return {
+      writer: {
+        insert: (rows) =>
+          insertRows(target, rows).catch((cause: unknown) => {
+            if (isPluginError(cause) && cause.code === "statementFailed") {
+              throw new RowsRefused(cause.message, { cause });
+            }
+            throw cause;
+          }),
+        commit: () => transactions.commit(),
+        rollback: () => transactions.rollback(),
+      },
+      close: () => session.close(),
+    };
+  }
+
+  async function startImport(params: RequestOf<"import.start">): Promise<ImportTask> {
+    importLanguage();
+    if (options.datasource.readOnly) {
+      throw new EngineFailure({ code: "invalidRequest", message: READ_ONLY_IMPORT, hint: READ_ONLY_IMPORT_HINT });
+    }
+    const size = await importable(params.file, params.format);
+    const { target } = params;
+    const privateDatabase = await introspect(({ session }) => session.privateDatabase === true);
+    if (privateDatabase) {
+      throw new EngineFailure({ code: "invalidRequest", message: PRIVATE_IMPORT, hint: PRIVATE_IMPORT_HINT });
+    }
+    let insert: InsertTarget;
+    let fields: number[];
+    if (target.kind === "table") {
+      const { relation, qualified } = await relationOf(target.path, target.relation);
+      const columns = target.mapping.map(({ column: name }): Column => {
+        const meta = relation.columns.find((column) => column.name === name);
+        if (meta === undefined) {
+          throw new EngineFailure({
+            code: "invalidRequest",
+            message: `There is no column ${name} in ${target.relation}.`,
+            hint: SYNCHRONIZE_HINT,
+          });
+        }
+        return { name: meta.name, type: meta.type };
+      });
+      insert = { table: qualified, columns };
+      fields = target.mapping.map((entry) => entry.field);
+    } else {
+      const { qualified, ddl } = await newTableDdl(target.path, target.relation, target.columns);
+      const session = await connectDatasource(options);
+      try {
+        await drained(await session.execute(ddl));
+      } catch (cause) {
+        throw statementFailed(cause, false);
+      } finally {
+        await session.close().catch(() => undefined);
+      }
+      await introspect(({ cache }) => cache.describe(target.path, true)).catch(() => undefined);
+      insert = { table: qualified, columns: target.columns.map(({ name, type }) => ({ name, type })) };
+      fields = target.columns.map((column) => column.field);
+    }
+    const job: ImportJob = {
+      file: params.file,
+      size,
+      format: params.format,
+      table: insert.table,
+      created: target.kind === "new",
+      fields,
+      transaction: params.transaction,
+      errors: params.errors,
+      open: () => importSession(insert),
+    };
+    return imports.start(job, params.stallSeconds * MS_PER_SECOND);
+  }
+
+  function importTaskOf(taskId: string): ImportTask {
+    const task = imports.get(taskId);
+    if (task === undefined) {
+      throw new EngineFailure({
+        code: "invalidRequest",
+        message: `No import task "${taskId}".`,
+        hint: "Import again.",
+      });
+    }
+    return task;
+  }
+
   function connect(emit: (event: EngineEvent) => void = () => undefined): EngineConnection {
     const sessions = new Map<string, OpenSession>();
     /** Each live result handle, mapped to the session that produced it. */
@@ -686,6 +914,7 @@ export function createEngine(options: EngineOptions, now: () => number = Date.no
     /** The statement behind each handle, so an export can run it again on a session of its own. */
     const statements = new Map<string, string>();
     const unsubscribe = tasks.subscribe(emit);
+    const unsubscribeImports = imports.subscribe(emit);
 
     function forget(handle: string): void {
       handles.delete(handle);
@@ -1311,6 +1540,25 @@ export function createEngine(options: EngineOptions, now: () => number = Date.no
         return Promise.resolve(tasks.retry(taskId, stallSeconds * MS_PER_SECOND));
       },
       "export.list": () => Promise.resolve(tasks.list()),
+      "import.preview": ({ file, format }) => previewImport(file, format),
+      "import.ddl": async ({ path, relation, columns }) => (await newTableDdl(path, relation, columns)).ddl,
+      "import.start": (request) => startImport(request),
+      "import.cancel": ({ taskId }) => {
+        importTaskOf(taskId);
+        imports.cancel(taskId);
+        return Promise.resolve(null);
+      },
+      "import.resume": ({ taskId, stallSeconds }) => {
+        if (importTaskOf(taskId).state === "running") {
+          throw new EngineFailure({
+            code: "invalidRequest",
+            message: "This import is still running.",
+            hint: "Wait for it to end, or cancel it first.",
+          });
+        }
+        return Promise.resolve(imports.resume(taskId, stallSeconds * MS_PER_SECOND));
+      },
+      "import.list": () => Promise.resolve(imports.list()),
       "catalog.namespaces": ({ refresh }) => introspect(({ cache }) => cache.namespaces(refresh)),
       "catalog.describe": ({ path, refresh }) => introspect(({ cache }) => cache.describe(path, refresh)),
       "catalog.qualifiedName": ({ path, name }) =>
@@ -1363,6 +1611,7 @@ export function createEngine(options: EngineOptions, now: () => number = Date.no
       },
       async close() {
         unsubscribe();
+        unsubscribeImports();
         const held = [...handles.keys()];
         handles.clear();
         statements.clear();
@@ -1377,12 +1626,18 @@ export function createEngine(options: EngineOptions, now: () => number = Date.no
   }
 
   async function close(): Promise<void> {
-    await tasks.close();
+    await Promise.all([tasks.close(), imports.close()]);
     const open = introspection;
     introspection = null;
     if (open === null) return;
     await open.then((entry) => entry.session.close()).catch(() => undefined);
   }
 
-  return { connect, exportsSettled: () => tasks.settled(), close };
+  return {
+    connect,
+    tasksSettled: async () => {
+      await Promise.all([tasks.settled(), imports.settled()]);
+    },
+    close,
+  };
 }

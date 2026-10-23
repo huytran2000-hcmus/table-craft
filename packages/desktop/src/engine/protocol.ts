@@ -51,7 +51,8 @@ export type Capability =
   | "explain"
   | "explainAnalyze"
   | "currentNamespace"
-  | "keepAlive";
+  | "keepAlive"
+  | "bulkInsert";
 
 /** What the SQL Generator writes: `create` is the relation's definition, the rest mirror `GeneratedStatement` in plugin-api. */
 export type GeneratorStatement = "create" | "drop" | "select" | "insert" | "update";
@@ -351,7 +352,114 @@ export interface ExportEvent {
   readonly task: ExportTask;
 }
 
-export type EngineEvent = ExportEvent;
+/** Mirrors `IMPORT_ENCODINGS` in core; `auto` reads a BOM and falls back to UTF-8. */
+export const IMPORT_ENCODINGS = ["auto", "utf-8", "utf-16le", "utf-16be", "windows-1252"] as const;
+export type ImportEncoding = (typeof IMPORT_ENCODINGS)[number];
+
+/** Mirrors `ImportFormat` in core (decision 046). */
+export interface ImportFormat {
+  readonly delimiter: string;
+  readonly quote: string | null;
+  readonly escape: "double" | "backslash";
+  readonly header: boolean;
+  readonly encoding: ImportEncoding;
+  /** An unquoted field equal to this is NULL; "" is the empty field. */
+  readonly nullToken: string;
+  readonly trim: boolean;
+}
+
+/** Mirrors `IMPORT_KINDS` in plugin-api: what a sampled column's values all fit. */
+export const IMPORT_KINDS = ["boolean", "integer", "bigint", "decimal", "double", "date", "timestamp", "text"] as const;
+export type ImportKind = (typeof IMPORT_KINDS)[number];
+
+/** The head of a file read with a format: what the import dialog shows before anything is written. */
+export interface ImportPreview {
+  /** The header's names, or `column_1`… without one. */
+  readonly names: readonly string[];
+  readonly rows: readonly (readonly (string | null)[])[];
+  readonly kinds: readonly ImportKind[];
+  /** The plugin's column type for each kind, for a new table. */
+  readonly types: readonly string[];
+  /** The encoding read: what `auto` found. */
+  readonly encoding: ImportEncoding;
+  /** Sampled rows whose field count differs from the first record's: each will be a bad row. */
+  readonly ragged: number;
+  /** The file's size in bytes. */
+  readonly size: number;
+}
+
+/** One target column and the file's field written to it. */
+export interface ImportMapping {
+  readonly column: string;
+  readonly field: number;
+}
+
+/** A new table's column: its name, the type the DDL gives it, and the field it takes. */
+export interface NewImportColumn {
+  readonly name: string;
+  readonly type: string;
+  readonly field: number;
+}
+
+/** Where an import writes: an existing table's mapped columns, or a table it creates first. */
+export type ImportTarget =
+  | {
+      readonly kind: "table";
+      readonly path: readonly string[];
+      readonly relation: string;
+      readonly mapping: readonly ImportMapping[];
+    }
+  | {
+      readonly kind: "new";
+      readonly path: readonly string[];
+      readonly relation: string;
+      readonly columns: readonly NewImportColumn[];
+    };
+
+export type ImportTransaction = { readonly mode: "all" } | { readonly mode: "every"; readonly rows: number };
+export type ImportErrorPolicy = { readonly mode: "stop" } | { readonly mode: "skip"; readonly limit: number };
+
+/** Mirrors `IMPORT_FAILURE_REASONS` in core. */
+export const IMPORT_FAILURE_REASONS = ["stalled", "cancelled", "badRow", "tooManyRejected", "file", "target"] as const;
+export type ImportFailureReason = (typeof IMPORT_FAILURE_REASONS)[number];
+
+/** One background import, as every event carries it whole (decision 046). */
+export interface ImportTask {
+  readonly taskId: string;
+  readonly file: string;
+  /** The target's qualified name, as the plugin quotes it. */
+  readonly table: string;
+  readonly state: ExportTaskState;
+  readonly transaction: ImportTransaction;
+  /** Bytes of the file read so far, of `size`. */
+  readonly bytes: number;
+  readonly size: number;
+  readonly written: number;
+  readonly committed: number;
+  readonly rejected: number;
+  readonly elapsedMs: number;
+  /** The first data row a Resume (or Retry, when nothing is committed) starts from; 1-based. */
+  readonly resumeFrom: number;
+  /** The last commit's answer was lost: its rows may or may not be kept. */
+  readonly ambiguous: boolean;
+  /** This import created the table; it stays when the import fails. */
+  readonly created: boolean;
+  /** Where Skip wrote the rows it rejected; null when none were. */
+  readonly rejectedFile: string | null;
+  readonly error: (EngineError & { readonly reason: ImportFailureReason }) | null;
+}
+
+export const IMPORT_EVENT_TYPES = ["import.progress", "import.done", "import.failed", "import.cancelled"] as const;
+export type ImportEventType = (typeof IMPORT_EVENT_TYPES)[number];
+
+/** Pushed by the engine to every connection, unasked, like `ExportEvent`. */
+export interface ImportEvent {
+  readonly id: null;
+  readonly type: ImportEventType;
+  readonly task: ImportTask;
+}
+
+export type EngineEvent = ExportEvent | ImportEvent;
 
 /** Mirrors `ResultSummary` in core, with the first window and the session's transaction attached. */
 export interface ExecutedStatement extends ResultState {
@@ -642,6 +750,41 @@ export interface EngineCalls {
   "export.retry": { params: { readonly taskId: string; readonly stallSeconds: number }; result: ExportTask };
   /** Every task this engine ran, for a renderer that reloaded. */
   "export.list": { params: Record<never, never>; result: readonly ExportTask[] };
+  /** Reads the head of `file` with `format`: names, rows, inferred kinds and the plugin's types. Needs `bulkInsert`. */
+  "import.preview": { params: { readonly file: string; readonly format: ImportFormat }; result: ImportPreview };
+  /** The CREATE TABLE a new-table import runs first, written by the plugin's language (decision 008). */
+  "import.ddl": {
+    params: {
+      readonly path: readonly string[];
+      readonly relation: string;
+      readonly columns: readonly NewImportColumn[];
+    };
+    result: string;
+  };
+  /**
+   * Starts a background import of `file` into `target` and answers at once with the task; progress
+   * and the end arrive as `ImportEvent`s (decision 046). A new table is created before it answers.
+   */
+  "import.start": {
+    params: {
+      readonly file: string;
+      readonly format: ImportFormat;
+      readonly target: ImportTarget;
+      readonly transaction: ImportTransaction;
+      readonly errors: ImportErrorPolicy;
+      readonly stallSeconds: number;
+    };
+    result: ImportTask;
+  };
+  /** Stops a running import; what it had not committed is rolled back. */
+  "import.cancel": { params: { readonly taskId: string }; result: null };
+  /**
+   * Runs a finished import's job again as a new task from its `resumeFrom` row: a resume after a
+   * partial commit, a retry from the first row when nothing was committed.
+   */
+  "import.resume": { params: { readonly taskId: string; readonly stallSeconds: number }; result: ImportTask };
+  /** Every import this engine ran, for a renderer that reloaded. */
+  "import.list": { params: Record<never, never>; result: readonly ImportTask[] };
   /**
    * The datasource's namespaces, from the engine's cache unless `refresh`; the first call opens the
    * engine's introspection session (decision 022). Needs `schemaTree`.
@@ -767,6 +910,7 @@ export type EngineErrorCode =
   | "statementTimedOut"
   | "connectionLost"
   | "exportFailed"
+  | "importFailed"
   | "internal";
 
 export interface EngineError {

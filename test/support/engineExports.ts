@@ -5,14 +5,18 @@ import type {
   EngineEvent,
   EngineResponse,
   ExecutedStatement,
+  ExportEvent,
   ExportTask,
+  ImportEvent,
+  ImportTask,
 } from "@table-craft/desktop/engine/protocol.js";
 import { RESULT_FETCH_ALL_CAP, RESULT_PAGE_ROWS } from "@table-craft/desktop/engine/protocol.js";
 
-/** Drives one engine's export tasks the way a renderer would (plan 018). */
+/** Drives one engine's export and import tasks the way a renderer would (plans 018, 021). */
 
 const PAGING = { pageRows: RESULT_PAGE_ROWS, fetchAllCap: RESULT_FETCH_ALL_CAP };
 const FINAL_EVENTS = new Set(["export.done", "export.failed", "export.cancelled"]);
+const FINAL_IMPORT_EVENTS = new Set(["import.done", "import.failed", "import.cancelled"]);
 export const STALL_SECONDS = 120;
 
 export interface ExportHarness {
@@ -21,32 +25,65 @@ export interface ExportHarness {
   readonly finished: (taskId: string) => Promise<ExportTask>;
   /** Resolves on the first progress event of `taskId` with at least `rows` rows written. */
   readonly progressed: (taskId: string, rows: number) => Promise<ExportTask>;
+  /** The same for an import task: its final event, or the first with at least `rows` written. */
+  readonly imported: (taskId: string) => Promise<ImportTask>;
+  readonly importing: (taskId: string, rows: number) => Promise<ImportTask>;
+  /** The first event of `taskId` with at least `rows` committed, or its final one. */
+  readonly committing: (taskId: string, rows: number) => Promise<ImportTask>;
   readonly close: () => Promise<void>;
+}
+
+function isExport(event: EngineEvent): event is ExportEvent {
+  return event.type.startsWith("export.");
+}
+
+function isImport(event: EngineEvent): event is ImportEvent {
+  return event.type.startsWith("import.");
 }
 
 export function exportHarness(datasource: DatasourceConfig, plugins: readonly PluginLoadResult[]): ExportHarness {
   const engine = createEngine({ datasource, plugins: [...plugins] });
   const events: EngineEvent[] = [];
-  const waiting: { readonly matches: (event: EngineEvent) => boolean; readonly resolve: (task: ExportTask) => void }[] =
-    [];
+  const waiting: {
+    readonly matches: (event: EngineEvent) => boolean;
+    readonly resolve: (event: EngineEvent) => void;
+  }[] = [];
   const connection = engine.connect((event) => {
     events.push(event);
     for (const waiter of waiting.splice(0)) {
-      if (waiter.matches(event)) waiter.resolve(event.task);
+      if (waiter.matches(event)) waiter.resolve(event);
       else waiting.push(waiter);
     }
   });
-  function when(matches: (event: EngineEvent) => boolean): Promise<ExportTask> {
+  function when(matches: (event: EngineEvent) => boolean): Promise<EngineEvent> {
     const seen = events.find(matches);
-    if (seen !== undefined) return Promise.resolve(seen.task);
+    if (seen !== undefined) return Promise.resolve(seen);
     return new Promise((resolve) => waiting.push({ matches, resolve }));
+  }
+  async function exportWhen(matches: (event: ExportEvent) => boolean): Promise<ExportTask> {
+    const event = await when((candidate) => isExport(candidate) && matches(candidate));
+    return (event as ExportEvent).task;
+  }
+  async function importWhen(matches: (event: ImportEvent) => boolean): Promise<ImportTask> {
+    const event = await when((candidate) => isImport(candidate) && matches(candidate));
+    return (event as ImportEvent).task;
   }
   return {
     connection,
     events,
-    finished: (taskId) => when((event) => event.task.taskId === taskId && FINAL_EVENTS.has(event.type)),
+    finished: (taskId) => exportWhen((event) => event.task.taskId === taskId && FINAL_EVENTS.has(event.type)),
     progressed: (taskId, rows) =>
-      when((event) => event.task.taskId === taskId && (event.task.rows >= rows || FINAL_EVENTS.has(event.type))),
+      exportWhen((event) => event.task.taskId === taskId && (event.task.rows >= rows || FINAL_EVENTS.has(event.type))),
+    imported: (taskId) => importWhen((event) => event.task.taskId === taskId && FINAL_IMPORT_EVENTS.has(event.type)),
+    importing: (taskId, rows) =>
+      importWhen(
+        (event) => event.task.taskId === taskId && (event.task.written >= rows || FINAL_IMPORT_EVENTS.has(event.type)),
+      ),
+    committing: (taskId, rows) =>
+      importWhen(
+        (event) =>
+          event.task.taskId === taskId && (event.task.committed >= rows || FINAL_IMPORT_EVENTS.has(event.type)),
+      ),
     async close() {
       await connection.close();
       await engine.close();
@@ -79,4 +116,12 @@ export async function startExport(
   stallSeconds = STALL_SECONDS,
 ): Promise<ExportTask> {
   return resultOf<ExportTask>(await connection.handle({ id: 3, type: "export.start", stallSeconds, ...request }));
+}
+
+export async function startImport(
+  connection: EngineConnection,
+  request: Record<string, unknown>,
+  stallSeconds = STALL_SECONDS,
+): Promise<ImportTask> {
+  return resultOf<ImportTask>(await connection.handle({ id: 4, type: "import.start", stallSeconds, ...request }));
 }

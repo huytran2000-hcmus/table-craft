@@ -1,4 +1,4 @@
-import { EXPORT_FORMATS, EXTRACTOR_KINDS } from "@table-craft/core";
+import { EXPORT_FORMATS, EXTRACTOR_KINDS, IMPORT_ENCODINGS, IMPORT_ESCAPES } from "@table-craft/core";
 import { GENERATED_STATEMENTS, KEYWORD_CASES, TRANSACTION_MODES, z } from "@table-craft/plugin-api";
 import type { EngineRequest } from "@table-craft/desktop/engine/protocol.js";
 import {
@@ -25,6 +25,37 @@ const exportSource = z.discriminatedUnion("kind", [
   z.strictObject({ kind: z.literal("table"), path: namespacePath, relation, columns: z.array(z.string().min(1)) }),
 ]);
 const GENERATOR_STATEMENTS = ["create", ...GENERATED_STATEMENTS] as const;
+const file = z.string().min(1);
+const oneCharacter = z.string().length(1);
+const importFormat = z.strictObject({
+  delimiter: oneCharacter,
+  quote: oneCharacter.nullable(),
+  escape: z.enum(IMPORT_ESCAPES),
+  header: z.boolean(),
+  encoding: z.enum(IMPORT_ENCODINGS),
+  nullToken: z.string(),
+  trim: z.boolean(),
+});
+const newImportColumns = z
+  .array(z.strictObject({ name: z.string().min(1), type: z.string().min(1), field: index }))
+  .min(1);
+const importTarget = z.discriminatedUnion("kind", [
+  z.strictObject({
+    kind: z.literal("table"),
+    path: namespacePath,
+    relation,
+    mapping: z.array(z.strictObject({ column: z.string().min(1), field: index })).min(1),
+  }),
+  z.strictObject({ kind: z.literal("new"), path: namespacePath, relation, columns: newImportColumns }),
+]);
+const importTransaction = z.discriminatedUnion("mode", [
+  z.strictObject({ mode: z.literal("all") }),
+  z.strictObject({ mode: z.literal("every"), rows: z.number().int().positive() }),
+]);
+const importErrors = z.discriminatedUnion("mode", [
+  z.strictObject({ mode: z.literal("stop") }),
+  z.strictObject({ mode: z.literal("skip"), limit: z.number().int().nonnegative() }),
+]);
 const paging = {
   pageRows: z.number().int().min(PAGE_ROWS_RANGE.min).max(PAGE_ROWS_RANGE.max),
   fetchAllCap: z.number().int().min(FETCH_ALL_CAP_RANGE.min).max(FETCH_ALL_CAP_RANGE.max),
@@ -133,6 +164,27 @@ export const engineRequestSchema = z.discriminatedUnion("type", [
   z.strictObject({ id: requestId, type: z.literal("export.cancel"), taskId }),
   z.strictObject({ id: requestId, type: z.literal("export.retry"), taskId, stallSeconds }),
   z.strictObject({ id: requestId, type: z.literal("export.list") }),
+  z.strictObject({ id: requestId, type: z.literal("import.preview"), file, format: importFormat }),
+  z.strictObject({
+    id: requestId,
+    type: z.literal("import.ddl"),
+    path: namespacePath,
+    relation,
+    columns: newImportColumns,
+  }),
+  z.strictObject({
+    id: requestId,
+    type: z.literal("import.start"),
+    file,
+    format: importFormat,
+    target: importTarget,
+    transaction: importTransaction,
+    errors: importErrors,
+    stallSeconds,
+  }),
+  z.strictObject({ id: requestId, type: z.literal("import.cancel"), taskId }),
+  z.strictObject({ id: requestId, type: z.literal("import.resume"), taskId, stallSeconds }),
+  z.strictObject({ id: requestId, type: z.literal("import.list") }),
   z.strictObject({ id: requestId, type: z.literal("catalog.namespaces"), refresh: z.boolean().optional() }),
   z.strictObject({
     id: requestId,
