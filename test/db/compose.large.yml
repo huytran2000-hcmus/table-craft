@@ -1,0 +1,20 @@
+# Layered over compose.yml for `TABLE_CRAFT_LARGE_IMPORT=1` (plan 021): a multi-gigabyte import
+# does not fit the tmpfs data directories in a few gigabytes of Docker VM memory, so the data
+# lives on volumes instead, and MySQL skips the binary log, which would copy every imported row.
+#   docker compose -f test/db/compose.yml -f test/db/compose.large.yml up -d --wait
+# then `down -v` with the same two files to drop the volumes.
+services:
+  postgres:
+    tmpfs: !reset []
+    volumes:
+      - large-postgres:/var/lib/postgresql/data
+
+  mysql:
+    command: ["--disable-log-bin"]
+    tmpfs: !reset []
+    volumes:
+      - large-mysql:/var/lib/mysql
+
+volumes:
+  large-postgres:
+  large-mysql:
