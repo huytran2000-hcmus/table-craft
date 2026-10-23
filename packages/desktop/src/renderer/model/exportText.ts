@@ -32,6 +32,10 @@ export function exportProgressText(task: ExportTask): string {
     task.state === "running" && task.estimate !== null
       ? `${formatCount(task.rows)} of ${formatCount(task.estimate)} rows`
       : `${formatCount(task.rows)} ${task.rows === 1 ? "row" : "rows"}`;
+  // A failed or cancelled export removed its file, so it names the rows it reached and no size.
+  if (task.state === "failed" || task.state === "cancelled") {
+    return [`${rows} before it stopped`, formatDuration(task.elapsedMs)].join(" · ");
+  }
   return [rows, formatBytes(task.bytes), formatDuration(task.elapsedMs)].join(" · ");
 }
 

@@ -157,6 +157,9 @@ describe("export text", () => {
     });
 
     expect(exportProgressText(task)).toBe("1 row · 0 bytes · 0 ms");
+    expect(exportProgressText({ ...task, state: "cancelled", rows: 90_500 })).toBe(
+      "90,500 rows before it stopped · 0 ms",
+    );
     expect(exportNotes(task)).toEqual([
       "Low disk.",
       "2 sheets",
