@@ -51,7 +51,13 @@ export function Console({ consoleId }: { readonly consoleId: string }) {
         {capabilities.includes("transactions") ? <TxControls session={session} /> : null}
         <span className="shrink-0 text-ink-muted">{STATUS_TEXT[status]}</span>
         {error === null ? null : (
-          <span role="alert" className="min-w-0 truncate text-danger" title={`${error.message} ${error.hint}`}>
+          // Only the room the datasource and namespace leave: they say where the console is, and
+          // Output holds the whole error.
+          <span
+            role="alert"
+            className="min-w-0 flex-1 basis-0 truncate text-danger"
+            title={`${error.message} ${error.hint}`}
+          >
             {error.message} <span className="text-ink-muted">{error.hint}</span>
           </span>
         )}
