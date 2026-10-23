@@ -667,7 +667,8 @@ function DataEditorPage() {
         onValid={(exportStallSeconds) => setData({ exportStallSeconds })}
       />
       <p className="col-start-2 text-ink-muted">
-        An export or import the database answers nothing to for this long stops and says so.
+        An export or import the database answers nothing to for this long stops and says so. The statement timeout never
+        cuts one.
       </p>
     </>
   );

@@ -104,9 +104,17 @@ export async function execute(
   connection: EngineConnection,
   sessionId: string,
   sql: string,
+  timeoutSeconds?: number,
 ): Promise<ExecutedStatement> {
   return resultOf<ExecutedStatement>(
-    await connection.handle({ id: 2, type: "statement.execute", ...PAGING, sessionId, sql }),
+    await connection.handle({
+      id: 2,
+      type: "statement.execute",
+      ...PAGING,
+      sessionId,
+      sql,
+      ...(timeoutSeconds === undefined ? {} : { timeoutSeconds }),
+    }),
   );
 }
 
