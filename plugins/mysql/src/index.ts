@@ -56,6 +56,7 @@ const CAPABILITIES: readonly Capability[] = [
   "explain",
   "explainAnalyze",
   "currentNamespace",
+  "keepAlive",
 ];
 
 /** What the mysql client accepts: `'\''`, `# comments`, `DELIMITER //` and `BEGIN … END` routine bodies. */
@@ -119,7 +120,10 @@ const BUSY_MESSAGE = "Another statement is still running in this session.";
 
 const DEFAULT_PORT = 3306;
 const MAX_PORT = 65_535;
-const CONNECT_TIMEOUT_MS = 10_000;
+const DEFAULT_CONNECT_TIMEOUT_SECONDS = 10;
+const MAX_CONNECT_TIMEOUT_SECONDS = 3600;
+const MS_PER_SECOND = 1000;
+const CLOSED_MESSAGE = "the server closed the connection";
 /** How long `close` waits for the server to acknowledge COM_QUIT before dropping the socket. */
 const CLOSE_GRACE_MS = 3000;
 /** Rows buffered ahead of the reader before the connection is paused. */
@@ -141,6 +145,7 @@ const connectionSchema = z.strictObject({
   password: z.string().default(""),
   /** `require` encrypts without checking the certificate; `verify-full` checks it and the host name. */
   sslMode: z.enum(SSL_MODES).default("disable"),
+  connectTimeout: z.number().int().min(1).max(MAX_CONNECT_TIMEOUT_SECONDS).default(DEFAULT_CONNECT_TIMEOUT_SECONDS),
 });
 
 type MysqlConfig = z.output<typeof connectionSchema>;
@@ -233,7 +238,6 @@ const CONNECTION_OPTIONS = {
   dateStrings: true,
   supportBigNumbers: true,
   bigNumberStrings: true,
-  connectTimeout: CONNECT_TIMEOUT_MS,
 } as const satisfies mysql.ConnectionOptions;
 
 function sslOption(mode: MysqlConfig["sslMode"]): mysql.ConnectionOptions["ssl"] {
@@ -257,6 +261,7 @@ function openConnection(config: MysqlConfig, keepAliveInitialDelayMs?: number): 
     ...(keepAliveInitialDelayMs === undefined
       ? {}
       : { enableKeepAlive: true, keepAliveInitialDelay: keepAliveInitialDelayMs }),
+    connectTimeout: config.connectTimeout * MS_PER_SECOND,
     host: config.host,
     port: config.port,
     user: config.user,
@@ -410,6 +415,9 @@ class MysqlSession implements Session {
     connection.on("error", (error: Error) => {
       this.#broken = error;
     });
+    connection.on("end", () => {
+      this.#broken ??= new Error(CLOSED_MESSAGE);
+    });
   }
 
   async execute(
@@ -418,7 +426,7 @@ class MysqlSession implements Session {
     options: ExecuteOptions = {},
   ): Promise<ExecuteResult> {
     if (this.#broken !== null) {
-      throw new PluginError("statementFailed", `The connection was lost: ${this.#broken.message}`);
+      throw new PluginError("connectionLost", `The connection was lost: ${this.#broken.message}`);
     }
     if (this.#running !== null) throw new PluginError("statementFailed", BUSY_MESSAGE);
     await this.#cancelling.catch(() => undefined);
@@ -459,6 +467,20 @@ class MysqlSession implements Session {
     }[];
     const name = rows[0]?.name;
     return typeof name === "string" ? [name] : null;
+  }
+
+  async ping(): Promise<void> {
+    if (this.#broken !== null) {
+      throw new PluginError("connectionLost", `The connection was lost: ${this.#broken.message}`);
+    }
+    if (this.#running !== null) throw new PluginError("statementFailed", BUSY_MESSAGE);
+    await new Promise<void>((resolve, reject) => {
+      // mysql2 answers a successful ping with no argument at all, not null.
+      this.#connection.ping((error: mysql.QueryError | null | undefined) => {
+        if (error === null || error === undefined) resolve();
+        else reject(new PluginError("connectionLost", `The connection was lost: ${error.message}`, { cause: error }));
+      });
+    });
   }
 
   async explain(sql: string, options: ExplainOptions): Promise<ExplainedPlan> {

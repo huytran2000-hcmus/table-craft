@@ -19,9 +19,15 @@ const SERVER_SCHEMA = z.strictObject({
   password: z.string().default(""),
 });
 
-function serverManifest(fields: readonly unknown[]): PluginManifest {
-  return pluginManifestSchema.parse({ ...VALID_MANIFEST, id: "server", connection: { fields } });
+function serverManifest(fields: readonly unknown[], url?: unknown): PluginManifest {
+  return pluginManifestSchema.parse({ ...VALID_MANIFEST, id: "server", connection: { fields, url } });
 }
+
+const SERVER_URL = {
+  schemes: ["server"],
+  form: "server",
+  parts: { host: "host", user: "user", password: "password" },
+};
 
 const HOST = { key: "host", label: "Host", kind: "text", required: true };
 const USER = { key: "user", label: "User", kind: "text", required: true };
@@ -104,5 +110,41 @@ describe("connectionFormProblems", () => {
     expect(connectionFormProblems(serverManifest([HOST, PASSWORD]), SERVER_SCHEMA)).toEqual([
       'connectionSchema requires "user", but no connection field fills it.',
     ]);
+  });
+
+  it("givenUrlAgreeingWithFields_whenCompared_thenNoProblems", () => {
+    expect(connectionFormProblems(serverManifest([HOST, USER, PASSWORD], SERVER_URL), SERVER_SCHEMA)).toEqual([]);
+  });
+
+  it("givenUrlPartsAndParamsTheFormLacks_whenCompared_thenNamesEach", () => {
+    const url = {
+      ...SERVER_URL,
+      parts: { host: "host", user: "password", path: "host" },
+      params: [
+        { name: "role", key: "role" },
+        { name: "pw", key: "password" },
+      ],
+    };
+
+    expect(connectionFormProblems(serverManifest([HOST, USER, PASSWORD], url), SERVER_SCHEMA)).toEqual([
+      'URL part "user" fills "password", but only the password part fills a secret field.',
+      'A server URL has no "path" part.',
+      'URL parameter "role" fills "role", which no connection field declares.',
+      'URL parameter "pw" must not fill a secret field.',
+    ]);
+  });
+});
+
+describe("pluginManifestSchema url", () => {
+  it("givenUppercaseScheme_whenParsed_thenFails", () => {
+    const parses = (schemes: string[]): boolean =>
+      pluginManifestSchema.safeParse({
+        ...VALID_MANIFEST,
+        connection: { ...VALID_MANIFEST.connection, url: { schemes, form: "file", parts: { path: "path" } } },
+      }).success;
+
+    expect(parses(["sqlite"])).toBe(true);
+    expect(parses(["SQLite"])).toBe(false);
+    expect(parses([])).toBe(false);
   });
 });

@@ -45,6 +45,42 @@ export const connectionFieldSchema = z.strictObject({
 
 export type ConnectionField = z.infer<typeof connectionFieldSchema>;
 
+/** `server`: `scheme://user:password@host:port/database?params`; `file`: a path, bare or as a URL. */
+export const CONNECTION_URL_FORMS = ["server", "file"] as const;
+
+export type ConnectionUrlForm = (typeof CONNECTION_URL_FORMS)[number];
+
+/** The pieces of a connection URL a field can take; `path` belongs to the `file` form. */
+export const CONNECTION_URL_PARTS = ["host", "port", "database", "user", "password", "path"] as const;
+
+export type ConnectionUrlPart = (typeof CONNECTION_URL_PARTS)[number];
+
+const URL_SCHEME = /^[a-z][a-z0-9+.-]*$/;
+
+/**
+ * How a connection URL maps onto the form's fields (decision 055), so the host parses and writes
+ * one without running plugin code. `parts` names the field each piece of the URL fills; a query
+ * parameter fills `key`, its value translated through `values` (compared case-insensitively) when
+ * given, so a value outside them is reported as ignored.
+ */
+export const connectionUrlSchema = z.strictObject({
+  /** Without `://`; the first is the one the host writes. */
+  schemes: z.array(z.string().regex(URL_SCHEME, { message: "expected a lower-case URL scheme" })).min(1),
+  form: z.enum(CONNECTION_URL_FORMS),
+  parts: z.partialRecord(z.enum(CONNECTION_URL_PARTS), z.string().regex(FIELD_KEY)),
+  params: z
+    .array(
+      z.strictObject({
+        name: z.string().min(1),
+        key: z.string().regex(FIELD_KEY),
+        values: z.record(z.string(), z.string()).optional(),
+      }),
+    )
+    .optional(),
+});
+
+export type ConnectionUrl = z.infer<typeof connectionUrlSchema>;
+
 export const pluginManifestSchema = z
   .strictObject({
     id: z.string().regex(PLUGIN_ID, { message: "expected lower-case letters, digits and dashes" }),
@@ -57,7 +93,11 @@ export const pluginManifestSchema = z
     /** The highlighter the console uses for this plugin's dialect (decision 008). */
     highlight: z.string().min(1),
     /** The connection form, readable without running plugin code (decision 019). */
-    connection: z.strictObject({ fields: z.array(connectionFieldSchema).min(1) }),
+    connection: z.strictObject({
+      fields: z.array(connectionFieldSchema).min(1),
+      /** Absent: the form offers no URL to paste and the data source no Copy as URL. */
+      url: connectionUrlSchema.optional(),
+    }),
   })
   // A definition is read through the introspector, which only `schemaTree` promises (decision 029).
   .refine((manifest) => !manifest.capabilities.includes("ddl") || manifest.capabilities.includes("schemaTree"), {

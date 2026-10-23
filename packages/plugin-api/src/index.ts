@@ -41,14 +41,29 @@ export {
 export {
   CONNECTION_FIELD_GROUPS,
   CONNECTION_FIELD_KINDS,
+  CONNECTION_URL_FORMS,
+  CONNECTION_URL_PARTS,
   connectionFieldSchema,
+  connectionUrlSchema,
   MANIFEST_FILE,
   pluginManifestSchema,
   type ConnectionField,
   type ConnectionFieldGroup,
   type ConnectionFieldKind,
+  type ConnectionUrl,
+  type ConnectionUrlForm,
+  type ConnectionUrlPart,
   type PluginManifest,
 } from "./manifest.js";
+export {
+  ConnectionUrlError,
+  formatConnectionUrl,
+  parseConnectionUrl,
+  type ConnectionForm,
+  type ConnectionUrlSpec,
+  type ConnectionValue,
+  type ParsedConnectionUrl,
+} from "./url.js";
 export {
   type BoundStatement,
   CAPABILITIES,

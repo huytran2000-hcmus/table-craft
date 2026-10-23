@@ -2,7 +2,7 @@
   "id": "mysql",
   "name": "MySQL",
   "version": "0.0.0",
-  "apiVersion": "0.13.0",
+  "apiVersion": "0.14.0",
   "entry": "index.js",
   "capabilities": [
     "sql",
@@ -12,16 +12,44 @@
     "ddl",
     "explain",
     "explainAnalyze",
-    "currentNamespace"
+    "currentNamespace",
+    "keepAlive"
   ],
   "highlight": "mysql",
   "connection": {
     "fields": [
-      { "key": "host", "label": "Host", "kind": "text", "default": "localhost", "required": true },
-      { "key": "port", "label": "Port", "kind": "number", "default": 3306, "required": true },
-      { "key": "database", "label": "Database", "kind": "text", "placeholder": "optional" },
-      { "key": "user", "label": "User", "kind": "text", "required": true },
-      { "key": "password", "label": "Password", "kind": "password", "secret": true },
+      {
+        "key": "host",
+        "label": "Host",
+        "kind": "text",
+        "default": "localhost",
+        "required": true
+      },
+      {
+        "key": "port",
+        "label": "Port",
+        "kind": "number",
+        "default": 3306,
+        "required": true
+      },
+      {
+        "key": "database",
+        "label": "Database",
+        "kind": "text",
+        "placeholder": "optional"
+      },
+      {
+        "key": "user",
+        "label": "User",
+        "kind": "text",
+        "required": true
+      },
+      {
+        "key": "password",
+        "label": "Password",
+        "kind": "password",
+        "secret": true
+      },
       {
         "key": "sslMode",
         "label": "SSL mode",
@@ -29,11 +57,49 @@
         "default": "disable",
         "group": "advanced",
         "options": [
-          { "value": "disable", "label": "Disable" },
-          { "value": "require", "label": "Require" },
-          { "value": "verify-full", "label": "Verify full" }
+          {
+            "value": "disable",
+            "label": "Disable"
+          },
+          {
+            "value": "require",
+            "label": "Require"
+          },
+          {
+            "value": "verify-full",
+            "label": "Verify full"
+          }
         ]
+      },
+      {
+        "key": "connectTimeout",
+        "label": "Connect timeout (s)",
+        "kind": "number",
+        "default": 10,
+        "group": "advanced"
       }
-    ]
+    ],
+    "url": {
+      "schemes": ["mysql", "mariadb"],
+      "form": "server",
+      "parts": {
+        "host": "host",
+        "port": "port",
+        "database": "database",
+        "user": "user",
+        "password": "password"
+      },
+      "params": [
+        {
+          "name": "ssl-mode",
+          "key": "sslMode",
+          "values": {
+            "DISABLED": "disable",
+            "REQUIRED": "require",
+            "VERIFY_IDENTITY": "verify-full"
+          }
+        }
+      ]
+    }
   }
 }

@@ -55,6 +55,7 @@ const CAPABILITIES: readonly Capability[] = [
   "explain",
   "explainAnalyze",
   "currentNamespace",
+  "keepAlive",
 ];
 
 /** Function bodies live in dollar quotes; `BEGIN ATOMIC … END` holds a SQL-standard body. */
@@ -116,7 +117,9 @@ const BUSY_MESSAGE = "Another statement is still running in this session.";
 
 const DEFAULT_PORT = 5432;
 const MAX_PORT = 65_535;
-const CONNECT_TIMEOUT_MS = 10_000;
+const DEFAULT_CONNECT_TIMEOUT_SECONDS = 10;
+const MAX_CONNECT_TIMEOUT_SECONDS = 3600;
+const MS_PER_SECOND = 1000;
 /** How long `close` waits for the server to acknowledge Terminate before dropping the socket. */
 const CLOSE_GRACE_MS = 3000;
 /** Rows per cursor fetch: one result-window's worth, so the first window costs one round trip. */
@@ -124,6 +127,8 @@ const FETCH_ROWS = 500;
 /** SQLSTATE `query_canceled`, raised by `pg_cancel_backend`. */
 const QUERY_CANCELED = "57014";
 const APPLICATION_NAME = "TableCraft";
+const PING_SQL = "SELECT 1";
+const CLOSED_MESSAGE = "the server closed the connection";
 
 const SSL_MODES = ["disable", "require", "verify-full"] as const;
 
@@ -135,6 +140,8 @@ const connectionSchema = z.strictObject({
   password: z.string().default(""),
   /** `require` encrypts without checking the certificate; `verify-full` checks it and the host name. */
   sslMode: z.enum(SSL_MODES).default("disable"),
+  connectTimeout: z.number().int().min(1).max(MAX_CONNECT_TIMEOUT_SECONDS).default(DEFAULT_CONNECT_TIMEOUT_SECONDS),
+  applicationName: z.string().default(APPLICATION_NAME),
 });
 
 type PostgresConfig = z.output<typeof connectionSchema>;
@@ -232,8 +239,8 @@ function clientConfig(config: PostgresConfig, keepAliveInitialDelayMs?: number):
     user: config.user,
     password: config.password,
     ssl: sslOption(config.sslMode),
-    connectionTimeoutMillis: CONNECT_TIMEOUT_MS,
-    application_name: APPLICATION_NAME,
+    connectionTimeoutMillis: config.connectTimeout * MS_PER_SECOND,
+    ...(config.applicationName === "" ? {} : { application_name: config.applicationName }),
   };
 }
 
@@ -321,6 +328,9 @@ class PostgresSession implements Session {
     client.on("error", (error) => {
       this.#broken = error;
     });
+    client.on("end", () => {
+      this.#broken ??= new Error(CLOSED_MESSAGE);
+    });
   }
 
   static async open(config: PostgresConfig, options: ConnectOptions): Promise<PostgresSession> {
@@ -347,7 +357,7 @@ class PostgresSession implements Session {
     options: ExecuteOptions = {},
   ): Promise<ExecuteResult> {
     if (this.#broken !== null) {
-      throw new PluginError("statementFailed", `The connection was lost: ${this.#broken.message}`);
+      throw new PluginError("connectionLost", `The connection was lost: ${this.#broken.message}`);
     }
     if (this.#running !== null) throw new PluginError("statementFailed", BUSY_MESSAGE);
     await this.#cancelling.catch(() => undefined);
@@ -403,6 +413,18 @@ class PostgresSession implements Session {
       return row?.schema == null ? null : [row.database, row.schema];
     } catch (cause) {
       throw new PluginError("statementFailed", messageOf(cause), { cause });
+    }
+  }
+
+  async ping(): Promise<void> {
+    if (this.#broken !== null) {
+      throw new PluginError("connectionLost", `The connection was lost: ${this.#broken.message}`);
+    }
+    if (this.#running !== null) throw new PluginError("statementFailed", BUSY_MESSAGE);
+    try {
+      await this.#client.query(PING_SQL);
+    } catch (cause) {
+      throw new PluginError("connectionLost", `The connection was lost: ${messageOf(cause)}`, { cause });
     }
   }
 

@@ -2,7 +2,7 @@
   "id": "postgres",
   "name": "PostgreSQL",
   "version": "0.0.0",
-  "apiVersion": "0.13.0",
+  "apiVersion": "0.14.0",
   "entry": "index.js",
   "capabilities": [
     "sql",
@@ -12,7 +12,8 @@
     "ddl",
     "explain",
     "explainAnalyze",
-    "currentNamespace"
+    "currentNamespace",
+    "keepAlive"
   ],
   "highlight": "postgresql",
   "connection": {
@@ -33,7 +34,35 @@
           { "value": "require", "label": "Require" },
           { "value": "verify-full", "label": "Verify full" }
         ]
+      },
+      {
+        "key": "connectTimeout",
+        "label": "Connect timeout (s)",
+        "kind": "number",
+        "default": 10,
+        "group": "advanced"
+      },
+      {
+        "key": "applicationName",
+        "label": "Application name",
+        "kind": "text",
+        "default": "TableCraft",
+        "group": "advanced"
       }
-    ]
+    ],
+    "url": {
+      "schemes": ["postgresql", "postgres"],
+      "form": "server",
+      "parts": { "host": "host", "port": "port", "database": "database", "user": "user", "password": "password" },
+      "params": [
+        {
+          "name": "sslmode",
+          "key": "sslMode",
+          "values": { "disable": "disable", "require": "require", "verify-full": "verify-full" }
+        },
+        { "name": "connect_timeout", "key": "connectTimeout" },
+        { "name": "application_name", "key": "applicationName" }
+      ]
+    }
   }
 }

@@ -7,6 +7,11 @@ export const PLUGIN_ERROR_CODES = [
   "definitionNotFound",
   /** `Session.explain` refused the statement; the message says why and what to explain instead. */
   "explainUnsupported",
+  /**
+   * The connection was gone before the statement was sent, so the host may reconnect and run it
+   * again; `Session.ping` rejects with it too.
+   */
+  "connectionLost",
 ] as const;
 
 export type PluginErrorCode = (typeof PLUGIN_ERROR_CODES)[number];

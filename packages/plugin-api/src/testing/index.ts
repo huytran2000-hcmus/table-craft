@@ -7,6 +7,7 @@ import {
   z,
   type BoundStatement,
   type CompletionCatalog,
+  type ConnectionUrlPart,
   type ConnectOptions,
   type DatasourcePlugin,
   type ExecuteOptions,
@@ -199,6 +200,7 @@ const SLEEP_SECONDS = 30;
 const CANCEL_DELAY_MS = 500;
 /** Well under `SLEEP_SECONDS`, so a cancel that did nothing fails the test instead of passing late. */
 const CANCEL_DEADLINE_MS = 10_000;
+const KEEPALIVE_DELAY_MS = 1000;
 
 async function collect(rows: AsyncIterable<Row>): Promise<Row[]> {
   const collected: Row[] = [];
@@ -302,6 +304,46 @@ export function connectionFormProblems(manifest: PluginManifest, connectionSchem
   for (const key of json.required ?? []) {
     if (!keys.has(key)) problems.push(`connectionSchema requires "${key}", but no connection field fills it.`);
   }
+  return [...problems, ...connectionUrlProblems(manifest)];
+}
+
+const SERVER_URL_PARTS: readonly ConnectionUrlPart[] = ["host", "port", "database", "user", "password"];
+
+/** Where `connection.url` names fields the form lacks, or maps them inconsistently (decision 055). */
+function connectionUrlProblems(manifest: PluginManifest): string[] {
+  const url = manifest.connection.url;
+  if (url === undefined) return [];
+  const fields = new Map(manifest.connection.fields.map((field) => [field.key, field]));
+  const problems: string[] = [];
+  const allowed = url.form === "server" ? SERVER_URL_PARTS : ["path"];
+  for (const [part, key] of Object.entries(url.parts)) {
+    if (!allowed.includes(part as ConnectionUrlPart)) problems.push(`A ${url.form} URL has no "${part}" part.`);
+    const field = fields.get(key);
+    if (field === undefined) {
+      problems.push(`URL part "${part}" fills "${key}", which no connection field declares.`);
+      continue;
+    }
+    if ((part === "password") !== (field.secret === true)) {
+      problems.push(`URL part "${part}" fills "${key}", but only the password part fills a secret field.`);
+    }
+    if (part === "port" && field.kind !== "number") problems.push(`URL part "port" must fill a number field.`);
+  }
+  const required = url.form === "server" ? "host" : "path";
+  if (url.parts[required] === undefined) problems.push(`A ${url.form} URL needs a "${required}" part.`);
+  for (const param of url.params ?? []) {
+    const field = fields.get(param.key);
+    if (field === undefined) {
+      problems.push(`URL parameter "${param.name}" fills "${param.key}", which no connection field declares.`);
+      continue;
+    }
+    if (field.secret === true) problems.push(`URL parameter "${param.name}" must not fill a secret field.`);
+    const options = new Set(field.options?.map((option) => option.value));
+    for (const value of Object.values(param.values ?? {})) {
+      if (field.kind === "select" && !options.has(value)) {
+        problems.push(`URL parameter "${param.name}" maps to "${value}", which "${param.key}" does not offer.`);
+      }
+    }
+  }
   return problems;
 }
 
@@ -367,6 +409,13 @@ export function runPluginContract(plugin: DatasourcePlugin, fixture: ContractFix
       expect(plugin.language?.explainable !== undefined).toBe(explain);
       await withSession(plugin, fixture, (session) => {
         expect(session.explain !== undefined).toBe(explain);
+        return Promise.resolve();
+      });
+    });
+
+    it("givenSession_whenInspected_thenHasPingExactlyWhenKeepAliveDeclared", async () => {
+      await withSession(plugin, fixture, (session) => {
+        expect(session.ping !== undefined).toBe(plugin.capabilities.includes("keepAlive"));
         return Promise.resolve();
       });
     });
@@ -1362,6 +1411,29 @@ export function runPluginContract(plugin: DatasourcePlugin, fixture: ContractFix
           await runAndCancel(session);
           expect(await collect((await session.execute("SELECT 1 AS one")).rows)).toEqual([[1]]);
         });
+      });
+    });
+
+    describe.runIf(plugin.capabilities.includes("keepAlive"))("keepAlive", () => {
+      it("givenKeepAlive_whenConnectedWithDelay_thenPingResolvesAndSessionWorks", async () => {
+        await withSession(
+          plugin,
+          fixture,
+          async (session) => {
+            await session.ping?.();
+            await session.ping?.();
+            if (plugin.capabilities.includes("sql")) {
+              expect(await collect((await session.execute("SELECT 1 AS one")).rows)).toEqual([[1]]);
+            }
+          },
+          { readOnly: false, keepAliveInitialDelayMs: KEEPALIVE_DELAY_MS },
+        );
+      });
+
+      it("givenClosedSession_whenPinged_thenRejectsWithConnectionLost", async () => {
+        const session = await connect(plugin, fixture.config);
+        await session.close();
+        expect(await rejectionCode(session.ping?.() ?? Promise.resolve())).toBe("connectionLost");
       });
     });
   });

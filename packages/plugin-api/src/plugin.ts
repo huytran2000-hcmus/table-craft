@@ -23,6 +23,7 @@ export const CAPABILITIES = [
   "explain",
   "explainAnalyze",
   "currentNamespace",
+  "keepAlive",
 ] as const;
 
 export type Capability = (typeof CAPABILITIES)[number];
@@ -62,8 +63,8 @@ export interface ExecuteOptions {
 
 export interface Session {
   /**
-   * Rejects with a `PluginError`: `cancelled` when `cancel` interrupted it, `statementFailed`
-   * otherwise. A session runs one statement at a time. `params` are bound by the driver to the
+   * Rejects with a `PluginError`: `cancelled` when `cancel` interrupted it, `connectionLost` when
+   * the connection was gone before the statement was sent, `statementFailed` otherwise. A session runs one statement at a time. `params` are bound by the driver to the
    * dialect's native placeholders in `sql`, as `SqlLanguage.bind` wrote them; never spliced.
    */
   execute(sql: string, params?: readonly ParameterValue[], options?: ExecuteOptions): Promise<ExecuteResult>;
@@ -91,6 +92,12 @@ export interface Session {
    */
   currentNamespace?(): Promise<readonly string[] | null>;
   /**
+   * Present exactly when the plugin declares `keepAlive` (decision 054). One round trip to the
+   * server; rejects with `connectionLost` when the connection is gone. The host calls it only while
+   * nothing runs, and bounds how long it waits.
+   */
+  ping?(): Promise<void>;
+  /**
    * Settles in bounded time even when the network is gone: a graceful goodbye that does not
    * answer within a few seconds gives way to dropping the socket (decision 040).
    */
@@ -112,8 +119,8 @@ export interface ConnectOptions {
   readonly readOnly: boolean;
   /**
    * Turn on TCP keepalive, first probe after this many idle milliseconds, so a peer that vanished
-   * without a goodbye is noticed by the OS (decision 040). Absent: the driver's default. A plugin
-   * without a socket ignores it.
+   * without a goodbye is noticed by the OS (decisions 040, 054). Absent: the driver's default. A
+   * plugin declaring `keepAlive` honours it; one without a socket ignores it.
    */
   readonly keepAliveInitialDelayMs?: number;
 }
