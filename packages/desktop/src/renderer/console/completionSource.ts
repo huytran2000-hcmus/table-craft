@@ -7,7 +7,12 @@ import {
 } from "@codemirror/autocomplete";
 import { keywordCompletionSource, type SQLDialect } from "@codemirror/lang-sql";
 import type { Extension } from "@codemirror/state";
-import type { CompletionResult, CompletionScope, EngineCalls } from "@table-craft/desktop/engine/protocol.js";
+import type {
+  CompletionResult,
+  CompletionScope,
+  CurrentNamespace,
+  EngineCalls,
+} from "@table-craft/desktop/engine/protocol.js";
 import { renderCompletionGlyph } from "@table-craft/desktop/renderer/console/completionGlyphs.js";
 import { connectionOf, useDatasources } from "@table-craft/desktop/renderer/state/datasources.js";
 
@@ -26,6 +31,8 @@ export interface CompletionTarget {
   readonly engine: () => CompleteCall | null;
   /** The relation a table editor's WHERE or ORDER BY bar filters (plan 009 decision 16). */
   readonly scope?: CompletionScope;
+  /** The console's namespace, which unqualified names complete in (decision 048); null for the catalog's. */
+  readonly current?: () => CurrentNamespace;
 }
 
 /** Where the engine put each option; lang-sql's keywords have none. */
@@ -74,10 +81,12 @@ export function engineCompletionSource(target: CompletionTarget): CompletionSour
     if (!context.explicit && context.matchBefore(TYPING_TRIGGER) === null) return null;
     latest += 1;
     const request = latest;
+    const current = target.current?.() ?? null;
     const params = {
       text: context.state.doc.toString(),
       offset: context.pos,
       ...(target.scope === undefined ? {} : { scope: target.scope }),
+      ...(current === null ? {} : { current }),
     };
     let result: CompletionResult;
     try {

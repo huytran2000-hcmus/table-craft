@@ -132,7 +132,11 @@ export function Editor({ consoleId }: { readonly consoleId: string }) {
           indentOnInput(),
           bracketMatching(),
           closeBrackets(),
-          completion({ dialect: () => dialectRef.current, engine: connectedEngine(datasourceId) }),
+          completion({
+            dialect: () => dialectRef.current,
+            engine: connectedEngine(datasourceId),
+            current: () => useConsoles.getState().consoles[consoleId]?.namespace ?? null,
+          }),
           highlightSelectionMatches(),
           search({ top: false }),
           placeholder(placeholderText()),

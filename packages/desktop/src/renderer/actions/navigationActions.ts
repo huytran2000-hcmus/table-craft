@@ -1,4 +1,4 @@
-import type { Capability, Declaration, RelationKind } from "@table-craft/desktop/engine/protocol.js";
+import type { Capability, CurrentNamespace, Declaration, RelationKind } from "@table-craft/desktop/engine/protocol.js";
 import type { ActionContext } from "@table-craft/desktop/renderer/actions/context.js";
 import { openDdl } from "@table-craft/desktop/renderer/actions/ddlCommands.js";
 import { revealInDatabase } from "@table-craft/desktop/renderer/actions/explorerActions.js";
@@ -22,6 +22,8 @@ export interface Caret {
   readonly datasourceId: string;
   readonly text: string;
   readonly offset: number;
+  /** The console's namespace, which unqualified names resolve against (decision 048). */
+  readonly namespace: CurrentNamespace;
 }
 
 export function caretOf(context: ActionContext): Caret | null {
@@ -31,15 +33,20 @@ export function caretOf(context: ActionContext): Caret | null {
     datasourceId: context.console.datasourceId,
     text: context.console.sql,
     offset: context.console.selection.from,
+    namespace: context.console.namespace,
   };
 }
 
 const inConsole = (context: ActionContext) => caretOf(context) !== null && context.capabilities.includes("sql");
 
 /** What the name at `offset` declares, asked of the engine; an explicit command may connect. */
-export async function resolve(datasourceId: string, text: string, offset: number): Promise<Declaration | null> {
-  const client = await useDatasources.getState().connect(datasourceId);
-  return client.call("navigation.resolve", { text, offset });
+export async function resolve(caret: Caret, offset = caret.offset): Promise<Declaration | null> {
+  const client = await useDatasources.getState().connect(caret.datasourceId);
+  return client.call("navigation.resolve", {
+    text: caret.text,
+    offset,
+    ...(caret.namespace === null ? {} : { current: caret.namespace }),
+  });
 }
 
 /** The relation an alias stands for: what is declared at the alias declaration's start. */
@@ -47,7 +54,7 @@ export async function relationOf(caret: Caret, declaration: Declaration | null):
   if (declaration === null) return null;
   if (!("from" in declaration)) return declaration;
   if (declaration.kind === "cte") return null;
-  const aliased = await resolve(caret.datasourceId, caret.text, declaration.from);
+  const aliased = await resolve(caret, declaration.from);
   return aliased?.kind === "relation" ? aliased : null;
 }
 
@@ -93,7 +100,7 @@ export const NAVIGATION_ACTIONS: readonly AnyAction[] = [
     run: async (context) => {
       const caret = caretOf(context);
       if (caret === null) return;
-      const declaration = await resolve(caret.datasourceId, caret.text, caret.offset);
+      const declaration = await resolve(caret);
       if (declaration === null) return;
       if ("from" in declaration) {
         useConsoles.getState().jumpTo(caret.consoleId, { from: declaration.from, to: declaration.to });
@@ -125,7 +132,7 @@ export const NAVIGATION_ACTIONS: readonly AnyAction[] = [
     run: async (context) => {
       const caret = caretOf(context);
       if (caret === null) return;
-      const target = await relationOf(caret, await resolve(caret.datasourceId, caret.text, caret.offset));
+      const target = await relationOf(caret, await resolve(caret));
       if (target === null) return;
       await openTable({ datasourceId: caret.datasourceId, path: target.path, relation: target.relation });
     },

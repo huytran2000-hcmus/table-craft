@@ -103,6 +103,40 @@ describe("engine completion source", () => {
     expect(engine.calls[0]?.params).toEqual({ text: "cust", offset: 4, scope });
   });
 
+  it("givenConsoleNamespace_whenCompleting_thenRequestCarriesCurrent", async () => {
+    const engine = deferredEngine();
+    const source = engineCompletionSource({
+      dialect: () => PostgreSQL,
+      engine: () => engine.call,
+      current: () => ["table_craft", "archive"],
+    });
+
+    const pending = source(contextAt("SELECT * FROM o", true));
+    engine.calls[0]?.resolve(RESULT);
+    await pending;
+
+    expect(engine.calls[0]?.params).toEqual({
+      text: "SELECT * FROM o",
+      offset: 15,
+      current: ["table_craft", "archive"],
+    });
+  });
+
+  it("givenNoNamespace_whenCompleting_thenRequestOmitsCurrent", async () => {
+    const engine = deferredEngine();
+    const source = engineCompletionSource({
+      dialect: () => PostgreSQL,
+      engine: () => engine.call,
+      current: () => null,
+    });
+
+    const pending = source(contextAt("SELECT * FROM o", true));
+    engine.calls[0]?.resolve(RESULT);
+    await pending;
+
+    expect(engine.calls[0]?.params).toEqual({ text: "SELECT * FROM o", offset: 15 });
+  });
+
   it("givenEngineFailure_whenCompleting_thenFallsBackToKeywords", async () => {
     const source = engineCompletionSource({
       dialect: () => PostgreSQL,

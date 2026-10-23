@@ -84,7 +84,7 @@ function rowAnchor(): PopoverAnchor | null {
 
 /** What the name at the caret documents: a column, or a relation (an alias standing for its relation). */
 async function caretDocTarget(caret: Caret): Promise<QuickDocTarget | null> {
-  const declaration = await resolve(caret.datasourceId, caret.text, caret.offset);
+  const declaration = await resolve(caret);
   if (declaration?.kind === "column") {
     const { path, relation, column } = declaration;
     return { datasourceId: caret.datasourceId, path, relation, column };

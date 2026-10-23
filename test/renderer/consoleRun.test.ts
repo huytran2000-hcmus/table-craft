@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type {
   ClassifiedStatement,
+  CurrentNamespace,
   ExecutedStatement,
   OpenedSession,
   StatementParameter,
@@ -8,7 +9,7 @@ import type {
   TransactionState,
 } from "@table-craft/desktop/engine/protocol.js";
 import { EngineRequestError, type EngineClient } from "@table-craft/desktop/renderer/engine/client.js";
-import { executedText, serviceState } from "@table-craft/desktop/renderer/model/format.js";
+import { executedText, namespaceLabel, serviceState } from "@table-craft/desktop/renderer/model/format.js";
 import {
   createConsolesStore,
   OUTPUT_TAB,
@@ -72,7 +73,8 @@ function fakeEngine() {
   let mode: TransactionMode = "auto";
   let open = false;
   let handles = 0;
-  const state = (): TransactionState => ({ mode, transactionOpen: open });
+  let namespace: CurrentNamespace = ["shop"];
+  const state = (): TransactionState => ({ mode, transactionOpen: open, namespace });
   const call = vi.fn((type: string, params: Record<string, unknown>): Promise<unknown> => {
     switch (type) {
       case "session.open": {
@@ -81,7 +83,7 @@ function fakeEngine() {
           pluginName: "fake",
           capabilities: ["sql", "transactions"],
           serverVersion: "1",
-          namespace: null,
+          namespace,
         };
         return Promise.resolve(opened);
       }
@@ -97,6 +99,8 @@ function fakeEngine() {
           );
         }
         const verb = sql.split(/\s+/)[0]?.toUpperCase();
+        const uses = verb === "USE";
+        if (uses) namespace = [sql.split(/\s+/)[1] ?? ""];
         if (verb === "BEGIN") open = true;
         else if (verb === "COMMIT" || verb === "ROLLBACK") open = false;
         else if (mode === "manual") open = true;
@@ -111,6 +115,7 @@ function fakeEngine() {
           rowsAffected: reads ? null : 1,
           firstWindow: { offset: 0, rows: reads ? [[sql]] : [] },
           transactionOpen: open,
+          ...(uses ? { namespace } : {}),
         };
         return Promise.resolve(result);
       }
@@ -131,7 +136,11 @@ function fakeEngine() {
     }
   });
   const client = { call } as unknown as EngineClient;
-  return { client, call, executed, bound, released };
+  /** Moves the session's namespace behind the console's back, as a rolled-back `SET LOCAL` does. */
+  const moveNamespace = (path: CurrentNamespace) => {
+    namespace = path;
+  };
+  return { client, call, executed, bound, released, moveNamespace };
 }
 
 function harness(
@@ -353,6 +362,79 @@ describe("console runs", () => {
     expect(session().transactionOpen).toBe(false);
     expect(session().status).toBe("disconnected");
     expect(messages().at(-1)).toBe("The session closed; its open transaction was rolled back.");
+  });
+});
+
+describe("console namespace", () => {
+  it("givenSessionOpened_whenNamespaceReported_thenConsoleRecordsIt", async () => {
+    const { session } = await opened("SELECT 1;");
+
+    expect(session().namespace).toEqual(["shop"]);
+  });
+
+  it("givenUseExecuted_whenNamespaceReported_thenConsoleUpdates", async () => {
+    const { store, session } = await opened("USE archive;\nSELECT 1;");
+
+    await store.getState().run("c1", "all");
+
+    expect(session().namespace).toEqual(["archive"]);
+  });
+
+  it("givenStatementWithoutNamespace_whenExecuted_thenKept", async () => {
+    const { store, session, moveNamespace } = await opened("SELECT 1;");
+    moveNamespace(["elsewhere"]);
+
+    await store.getState().run("c1", "all");
+
+    expect(session().namespace).toEqual(["shop"]);
+  });
+
+  it("givenFailedUse_whenExecuted_thenNamespaceUnchanged", async () => {
+    const { store, session } = await opened("USE FAIL;");
+
+    await store.getState().run("c1", "all");
+
+    expect(session().namespace).toEqual(["shop"]);
+  });
+
+  it("givenRollbackWithNamespace_whenTransacted_thenConsoleUpdates", async () => {
+    const { store, session, moveNamespace } = await opened("BEGIN;");
+    await store.getState().run("c1", "all");
+    moveNamespace(["reverted"]);
+
+    await store.getState().rollback("c1");
+
+    expect(session().namespace).toEqual(["reverted"]);
+  });
+
+  it("givenNamespace_whenDetached_thenForgotten", async () => {
+    const { store, session } = await opened("USE archive;");
+    await store.getState().run("c1", "all");
+
+    store.getState().detach("pg", null);
+
+    expect(session().namespace).toBeNull();
+  });
+
+  it("givenReconnect_whenSessionReopens_thenNamespaceIsTheNewSessions", async () => {
+    const { store, session, moveNamespace } = await opened("USE archive;");
+    await store.getState().run("c1", "all");
+    store.getState().detach("pg", null);
+    moveNamespace(["shop"]);
+
+    store.getState().setSql("c1", "SELECT 1;");
+    await store.getState().run("c1", "all");
+
+    expect(session().namespace).toEqual(["shop"]);
+  });
+
+  it("givenSchemaPath_whenLabelled_thenSchemaWithFullPathAsTitle", () => {
+    expect(namespaceLabel(["table_craft", "archive"])).toEqual({ text: "archive", title: "table_craft.archive" });
+  });
+
+  it("givenNoNamespace_whenLabelled_thenHidden", () => {
+    expect(namespaceLabel(null)).toBeNull();
+    expect(namespaceLabel([])).toBeNull();
   });
 });
 

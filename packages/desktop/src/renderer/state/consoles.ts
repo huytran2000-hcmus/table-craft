@@ -2,6 +2,7 @@ import { create } from "zustand";
 import {
   type ClassifiedStatement,
   type Column,
+  type CurrentNamespace,
   type EngineError,
   type ExecutedStatement,
   type ExportFormat,
@@ -119,6 +120,8 @@ export interface ConsoleSession {
   readonly output: readonly OutputEntry[];
   readonly txMode: TransactionMode;
   readonly transactionOpen: boolean;
+  /** The database or schema the session is in, as last read by the engine; null before or when unknown. */
+  readonly namespace: CurrentNamespace;
   readonly lastRun: LastRun | null;
   readonly flash: Flash | null;
   /** Where an action asked the editor to put its caret; `seq` repeats a jump to the same place. */
@@ -338,6 +341,7 @@ function newConsole(datasourceId: string, name: string, sql: string, connect: bo
     output: [],
     txMode: "auto",
     transactionOpen: false,
+    namespace: null,
     lastRun: null,
     flash: null,
     jump: null,
@@ -345,6 +349,11 @@ function newConsole(datasourceId: string, name: string, sql: string, connect: bo
     replacement: null,
     parameterValues: {},
   };
+}
+
+/** The console patch for a reply that may carry a fresh namespace read; an absent one keeps the last. */
+function namespaceOf(reply: { readonly namespace?: CurrentNamespace }): { namespace?: CurrentNamespace } {
+  return reply.namespace === undefined ? {} : { namespace: reply.namespace };
 }
 
 function statementCount(count: number): string {
@@ -479,7 +488,13 @@ export function createConsolesStore(dependencies: ConsolesDependencies) {
           return false;
         }
         clients.set(id, client);
-        patch(id, { sessionId: opened.sessionId, status: "ready", error: null, transactionOpen: false });
+        patch(id, {
+          sessionId: opened.sessionId,
+          status: "ready",
+          error: null,
+          transactionOpen: false,
+          namespace: opened.namespace,
+        });
         const mode = get().consoles[id]?.txMode;
         if (mode === "manual") await applyMode(id, client, opened.sessionId, mode);
         return true;
@@ -493,7 +508,7 @@ export function createConsolesStore(dependencies: ConsolesDependencies) {
       try {
         cursorsClosed(id);
         const state = await client.call("transaction.setMode", { sessionId, mode });
-        patch(id, { txMode: state.mode, transactionOpen: state.transactionOpen });
+        patch(id, { txMode: state.mode, transactionOpen: state.transactionOpen, ...namespaceOf(state) });
         return true;
       } catch (cause) {
         logError(id, "", toError(cause));
@@ -600,12 +615,13 @@ export function createConsolesStore(dependencies: ConsolesDependencies) {
         try {
           cursorsClosed(id);
           const paging = currentPaging();
-          const { transactionOpen, ...executed } = await client.call("statement.execute", {
+          const { transactionOpen, namespace, ...executed } = await client.call("statement.execute", {
             sessionId,
             sql: statement.sql,
             ...(parameters === undefined ? {} : { parameters }),
             ...paging,
           });
+          const moved = namespaceOf({ namespace });
           const elapsed = dependencies.now() - startedAt;
           ended({ durationMs: elapsed, outcome: "success", rowCount: rowsOf(executed), message: null });
           log(id, { sql, message: executedText(executed, elapsed, statement.kind), tone: "success" });
@@ -621,9 +637,9 @@ export function createConsolesStore(dependencies: ConsolesDependencies) {
               currentFormats(),
             );
             producedBy.set(tab.id, ended.executionId);
-            patch(id, { results: [...current.results, tab], activeResult: tab.id, transactionOpen });
+            patch(id, { results: [...current.results, tab], activeResult: tab.id, transactionOpen, ...moved });
           } else {
-            patch(id, { transactionOpen });
+            patch(id, { transactionOpen, ...moved });
           }
           if (statement.kind === "ddl") {
             if (transactionOpen) pendingDdl.add(id);
@@ -662,7 +678,7 @@ export function createConsolesStore(dependencies: ConsolesDependencies) {
       try {
         cursorsClosed(id);
         const state: TransactionState = await client.call(method, { sessionId: current.sessionId });
-        patch(id, { transactionOpen: state.transactionOpen });
+        patch(id, { transactionOpen: state.transactionOpen, ...namespaceOf(state) });
         const committed = method === "transaction.commit";
         log(id, { sql: "", message: committed ? "Committed" : "Rolled back", tone: "info" });
         afterTransactionChange(id, current.datasourceId, state.transactionOpen, committed);
@@ -859,6 +875,7 @@ export function createConsolesStore(dependencies: ConsolesDependencies) {
             status: error === null ? "disconnected" : "failed",
             error: error ?? session.error,
             transactionOpen: false,
+            namespace: null,
             results: session.results.map((result) =>
               isRows(result) ? { ...result, stale: true, cursorOpen: false, fetching: null } : result,
             ),
@@ -1090,7 +1107,7 @@ export function createConsolesStore(dependencies: ConsolesDependencies) {
             producedBy.set(resultId, ended.executionId);
             statementStartedAt = dependencies.now();
             const paging = currentPaging();
-            const { transactionOpen, ...executed } = await client.call("statement.execute", {
+            const { transactionOpen, namespace, ...executed } = await client.call("statement.execute", {
               sessionId,
               sql: tab.sql,
               ...(parameters === undefined ? {} : { parameters }),
@@ -1130,7 +1147,7 @@ export function createConsolesStore(dependencies: ConsolesDependencies) {
                 windows: sort.length > 0 ? {} : fresh.windows,
               }));
             }
-            patch(id, { transactionOpen });
+            patch(id, { transactionOpen, ...namespaceOf({ namespace }) });
             outcome = "succeeded";
           }
         } catch (cause) {
