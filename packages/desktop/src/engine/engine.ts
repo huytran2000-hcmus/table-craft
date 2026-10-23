@@ -19,6 +19,7 @@ import {
   ResultStore,
   RowsRefused,
   rowWriter,
+  cellClipboardText,
   submitConsoleEdits,
   submitEdits,
   applyDdl,
@@ -1958,6 +1959,11 @@ export function createEngine(options: EngineOptions, now: () => number = Date.no
       "result.extract": ({ handle, extractor, rows, columns }) => {
         const chosen = chosenColumns(ownedHandle(handle), columns);
         const picked = rowsIn(results.shownRows(handle), rows);
+        const [only] = picked;
+        // One cell is a value to paste elsewhere, not a table: no header, no quoting (as DataGrip copies it).
+        if (picked.length === 1 && only !== undefined && columns.length === 1) {
+          return Promise.resolve(cellClipboardText(project(only, columns)[0] ?? null));
+        }
         const writer = rowWriter(extractor, chosen, { dialect: sqlLanguage() });
         const body = picked.map((row, index) => writer.row(project(row, columns), index)).join("");
         return Promise.resolve(writer.start() + body + writer.end(picked.length));
