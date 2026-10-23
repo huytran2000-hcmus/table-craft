@@ -352,15 +352,26 @@ The manifest declares what the plugin can do, and the UI offers only what it dec
 - `ddl`: returns the definition of a table or view.
 - `explain`: returns the plan of a statement without running it.
 - `explainAnalyze`: runs a statement and returns its plan with actual rows and times.
+- `currentNamespace`: reports which database or schema a console is in, so completion follows
+  `USE` and `SET search_path`.
 
 ```json
 {
   "id": "postgres",
   "name": "PostgreSQL",
   "version": "0.0.0",
-  "apiVersion": "0.12.0",
+  "apiVersion": "0.13.0",
   "entry": "index.js",
-  "capabilities": ["sql", "cancel", "schemaTree", "transactions", "ddl", "explain", "explainAnalyze"],
+  "capabilities": [
+    "sql",
+    "cancel",
+    "schemaTree",
+    "transactions",
+    "ddl",
+    "explain",
+    "explainAnalyze",
+    "currentNamespace"
+  ],
   "highlight": "postgresql",
   "connection": {
     "fields": [

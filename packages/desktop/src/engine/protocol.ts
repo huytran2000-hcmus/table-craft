@@ -42,7 +42,8 @@ export interface Column {
 }
 
 /** Mirrors `Capability` in plugin-api. The renderer branches on these, never on a plugin id (decision 007). */
-export type Capability = "sql" | "cancel" | "schemaTree" | "transactions" | "ddl" | "explain" | "explainAnalyze";
+export type Capability =
+  "sql" | "cancel" | "schemaTree" | "transactions" | "ddl" | "explain" | "explainAnalyze" | "currentNamespace";
 
 /** What the SQL Generator writes: `create` is the relation's definition, the rest mirror `GeneratedStatement` in plugin-api. */
 export type GeneratorStatement = "create" | "drop" | "select" | "insert" | "update";

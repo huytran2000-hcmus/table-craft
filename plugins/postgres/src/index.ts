@@ -54,6 +54,7 @@ const CAPABILITIES: readonly Capability[] = [
   "ddl",
   "explain",
   "explainAnalyze",
+  "currentNamespace",
 ];
 
 /** Function bodies live in dollar quotes; `BEGIN ATOMIC … END` holds a SQL-standard body. */
@@ -271,6 +272,8 @@ function readBatch(cursor: Cursor<unknown[]>): Promise<{ rows: unknown[][]; resu
 
 const READ_ONLY_SQL = "SET SESSION CHARACTERISTICS AS TRANSACTION READ ONLY";
 const VERSION_SQL = "SHOW server_version";
+/** `current_schema()` is the first search_path entry that exists, and null when none does. */
+const CURRENT_NAMESPACE_SQL = "SELECT current_database() AS database, current_schema() AS schema";
 
 /** Distribution builds append a build note, as in `17.4 (Debian 17.4-1.pgdg120+2)`. */
 function shortVersion(reported: string | undefined): string | null {
@@ -389,6 +392,17 @@ class PostgresSession implements Session {
     } catch (cause) {
       this.#running = null;
       throw this.#failure(cause, running);
+    }
+  }
+
+  async currentNamespace(): Promise<readonly string[] | null> {
+    if (this.#running !== null) throw new PluginError("statementFailed", BUSY_MESSAGE);
+    try {
+      const result = await this.#client.query<{ database: string; schema: string | null }>(CURRENT_NAMESPACE_SQL);
+      const row = result.rows[0];
+      return row?.schema == null ? null : [row.database, row.schema];
+    } catch (cause) {
+      throw new PluginError("statementFailed", messageOf(cause), { cause });
     }
   }
 

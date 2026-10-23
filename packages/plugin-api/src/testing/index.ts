@@ -64,6 +64,15 @@ export interface ContractFixture {
     /** `customers`' table comment; null where the dialect has no comments. */
     readonly customersComment: string | null;
   };
+  /** Required when the plugin declares `currentNamespace`, which also needs `catalog`. */
+  readonly namespaceSwitch?: {
+    /** A statement that makes another namespace current, such as `USE archive`. */
+    readonly statement: string;
+    /** The path `currentNamespace` reports after it. */
+    readonly path: readonly string[];
+    /** A switch to a namespace that does not exist, where the dialect rejects one. */
+    readonly missing?: string;
+  };
 }
 
 export interface SplitCase {
@@ -358,6 +367,15 @@ export function runPluginContract(plugin: DatasourcePlugin, fixture: ContractFix
       expect(plugin.language?.explainable !== undefined).toBe(explain);
       await withSession(plugin, fixture, (session) => {
         expect(session.explain !== undefined).toBe(explain);
+        return Promise.resolve();
+      });
+    });
+
+    it("givenSession_whenInspected_thenHasCurrentNamespaceExactlyWhenDeclared", async () => {
+      const declared = plugin.capabilities.includes("currentNamespace");
+      if (declared) expect(plugin.capabilities).toContain("sql");
+      await withSession(plugin, fixture, (session) => {
+        expect(session.currentNamespace !== undefined).toBe(declared);
         return Promise.resolve();
       });
     });
@@ -1251,6 +1269,55 @@ export function runPluginContract(plugin: DatasourcePlugin, fixture: ContractFix
           expect(await total()).toEqual(before);
         });
       });
+    });
+
+    describe.runIf(plugin.capabilities.includes("currentNamespace"))("currentNamespace", () => {
+      function namespaceSwitch(): NonNullable<ContractFixture["namespaceSwitch"]> {
+        if (fixture.namespaceSwitch === undefined) {
+          throw new Error("A plugin that declares currentNamespace needs fixture.namespaceSwitch.");
+        }
+        return fixture.namespaceSwitch;
+      }
+
+      async function current(session: Session): Promise<readonly string[] | null> {
+        if (session.currentNamespace === undefined) throw new Error("A currentNamespace session needs it.");
+        return session.currentNamespace();
+      }
+
+      it("givenFreshSession_whenCurrentNamespaceRead_thenIsCatalogPath", async () => {
+        const path = fixture.catalog?.path;
+        if (path === undefined) throw new Error("A plugin that declares currentNamespace needs fixture.catalog.");
+        await withSession(plugin, fixture, async (session) => {
+          expect(await current(session)).toEqual(path);
+        });
+      });
+
+      it("givenSwitchStatement_whenClassified_thenSetsNamespace", () => {
+        expect(plugin.language?.classify(namespaceSwitch().statement).setsNamespace).toBe(true);
+        expect(plugin.language?.classify("SELECT 1").setsNamespace ?? false).toBe(false);
+      });
+
+      it("givenSwitchStatement_whenExecuted_thenCurrentNamespaceIsTarget", async () => {
+        const { statement, path } = namespaceSwitch();
+        await withSession(plugin, fixture, async (session) => {
+          await collect((await session.execute(statement)).rows);
+          expect(await current(session)).toEqual(path);
+          expect(await collect((await session.execute("SELECT 1 AS one")).rows)).toEqual([[1]]);
+        });
+      });
+
+      it.runIf(fixture.namespaceSwitch?.missing !== undefined)(
+        "givenMissingTarget_whenExecuted_thenRejectsAndNamespaceUnchanged",
+        async () => {
+          const { missing } = namespaceSwitch();
+          if (missing === undefined) return;
+          await withSession(plugin, fixture, async (session) => {
+            const before = await current(session);
+            expect(await rejectionCode(session.execute(missing))).toBe("statementFailed");
+            expect(await current(session)).toEqual(before);
+          });
+        },
+      );
     });
 
     describe.runIf(plugin.capabilities.includes("cancel"))("cancel", () => {

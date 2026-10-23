@@ -76,3 +76,15 @@ CREATE TABLE `Line Items` (
 );
 
 INSERT INTO `Line Items` (id, sku) VALUES (1, 'SKU-1');
+
+-- A second database, so `USE` and completion meet a namespace that is not current. The image
+-- grants its user only MYSQL_DATABASE, and this script runs as root.
+CREATE DATABASE archive;
+
+CREATE TABLE archive.old_orders (
+  id INT PRIMARY KEY,
+  customer_id INT NOT NULL,
+  FOREIGN KEY (customer_id) REFERENCES table_craft.customers (id)
+);
+
+GRANT ALL PRIVILEGES ON archive.* TO 'table_craft'@'%';

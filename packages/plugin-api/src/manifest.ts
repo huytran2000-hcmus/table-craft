@@ -72,6 +72,11 @@ export const pluginManifestSchema = z
   .refine(
     (manifest) => !manifest.capabilities.includes("explainAnalyze") || manifest.capabilities.includes("explain"),
     { message: "the explainAnalyze capability requires explain", path: ["capabilities"] },
-  );
+  )
+  // A namespace is switched by a statement, and the switch is told apart by the language (decision 048).
+  .refine((manifest) => !manifest.capabilities.includes("currentNamespace") || manifest.capabilities.includes("sql"), {
+    message: "the currentNamespace capability requires sql",
+    path: ["capabilities"],
+  });
 
 export type PluginManifest = z.infer<typeof pluginManifestSchema>;

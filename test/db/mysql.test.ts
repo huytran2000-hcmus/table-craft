@@ -29,6 +29,7 @@ runPluginContract(mysql, {
     ordersCheck: "orders_total_nonnegative",
     customersComment: "People who place orders",
   },
+  namespaceSwitch: { statement: "USE archive", path: ["archive"], missing: "USE no_such_database" },
 });
 
 describe("mysql explain", () => {

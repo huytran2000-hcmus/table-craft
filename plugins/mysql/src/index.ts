@@ -55,6 +55,7 @@ const CAPABILITIES: readonly Capability[] = [
   "ddl",
   "explain",
   "explainAnalyze",
+  "currentNamespace",
 ];
 
 /** What the mysql client accepts: `'\''`, `# comments`, `DELIMITER //` and `BEGIN … END` routine bodies. */
@@ -273,6 +274,7 @@ function openConnection(config: MysqlConfig, keepAliveInitialDelayMs?: number): 
 
 const READ_ONLY_SQL = "SET SESSION TRANSACTION READ ONLY";
 const VERSION_SQL = "SELECT VERSION() AS version";
+const CURRENT_DATABASE_SQL = "SELECT DATABASE() AS name";
 
 function query(
   connection: mysql.Connection,
@@ -448,6 +450,15 @@ class MysqlSession implements Session {
       this.#running = null;
       throw this.#failure(cause, running);
     }
+  }
+
+  async currentNamespace(): Promise<readonly string[] | null> {
+    if (this.#running !== null) throw new PluginError("statementFailed", BUSY_MESSAGE);
+    const rows = (await query(this.#connection, CURRENT_DATABASE_SQL, "statementFailed")) as readonly {
+      name?: unknown;
+    }[];
+    const name = rows[0]?.name;
+    return typeof name === "string" ? [name] : null;
   }
 
   async explain(sql: string, options: ExplainOptions): Promise<ExplainedPlan> {

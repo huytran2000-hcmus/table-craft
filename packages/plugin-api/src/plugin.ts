@@ -22,6 +22,7 @@ export const CAPABILITIES = [
   "ddl",
   "explain",
   "explainAnalyze",
+  "currentNamespace",
 ] as const;
 
 export type Capability = (typeof CAPABILITIES)[number];
@@ -83,6 +84,12 @@ export interface Session {
    * `cancel` interrupts it as it does `execute`.
    */
   explain?(sql: string, options: ExplainOptions): Promise<ExplainedPlan>;
+  /**
+   * Present exactly when the plugin declares `currentNamespace` (decision 048). Asks the server
+   * which namespace unqualified names resolve against now, as an introspector namespace path; null
+   * when none does. Never opens a transaction, and the host calls it only while nothing runs.
+   */
+  currentNamespace?(): Promise<readonly string[] | null>;
   /**
    * Settles in bounded time even when the network is gone: a graceful goodbye that does not
    * answer within a few seconds gives way to dropping the socket (decision 040).

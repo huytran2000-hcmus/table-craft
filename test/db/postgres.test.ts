@@ -1,5 +1,6 @@
 import postgres from "@table-craft/plugin-postgres";
 import { runPluginContract } from "@table-craft/plugin-api/testing";
+import { describe, expect, it } from "vitest";
 import { POSTGRES_CONFIG, withWrongPassword } from "../support/databases.js";
 import { POSTGRES_MANIFEST } from "../support/manifests.js";
 import { TYPE_PROBE_COPY_AS, TYPE_PROBE_EXPECTED, TYPE_PROBE_WRITE } from "../support/typeProbe.js";
@@ -27,4 +28,30 @@ runPluginContract(postgres, {
     ordersCheck: "orders_total_nonnegative",
     customersComment: "People who place orders",
   },
+  namespaceSwitch: { statement: "SET search_path TO archive, public", path: ["table_craft", "archive"] },
+});
+
+describe("postgres current namespace", () => {
+  it("givenSearchPathOfNoSchema_whenRead_thenNull", async () => {
+    const session = await postgres.connect(POSTGRES_CONFIG, { readOnly: false });
+    try {
+      await session.execute("SET search_path TO no_such_schema");
+      expect(await session.currentNamespace?.()).toBeNull();
+    } finally {
+      await session.close();
+    }
+  });
+
+  it("givenSetLocalInTransaction_whenRolledBack_thenNamespaceReverts", async () => {
+    const session = await postgres.connect(POSTGRES_CONFIG, { readOnly: false });
+    try {
+      await session.transactions?.setMode("manual");
+      await session.execute("SET LOCAL search_path TO archive");
+      expect(await session.currentNamespace?.()).toEqual(["table_craft", "archive"]);
+      await session.transactions?.rollback();
+      expect(await session.currentNamespace?.()).toEqual(["table_craft", "public"]);
+    } finally {
+      await session.close();
+    }
+  });
 });
