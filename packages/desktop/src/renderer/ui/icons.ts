@@ -35,6 +35,7 @@ import {
   Calendar,
   EyeSlash,
   Export,
+  FileArrowDown,
   Hash,
   SidebarSimple,
   SortAscending,
@@ -116,6 +117,7 @@ export {
   XCircle as ErrorIcon,
   Prohibit as CancelledIcon,
   Export as ExportIcon,
+  FileArrowDown as ImportIcon,
 };
 
 /** The header's type glyph per column class (plan 007 decision 7); temporal reads as a date. */
@@ -154,6 +156,7 @@ export const ACTION_ICONS: Readonly<Record<ActionIcon, Icon>> = {
   fetchAll: ArrowLineDown,
   rerun: ArrowClockwise,
   export: Export,
+  import: FileArrowDown,
   valuePanel: SidebarSimple,
   sortAscending: SortAscending,
   sortDescending: SortDescending,

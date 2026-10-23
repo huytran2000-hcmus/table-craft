@@ -658,16 +658,16 @@ function DataEditorPage() {
         onValid={(fetchAllCap) => setData({ fetchAllCap })}
       />
       <p className="col-start-2 text-ink-muted">Applies to the next statement; open results keep theirs.</p>
-      <SectionTitle>Export</SectionTitle>
+      <SectionTitle>Export and import</SectionTitle>
       <NumberField
-        label="Stall timeout (s)"
+        label="Transfer stall timeout (s)"
         value={data.exportStallSeconds}
         range={EXPORT_STALL_SECONDS_RANGE}
         check={exportStallSecondsError}
         onValid={(exportStallSeconds) => setData({ exportStallSeconds })}
       />
       <p className="col-start-2 text-ink-muted">
-        An export that receives nothing from the database this long stops and says so.
+        An export or import the database answers nothing to for this long stops and says so.
       </p>
     </>
   );

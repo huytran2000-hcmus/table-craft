@@ -83,6 +83,7 @@ export interface IpcOptions<Sender> {
   readonly consoles: ConsoleFiles;
   readonly history: Pick<QueryHistory, "record" | "search" | "clear">;
   readonly chooseFile: (sender: Sender, title: string) => Promise<string | null>;
+  readonly openFile: (sender: Sender, title: string) => Promise<string | null>;
   readonly saveFile: (sender: Sender, title: string, defaultName: string) => Promise<string | null>;
   readonly revealFile: (path: string) => void;
   /** The renderer's answer to a held close (`CHANNELS.closeRequested`). */
@@ -181,6 +182,7 @@ export function registerIpc<Sender>(ipc: InvokeRegistrar<Sender>, options: IpcOp
     return null;
   });
   handle(INVOKE_CHANNELS.chooseFile, chooseFileRequest, ({ title }, sender) => options.chooseFile(sender, title));
+  handle(INVOKE_CHANNELS.openFile, chooseFileRequest, ({ title }, sender) => options.openFile(sender, title));
   handle(INVOKE_CHANNELS.saveFile, saveFileRequest, ({ title, defaultName }, sender) =>
     options.saveFile(sender, title, defaultName),
   );

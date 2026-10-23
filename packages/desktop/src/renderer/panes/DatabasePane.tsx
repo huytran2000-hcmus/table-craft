@@ -5,6 +5,7 @@ import { ACTION_IDS } from "@table-craft/desktop/renderer/actions/appActions.js"
 import { currentPlatform, formatChord } from "@table-craft/desktop/renderer/actions/chords.js";
 import { DDL_ACTION_IDS } from "@table-craft/desktop/renderer/actions/ddlActions.js";
 import { EXPORT_ACTION_IDS } from "@table-craft/desktop/renderer/actions/exportActions.js";
+import { IMPORT_ACTION_IDS } from "@table-craft/desktop/renderer/actions/importActions.js";
 import { HISTORY_ACTION_IDS } from "@table-craft/desktop/renderer/actions/historyActions.js";
 import { invoke, registry, useActionEnabled } from "@table-craft/desktop/renderer/actions/index.js";
 import { SETTINGS_ACTION_IDS } from "@table-craft/desktop/renderer/actions/settingsActions.js";
@@ -94,9 +95,20 @@ const CATALOG_MENU = [
   null,
   ACTION_IDS.toggleSystemSchemas,
 ] as const;
+const NAMESPACE_MENU = [
+  TABLE_ACTION_IDS.openData,
+  ACTION_IDS.newConsole,
+  IMPORT_ACTION_IDS.importNewTable,
+  null,
+  ACTION_IDS.synchronize,
+  ACTION_IDS.copyName,
+  null,
+  ACTION_IDS.toggleSystemSchemas,
+] as const;
 const RELATION_MENU = [
   TABLE_ACTION_IDS.openData,
   EXPORT_ACTION_IDS.exportRelation,
+  IMPORT_ACTION_IDS.importIntoTable,
   DDL_ACTION_IDS.open,
   DDL_ACTION_IDS.quickDoc,
   DDL_ACTION_IDS.generator,
@@ -212,6 +224,7 @@ function menuOf(node: ExplorerNode): readonly (string | null)[] {
   if (node.kind === "datasource") return DATASOURCE_MENU;
   if (node.kind === "relation") return RELATION_MENU;
   if (node.kind === "column") return COLUMN_MENU;
+  if (node.kind === "namespace" || node.kind === "objectGroup") return NAMESPACE_MENU;
   return CATALOG_MENU;
 }
 

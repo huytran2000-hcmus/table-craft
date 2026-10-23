@@ -5,6 +5,8 @@ import { useCatalog } from "@table-craft/desktop/renderer/state/catalog.js";
 import { useConsoles } from "@table-craft/desktop/renderer/state/consoles.js";
 import { exportingText } from "@table-craft/desktop/renderer/model/exportText.js";
 import { isRunning, useExports } from "@table-craft/desktop/renderer/state/exports.js";
+import { importingText } from "@table-craft/desktop/renderer/model/importText.js";
+import { isImporting, useImports } from "@table-craft/desktop/renderer/state/imports.js";
 import {
   connectionOf,
   datasourceById,
@@ -133,9 +135,25 @@ function ExportingIndicator() {
   );
 }
 
+/** Background imports still writing (plan 021); Services lists each with Cancel. */
+function ImportingIndicator() {
+  const text = useImports((state) => {
+    const running = state.entries.filter(isImporting).map((entry) => entry.task);
+    return running.length === 0 ? null : importingText(running);
+  });
+  if (text === null) return null;
+  return (
+    <span data-testid="status-importing" className="flex items-center gap-cell">
+      <SpinnerIcon aria-hidden className="size-icon animate-spin text-accent" />
+      {text}
+    </span>
+  );
+}
+
 export const STATUS_ITEMS: readonly StatusItem[] = [
   { id: "datasource", side: "left", Component: DatasourceStatus },
   { id: "sync", side: "left", Component: SyncStatus },
   { id: "running", side: "right", Component: RunningIndicator },
   { id: "exporting", side: "right", Component: ExportingIndicator },
+  { id: "importing", side: "right", Component: ImportingIndicator },
 ];

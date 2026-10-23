@@ -3,6 +3,7 @@ import { serviceState, type ServiceState } from "@table-craft/desktop/renderer/m
 import type { ConsoleSession } from "@table-craft/desktop/renderer/state/consoles.js";
 import type { Execution } from "@table-craft/desktop/renderer/state/executions.js";
 import type { ExportEntry } from "@table-craft/desktop/renderer/state/exports.js";
+import type { ImportEntry } from "@table-craft/desktop/renderer/state/imports.js";
 import type { TableSession, TableStatus } from "@table-craft/desktop/renderer/state/tables.js";
 import type { Tab } from "@table-craft/desktop/renderer/state/tabs.js";
 
@@ -123,10 +124,21 @@ export type ServiceRow =
       readonly depth: 1;
       readonly parent: string;
       readonly node: ExportEntry;
+    }
+  | { readonly kind: "imports"; readonly key: string; readonly depth: 0; readonly count: number }
+  | {
+      readonly kind: "import";
+      readonly key: string;
+      readonly depth: 1;
+      readonly parent: string;
+      readonly node: ImportEntry;
     };
 
 /** The Exports node's key: one node under the datasources, every background export below it (decision 040). */
 export const EXPORTS_ROW_KEY = "exports";
+
+/** The Imports node's key, beside the Exports node (plan 021). */
+export const IMPORTS_ROW_KEY = "imports";
 
 export function datasourceRowKey(datasourceId: string): string {
   return `datasource:${datasourceId}`;
@@ -138,12 +150,13 @@ export function sessionRowKey(tabId: string): string {
 
 /**
  * The lines shown, every node expanded unless `collapsed` holds its key (the tree starts expanded);
- * the Exports node follows the datasources while any export is listed, newest first.
+ * the Exports and Imports nodes follow the datasources while any task of theirs is listed, newest first.
  */
 export function serviceRows(
   tree: readonly ServiceDatasource[],
   collapsed: ReadonlySet<string>,
   exports: readonly ExportEntry[] = [],
+  imports: readonly ImportEntry[] = [],
 ): readonly ServiceRow[] {
   const rows: ServiceRow[] = [];
   for (const datasource of tree) {
@@ -166,11 +179,33 @@ export function serviceRows(
       }
     }
   }
-  if (exports.length === 0) return rows;
-  rows.push({ kind: "exports", key: EXPORTS_ROW_KEY, depth: 0, count: exports.length });
-  if (collapsed.has(EXPORTS_ROW_KEY)) return rows;
-  for (const entry of [...exports].reverse()) {
-    rows.push({ kind: "export", key: `export:${entry.task.taskId}`, depth: 1, parent: EXPORTS_ROW_KEY, node: entry });
+  if (exports.length > 0) {
+    rows.push({ kind: "exports", key: EXPORTS_ROW_KEY, depth: 0, count: exports.length });
+    if (!collapsed.has(EXPORTS_ROW_KEY)) {
+      for (const entry of [...exports].reverse()) {
+        rows.push({
+          kind: "export",
+          key: `export:${entry.task.taskId}`,
+          depth: 1,
+          parent: EXPORTS_ROW_KEY,
+          node: entry,
+        });
+      }
+    }
+  }
+  if (imports.length > 0) {
+    rows.push({ kind: "imports", key: IMPORTS_ROW_KEY, depth: 0, count: imports.length });
+    if (!collapsed.has(IMPORTS_ROW_KEY)) {
+      for (const entry of [...imports].reverse()) {
+        rows.push({
+          kind: "import",
+          key: `import:${entry.task.taskId}`,
+          depth: 1,
+          parent: IMPORTS_ROW_KEY,
+          node: entry,
+        });
+      }
+    }
   }
   return rows;
 }
@@ -178,7 +213,7 @@ export function serviceRows(
 /** Whether a line has children to show or hide. */
 export function expandable(row: ServiceRow): boolean {
   if (row.kind === "datasource") return row.node.sessions.length > 0;
-  if (row.kind === "exports") return row.count > 0;
+  if (row.kind === "exports" || row.kind === "imports") return row.count > 0;
   return row.kind === "session" && row.node.executions.length > 0;
 }
 
@@ -222,7 +257,7 @@ export function movedInTree(
     case "ArrowLeft": {
       if (row === undefined) return { selected, collapsed };
       if (expandable(row) && !collapsed.has(row.key)) return { selected, collapsed: new Set(collapsed).add(row.key) };
-      return row.kind === "datasource" || row.kind === "exports"
+      return row.kind === "datasource" || row.kind === "exports" || row.kind === "imports"
         ? { selected, collapsed }
         : { selected: row.parent, collapsed };
     }

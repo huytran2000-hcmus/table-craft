@@ -5,6 +5,7 @@ import { LOG_ACTION_IDS } from "@table-craft/desktop/renderer/actions/logActions
 import { Button, CONTENT_CLASS, OVERLAY_CLASS, TextInput } from "@table-craft/desktop/renderer/dialogs/parts.js";
 import { useModal, type ModalItem, type ModalRequest } from "@table-craft/desktop/renderer/state/modal.js";
 import { ExportData } from "@table-craft/desktop/renderer/dialogs/ExportData.js";
+import { ImportData } from "@table-craft/desktop/renderer/dialogs/ImportData.js";
 import { OpenClosedConsole } from "@table-craft/desktop/renderer/dialogs/OpenClosedConsole.js";
 import { ParametersDialog } from "@table-craft/desktop/renderer/dialogs/ParametersDialog.js";
 import { QueryHistory } from "@table-craft/desktop/renderer/dialogs/QueryHistory.js";
@@ -23,9 +24,10 @@ const MODAL_WIDTHS: Readonly<Record<ModalRequest["kind"], string>> = {
   closedConsoles: "w-picker",
   parameters: "w-[40rem]",
   export: "w-generator",
+  import: "w-dialog",
 };
 
-type PickerKind = "generator" | "history" | "closedConsoles" | "parameters" | "export";
+type PickerKind = "generator" | "history" | "closedConsoles" | "parameters" | "export" | "import";
 
 function Items({ items }: { readonly items: readonly ModalItem[] }) {
   return (
@@ -146,6 +148,8 @@ export function Modal() {
             <ParametersDialog request={pending.request} />
           ) : pending.request.kind === "export" ? (
             <ExportData request={pending.request} />
+          ) : pending.request.kind === "import" ? (
+            <ImportData request={pending.request} />
           ) : (
             <Body request={pending.request} />
           )}

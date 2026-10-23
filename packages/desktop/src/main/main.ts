@@ -109,6 +109,10 @@ const STDIO_SCOPE = "stdio";
 /** What the terminal mirror prints: warnings and errors, so `bun run desktop` shows what it did before the log. */
 const MIRROR_LEVEL = "warn";
 const DIAGNOSTICS_TITLE = "Export Diagnostics";
+const IMPORT_FILE_FILTERS = [
+  { name: "Delimited text", extensions: ["csv", "tsv", "txt"] },
+  { name: "All files", extensions: ["*"] },
+];
 const UTF8 = "utf8";
 const MISSING_FILE = "ENOENT";
 const CIPHER_ENCODING = "base64";
@@ -410,6 +414,13 @@ async function chooseFile(contents: WebContents, title: string): Promise<string 
   return picked.canceled ? null : (picked.filePaths[0] ?? null);
 }
 
+async function openFile(contents: WebContents, title: string): Promise<string | null> {
+  const parent = BrowserWindow.fromWebContents(contents);
+  const options: OpenDialogOptions = { title, properties: ["openFile"], filters: IMPORT_FILE_FILTERS };
+  const picked = parent === null ? await dialog.showOpenDialog(options) : await dialog.showOpenDialog(parent, options);
+  return picked.canceled ? null : (picked.filePaths[0] ?? null);
+}
+
 function logPlugins(report: readonly PluginReport[]): void {
   const plugins = mainLog.child("plugins");
   for (const plugin of report) {
@@ -651,6 +662,7 @@ void app.whenReady().then(async () => {
       if (failure !== "") throw new Error(`${themes.path} could not be opened: ${failure}`);
     },
     chooseFile,
+    openFile,
     saveFile,
     revealFile: (path) => shell.showItemInFolder(path),
     answerClose(sender, proceed) {

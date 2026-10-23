@@ -1,12 +1,14 @@
 import * as ContextMenu from "@radix-ui/react-context-menu";
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import { EXPORT_ACTION_IDS } from "@table-craft/desktop/renderer/actions/exportActions.js";
+import { IMPORT_ACTION_IDS } from "@table-craft/desktop/renderer/actions/importActions.js";
 import { HISTORY_ACTION_IDS } from "@table-craft/desktop/renderer/actions/historyActions.js";
 import type { ExportTaskState } from "@table-craft/desktop/engine/protocol.js";
 import { invoke, registry } from "@table-craft/desktop/renderer/actions/index.js";
 import {
   clockTime,
   connectionText,
+  formatCount,
   formatDuration,
   rowsText,
   SERVICE_STATE_TEXT,
@@ -34,6 +36,13 @@ import {
   type ExecutionOutcome,
 } from "@table-craft/desktop/renderer/state/executions.js";
 import { useExports, type ExportEntry } from "@table-craft/desktop/renderer/state/exports.js";
+import { resumeLabel, useImports, type ImportEntry } from "@table-craft/desktop/renderer/state/imports.js";
+import {
+  IMPORT_STATE_TEXT,
+  importNotes,
+  importPercent,
+  importProgressText,
+} from "@table-craft/desktop/renderer/model/importText.js";
 import { useTables } from "@table-craft/desktop/renderer/state/tables.js";
 import { useTabs } from "@table-craft/desktop/renderer/state/tabs.js";
 import { cn } from "@table-craft/desktop/renderer/ui/cn.js";
@@ -43,6 +52,7 @@ import {
   DatabaseIcon,
   ExpandedIcon,
   ExportIcon,
+  ImportIcon,
   SpinnerIcon,
   TableIcon,
 } from "@table-craft/desktop/renderer/ui/icons.js";
@@ -98,6 +108,17 @@ function exportActionsOf(entry: ExportEntry): readonly string[] {
   return [...finished, EXPORT_ACTION_IDS.dismiss];
 }
 
+/** What an import line offers: Cancel while it runs; Resume or Retry, the rejected rows and Remove after. */
+function importActionsOf(entry: ImportEntry): readonly string[] {
+  const { task } = entry;
+  if (task.state === "running") return [IMPORT_ACTION_IDS.cancel];
+  return [
+    ...(resumeLabel(task) === null ? [] : [IMPORT_ACTION_IDS.resume]),
+    ...(task.rejectedFile === null ? [] : [IMPORT_ACTION_IDS.revealRejected]),
+    IMPORT_ACTION_IDS.dismiss,
+  ];
+}
+
 function menuOf(row: ServiceRow, cancellable: boolean): readonly MenuEntry[] {
   if (row.kind === "session") {
     const args = { tabId: row.node.tabId };
@@ -109,6 +130,10 @@ function menuOf(row: ServiceRow, cancellable: boolean): readonly MenuEntry[] {
   if (row.kind === "export") {
     const args = { taskId: row.node.task.taskId };
     return exportActionsOf(row.node).map((actionId) => ({ actionId, args }));
+  }
+  if (row.kind === "import") {
+    const args = { taskId: row.node.task.taskId };
+    return importActionsOf(row.node).map((actionId) => ({ actionId, args }));
   }
   if (row.kind === "execution" && row.node.sql !== null) {
     const args = { tabId: row.tabId, executionId: row.node.id };
@@ -251,7 +276,93 @@ function ExportLine({ entry }: { readonly entry: ExportEntry }) {
   );
 }
 
+function TaskButtons({
+  actions,
+  taskId,
+}: {
+  readonly actions: readonly (readonly [string, string])[];
+  readonly taskId: string;
+}) {
+  return actions.map(([actionId, label]) => (
+    <button
+      key={actionId}
+      type="button"
+      tabIndex={-1}
+      data-action={actionId}
+      className="rounded px-1 text-accent hover:bg-raised"
+      onClick={(event) => {
+        event.stopPropagation();
+        invoke(actionId, { taskId });
+      }}
+    >
+      {label}
+    </button>
+  ));
+}
+
+function ImportsLine({ count }: { readonly count: number }) {
+  return (
+    <>
+      <ImportIcon aria-hidden className="size-icon shrink-0 text-accent" />
+      <span className="truncate">Imports</span>
+      <span className="text-ink-muted tabular-nums">{count}</span>
+    </>
+  );
+}
+
+function importButtons(entry: ImportEntry): readonly (readonly [string, string])[] {
+  const resume = resumeLabel(entry.task);
+  return importActionsOf(entry).flatMap((actionId): (readonly [string, string])[] => {
+    if (actionId === IMPORT_ACTION_IDS.cancel) return [[actionId, "Cancel"]];
+    if (actionId === IMPORT_ACTION_IDS.resume && resume !== null) return [[actionId, resume]];
+    if (actionId === IMPORT_ACTION_IDS.revealRejected) return [[actionId, "Rejected"]];
+    return [];
+  });
+}
+
+/**
+ * One background import: its file, table, state and progress; what was kept and the failure's
+ * message and hint in the tooltip. Cancel, Resume or Retry and the rejected rows are buttons too.
+ */
+function ImportLine({ entry }: { readonly entry: ImportEntry }) {
+  const { task } = entry;
+  const percent = importPercent(task);
+  const detail = [
+    `${task.file} → ${task.table}`,
+    ...importNotes(task),
+    ...(task.error === null ? [] : [task.error.message, task.error.hint]),
+  ].join("\n");
+  return (
+    <>
+      <OutcomeGlyph outcome={EXPORT_OUTCOME[task.state]} />
+      <span className="min-w-0 truncate" title={detail}>
+        {fileNameOf(task.file)} → {task.table}
+      </span>
+      <span className={cn("shrink-0", task.state === "failed" ? "text-danger" : "text-ink-muted")}>
+        {task.state === "running" && percent !== null
+          ? `${IMPORT_STATE_TEXT.running} ${String(percent)}%`
+          : IMPORT_STATE_TEXT[task.state]}
+      </span>
+      <span className="ml-auto flex shrink-0 items-center gap-cell text-ink-muted tabular-nums">
+        <span data-testid="import-progress">{importProgressText(task)}</span>
+        {task.rejected > 0 ? <span className="text-warning">{`${formatCount(task.rejected)} rejected`}</span> : null}
+        <TaskButtons actions={importButtons(entry)} taskId={task.taskId} />
+      </span>
+    </>
+  );
+}
+
 function rowLabel(row: ServiceRow): string {
+  if (row.kind === "imports") return `Imports, ${String(row.count)}`;
+  if (row.kind === "import") {
+    const { task } = row.node;
+    return [
+      `${fileNameOf(task.file)} into ${task.table}`,
+      IMPORT_STATE_TEXT[task.state],
+      importProgressText(task),
+      ...importNotes(task),
+    ].join(", ");
+  }
   if (row.kind === "datasource") return row.node.name;
   if (row.kind === "exports") return `Exports, ${String(row.count)}`;
   if (row.kind === "export") {
@@ -265,7 +376,7 @@ function rowLabel(row: ServiceRow): string {
 /**
  * The Services tree (plan 011 decision 12): each datasource with an open console or table tab, its
  * sessions, and what each sent, newest first. Enter or a click on a session or execution shows its tab.
- * Background exports follow under one Exports node (decision 040).
+ * Background exports follow under one Exports node (decision 040), imports under one Imports node.
  */
 export function ServicesPane() {
   const tabs = useTabs((state) => state.tabs);
@@ -276,6 +387,7 @@ export function ServicesPane() {
   const executions = useExecutions((state) => state.byTab);
   const datasources = useDatasources((state) => state.datasources);
   const exports = useExports((state) => state.entries);
+  const imports = useImports((state) => state.entries);
   const [selected, setSelected] = useState<string | null>(null);
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(NO_COLLAPSED);
   const elements = useRef(new Map<string, HTMLLIElement>());
@@ -284,7 +396,7 @@ export function ServicesPane() {
     () => servicesTree({ tabs, consoles, tables, executions, datasources }),
     [tabs, consoles, tables, executions, datasources],
   );
-  const rows = useMemo(() => serviceRows(tree, collapsed, exports), [tree, collapsed, exports]);
+  const rows = useMemo(() => serviceRows(tree, collapsed, exports, imports), [tree, collapsed, exports, imports]);
   const running = rows.some((row) => row.kind === "execution" && row.node.outcome === "running");
   const now = useNow(running);
   const selectedIndex = rows.findIndex((row) => row.key === selected);
@@ -358,7 +470,7 @@ export function ServicesPane() {
                 ? row.node.state
                 : row.kind === "execution"
                   ? row.node.outcome
-                  : row.kind === "export"
+                  : row.kind === "export" || row.kind === "import"
                     ? row.node.task.state
                     : undefined
             }
@@ -396,6 +508,10 @@ export function ServicesPane() {
               <ExportsLine count={row.count} />
             ) : row.kind === "export" ? (
               <ExportLine entry={row.node} />
+            ) : row.kind === "imports" ? (
+              <ImportsLine count={row.count} />
+            ) : row.kind === "import" ? (
+              <ImportLine entry={row.node} />
             ) : (
               <ExecutionLine execution={row.node} now={now} />
             )}

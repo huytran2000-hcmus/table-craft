@@ -10,7 +10,7 @@ const HEX_DIGITS_PER_BYTE = 2;
 const TRAILING_STOP = /\.$/u;
 
 const STALL_HINT =
-  "Check the network and the server, then choose Retry. If the query is slow to return its first row, raise Export stall timeout in Settings.";
+  "Check the network and the server, then choose Retry. If the query is slow to return its first row, raise Transfer stall timeout in Settings.";
 const CANCEL_HINT = "Export again when you are ready.";
 const SOURCE_HINT = "Check the connection, then choose Retry; the export starts again from the first row.";
 

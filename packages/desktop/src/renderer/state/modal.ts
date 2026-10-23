@@ -1,4 +1,12 @@
 import { create } from "zustand";
+import type {
+  ImportErrorPolicy,
+  ImportFormat,
+  ImportMapping,
+  ImportPreview,
+  ImportTransaction,
+  NewImportColumn,
+} from "@table-craft/desktop/engine/protocol.js";
 import type { HistoryStatement } from "@table-craft/desktop/preload/bridge.js";
 
 /** A line of a confirmation's list: a statement and why it is listed, say. */
@@ -106,6 +114,24 @@ export type ModalRequest =
       readonly note: string;
     }
   | {
+      /**
+       * Import Data (plan 021): a file, its format with a preview, where each column goes and what
+       * a bad row or a lost link leaves; resolves `importAnswer`.
+       */
+      readonly kind: "import";
+      readonly title: string;
+      /** Where the rows go, said under the title. */
+      readonly note: string;
+      /** The existing table's columns; null when the import creates the table. */
+      readonly columns: readonly string[] | null;
+      /** The new table's suggested name; the existing table's name otherwise. */
+      readonly relation: string;
+      readonly browse: () => Promise<string | null>;
+      readonly preview: (file: string, format: ImportFormat) => Promise<ImportPreview>;
+      readonly ddl: (relation: string, columns: readonly NewImportColumn[]) => Promise<string>;
+      readonly highlight: string | null | undefined;
+    }
+  | {
       /** Open Closed Console (plan 011 decision 14): resolves `pickerAnswer(choice, name)` for a `CLOSED_CONSOLE_CHOICES` choice. */
       readonly kind: "closedConsoles";
       readonly title: string;
@@ -166,6 +192,25 @@ export function exportAnswer(answer: ExportAnswer): string {
 
 export function parseExportAnswer(answer: string): ExportAnswer {
   return JSON.parse(answer) as ExportAnswer;
+}
+
+/** What the Import Data dialog answers: `mapping` for an existing table, `columns` for a new one. */
+export interface ImportAnswer {
+  readonly file: string;
+  readonly format: ImportFormat;
+  readonly relation: string;
+  readonly mapping: readonly ImportMapping[] | null;
+  readonly columns: readonly NewImportColumn[] | null;
+  readonly transaction: ImportTransaction;
+  readonly errors: ImportErrorPolicy;
+}
+
+export function importAnswer(answer: ImportAnswer): string {
+  return JSON.stringify(answer);
+}
+
+export function parseImportAnswer(answer: string): ImportAnswer {
+  return JSON.parse(answer) as ImportAnswer;
 }
 
 /** The radio group's arrow keys, as WAI-ARIA's radio group pattern moves them. */

@@ -41,6 +41,7 @@ export type ActionIcon =
   | "fetchAll"
   | "rerun"
   | "export"
+  | "import"
   | "valuePanel"
   | "sortAscending"
   | "sortDescending"
