@@ -13,6 +13,7 @@ import {
   type ExplainedPlan,
   type ExplainOptions,
   type Introspector,
+  type ParameterValue,
   type Row,
   type PluginErrorCode,
   type Session,
@@ -31,10 +32,13 @@ import {
   SQL_KEYWORDS,
   sqlCompleter,
   sqlExplainable,
+  sqlFormatter,
   sqlGenerator,
   sqlLiteral,
+  sqlParameters,
   sqlSplitter,
   transactionEffect,
+  type ParameterOptions,
   type SqlDialectOptions,
   type SqlLiteralOptions,
 } from "@table-craft/plugin-api/sql";
@@ -59,6 +63,8 @@ const DIALECT: SqlDialectOptions = {
   hashComments: true,
   blockKeywords: ["BEGIN"],
 };
+
+const PARAMETERS: ParameterOptions = { dialect: DIALECT, styles: ["named", "positional"], native: "positional" };
 
 const LITERALS: SqlLiteralOptions = { backslashEscapes: true, bytes: (hex) => `X'${hex}'` };
 
@@ -96,6 +102,8 @@ const language: SqlLanguage = {
     keywords: KEYWORDS,
   }),
   explainable,
+  ...sqlFormatter({ dialect: "mysql", lexer: DIALECT, parameters: PARAMETERS.styles }),
+  ...sqlParameters(PARAMETERS),
 };
 
 /** Manual mode is autocommit off: the server opens a transaction with the next statement. */
@@ -298,11 +306,23 @@ interface InFlight {
   readonly fields: Promise<mysql.FieldPacket[] | undefined>;
 }
 
-function start(connection: mysql.Connection, sql: string): InFlight {
-  const query = connection.query({ sql, rowsAsArray: true, typeCast: cast });
+/**
+ * Without values, the text protocol. With them, a server-side prepared statement, so the server
+ * binds them (decision 043); it is closed once the statement ends, as mysql2 would otherwise
+ * cache one per distinct text for the life of the connection.
+ */
+function start(connection: mysql.Connection, sql: string, params: readonly ParameterValue[]): InFlight {
+  const prepared = params.length > 0;
+  const options = { sql, rowsAsArray: true, typeCast: cast };
+  const query = prepared ? connection.execute({ ...options, values: [...params] }) : connection.query(options);
   // The stream reports the error; this listener stops the query's own emit from throwing.
   query.on("error", () => undefined);
-  const ended = new Promise<void>((resolve) => query.once("end", () => resolve()));
+  const ended = new Promise<void>((resolve) =>
+    query.once("end", () => {
+      if (prepared) connection.unprepare(sql);
+      resolve();
+    }),
+  );
   const stream = query.stream({ highWaterMark: FETCH_ROWS });
   const fields = new Promise<mysql.FieldPacket[] | undefined>((resolve, reject) => {
     stream.once("fields", resolve);
@@ -348,7 +368,7 @@ class MysqlSession implements Session {
     });
   }
 
-  async execute(sql: string): Promise<ExecuteResult> {
+  async execute(sql: string, params: readonly ParameterValue[] = []): Promise<ExecuteResult> {
     if (this.#broken !== null) {
       throw new PluginError("statementFailed", `The connection was lost: ${this.#broken.message}`);
     }
@@ -356,7 +376,7 @@ class MysqlSession implements Session {
     await this.#cancelling.catch(() => undefined);
     const running: Running = { cancelRequested: false };
     this.#running = running;
-    const inFlight = start(this.#connection, sql);
+    const inFlight = start(this.#connection, sql, params);
     try {
       const fields = await inFlight.fields.catch((cause: unknown) => {
         if (transactionEffect(sql, DIALECT) === "end") this.#transaction.open = false;

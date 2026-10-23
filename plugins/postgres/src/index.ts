@@ -13,6 +13,7 @@ import {
   type ExplainedPlan,
   type ExplainOptions,
   type Introspector,
+  type ParameterValue,
   type Row,
   type Session,
   type SqlLanguage,
@@ -30,10 +31,13 @@ import {
   SQL_KEYWORDS,
   sqlCompleter,
   sqlExplainable,
+  sqlFormatter,
   sqlGenerator,
   sqlLiteral,
+  sqlParameters,
   sqlSplitter,
   transactionEffect,
+  type ParameterOptions,
   type SqlDialectOptions,
   type SqlLiteralOptions,
 } from "@table-craft/plugin-api/sql";
@@ -53,6 +57,8 @@ const CAPABILITIES: readonly Capability[] = [
 
 /** Function bodies live in dollar quotes; `BEGIN ATOMIC … END` holds a SQL-standard body. */
 const DIALECT: SqlDialectOptions = { dollarQuotes: true, nestedBlockComments: true, blockKeywords: ["BEGIN"] };
+
+const PARAMETERS: ParameterOptions = { dialect: DIALECT, styles: ["named", "numbered"], native: "numbered" };
 
 const LITERALS: SqlLiteralOptions = { backslashEscapes: false, bytes: (hex) => `'\\x${hex}'::bytea` };
 
@@ -91,6 +97,8 @@ const language: SqlLanguage = {
     keywords: KEYWORDS,
   }),
   explainable,
+  ...sqlFormatter({ dialect: "postgresql", lexer: DIALECT, parameters: PARAMETERS.styles }),
+  ...sqlParameters(PARAMETERS),
 };
 
 const BEGIN_SQL = "BEGIN";
@@ -308,7 +316,7 @@ class PostgresSession implements Session {
     }
   }
 
-  async execute(sql: string): Promise<ExecuteResult> {
+  async execute(sql: string, params: readonly ParameterValue[] = []): Promise<ExecuteResult> {
     if (this.#broken !== null) {
       throw new PluginError("statementFailed", `The connection was lost: ${this.#broken.message}`);
     }
@@ -327,7 +335,12 @@ class PostgresSession implements Session {
       this.#running = null;
       throw this.#failure(cause, running);
     }
-    const cursor = this.#client.query(new Cursor<unknown[]>(sql, undefined, { rowMode: "array", types: TEXT_TYPES }));
+    const cursor = this.#client.query(
+      new Cursor<unknown[]>(sql, params.length === 0 ? undefined : [...params], {
+        rowMode: "array",
+        types: TEXT_TYPES,
+      }),
+    );
     try {
       const first = await readBatch(cursor).catch((cause: unknown) => {
         // A failed COMMIT still ends the transaction; a failed statement inside one leaves it open.

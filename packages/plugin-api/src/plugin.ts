@@ -48,12 +48,16 @@ export interface ExecuteResult {
   readonly rowsAffected: number | null;
 }
 
+/** A value bound to a placeholder: text the server casts, or SQL NULL (decision 043). */
+export type ParameterValue = string | null;
+
 export interface Session {
   /**
    * Rejects with a `PluginError`: `cancelled` when `cancel` interrupted it, `statementFailed`
-   * otherwise. A session runs one statement at a time.
+   * otherwise. A session runs one statement at a time. `params` are bound by the driver to the
+   * dialect's native placeholders in `sql`, as `SqlLanguage.bind` wrote them; never spliced.
    */
-  execute(sql: string): Promise<ExecuteResult>;
+  execute(sql: string, params?: readonly ParameterValue[]): Promise<ExecuteResult>;
   /**
    * Present exactly when the plugin declares `cancel`. Interrupts the running statement, which
    * then rejects with `cancelled`, and leaves the session usable; a no-op when nothing runs.
@@ -102,6 +106,38 @@ export interface StatementClass {
   readonly destructive: string | null;
 }
 
+export const KEYWORD_CASES = ["upper", "lower", "preserve"] as const;
+
+export type KeywordCase = (typeof KEYWORD_CASES)[number];
+
+/** How `SqlLanguage.format` lays text out (decision 042). */
+export interface FormatOptions {
+  readonly keywordCase: KeywordCase;
+  readonly indentWidth: number;
+  /** Blank lines between two statements. */
+  readonly linesBetweenStatements: number;
+}
+
+export const PARAMETER_STYLES = ["named", "numbered", "positional"] as const;
+
+/** `:name`, `$1`, or a bare `?` (decision 043). */
+export type ParameterStyle = (typeof PARAMETER_STYLES)[number];
+
+/** One placeholder in a statement, in UTF-16 offsets into the text `parameters` received. */
+export interface SqlParameter {
+  /** As written for `:name` and `$1`; the n-th bare `?` is `?n`. Occurrences sharing a name share a value. */
+  readonly name: string;
+  readonly from: number;
+  readonly to: number;
+  readonly style: ParameterStyle;
+}
+
+/** A statement rewritten to the dialect's native placeholders, and the values for them in order. */
+export interface BoundStatement {
+  readonly sql: string;
+  readonly params: readonly ParameterValue[];
+}
+
 /** What the console asks the plugin about its dialect (decision 008); the host never parses SQL. */
 export interface SqlLanguage {
   /** Every non-empty statement in `text`, in order. Comments and blanks between statements belong to none. */
@@ -141,6 +177,23 @@ export interface SqlLanguage {
    * writes. Pure; `sqlExplainable` in `@table-craft/plugin-api/sql` implements it.
    */
   explainable?(sql: string, options: ExplainOptions): Explainability;
+  /**
+   * `text` laid out by `options` (decision 042), comments and literals untouched. Throws an `Error`
+   * whose message says why when the text cannot be read; the host then leaves the text as it was.
+   * `sqlFormatter` in `@table-craft/plugin-api/sql` implements it.
+   */
+  format(text: string, options: FormatOptions): string;
+  /**
+   * Every placeholder in `statement`, one statement without its delimiter, in order (decision 043).
+   * Nothing inside a literal, quoted identifier or comment is one. `sqlParameters` implements it.
+   */
+  parameters(statement: string): readonly SqlParameter[];
+  /**
+   * `statement` with each placeholder `parameters` finds rewritten to the driver's native form, and
+   * the values in the order `Session.execute` binds them. Throws a `PluginError` coded
+   * `statementFailed` naming a placeholder `values` has no entry for.
+   */
+  bind(statement: string, values: Readonly<Record<string, ParameterValue>>): BoundStatement;
 }
 
 export const TRANSACTION_MODES = ["auto", "manual"] as const;

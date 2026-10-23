@@ -12,6 +12,7 @@ import {
   type ExplainedPlan,
   type ExplainOptions,
   type Introspector,
+  type ParameterValue,
   type PluginErrorCode,
   type Row,
   type Session,
@@ -28,10 +29,13 @@ import {
   SQL_KEYWORDS,
   sqlCompleter,
   sqlExplainable,
+  sqlFormatter,
   sqlGenerator,
   sqlLiteral,
+  sqlParameters,
   sqlSplitter,
   transactionEffect,
+  type ParameterOptions,
   type SqlDialectOptions,
   type SqlLiteralOptions,
 } from "@table-craft/plugin-api/sql";
@@ -44,6 +48,8 @@ const CAPABILITIES: readonly Capability[] = ["sql", "schemaTree", "transactions"
 
 /** Trigger bodies are `BEGIN … END` and hold semicolons. */
 const DIALECT: SqlDialectOptions = { blockKeywords: ["BEGIN"] };
+
+const PARAMETERS: ParameterOptions = { dialect: DIALECT, styles: ["named", "positional"], native: "positional" };
 
 const LITERALS: SqlLiteralOptions = { backslashEscapes: false, bytes: (hex) => `X'${hex}'` };
 
@@ -74,6 +80,8 @@ const language: SqlLanguage = {
   }),
   ...sqlGenerator({ quoteIdentifier, updateDefault, plainIdentifier: PLAIN_IDENTIFIER, keywords: KEYWORDS }),
   explainable,
+  ...sqlFormatter({ dialect: "sqlite", lexer: DIALECT, parameters: PARAMETERS.styles }),
+  ...sqlParameters(PARAMETERS),
 };
 
 const BEGIN_SQL = "BEGIN";
@@ -180,7 +188,7 @@ class SqliteSession implements Session {
     this.serverVersion = typeof row?.version === "string" ? row.version : null;
   }
 
-  execute(sql: string): Promise<ExecuteResult> {
+  execute(sql: string, params: readonly ParameterValue[] = []): Promise<ExecuteResult> {
     return settle("statementFailed", () => {
       const database = this.#database;
       if (this.#mode === "manual" && !database.isTransaction && transactionEffect(sql, DIALECT) === null) {
@@ -190,11 +198,11 @@ class SqliteSession implements Session {
       statement.setReadBigInts(true);
       const columns: Column[] = statement.columns().map((column) => ({ name: column.name, type: column.type }));
       if (columns.length === 0) {
-        const { changes } = statement.run();
+        const { changes } = statement.run(...params);
         return { columns, rows: readRows([].values(), []), rowsAffected: Number(changes) };
       }
       statement.setReturnArrays(true);
-      return { columns, rows: readRows(statement.iterate(), columns.map(cellFor)), rowsAffected: null };
+      return { columns, rows: readRows(statement.iterate(...params), columns.map(cellFor)), rowsAffected: null };
     });
   }
 

@@ -4,6 +4,7 @@ import {
   DefinitionNotFoundError,
   isPluginError,
   z,
+  type BoundStatement,
   type CompletionCatalog,
   type ConnectOptions,
   type DatasourcePlugin,
@@ -424,6 +425,79 @@ export function runPluginContract(plugin: DatasourcePlugin, fixture: ContractFix
           const result = await session.execute(`SELECT * FROM ${TYPE_PROBE_TABLE} ORDER BY id`);
           expect(result.columns.map((column) => column.name)).toEqual(TYPE_PROBE_COLUMNS);
           expect(await collect(result.rows)).toEqual(fixture.typeProbe.expected);
+        });
+      });
+
+      describe("bound parameters", () => {
+        function bound(sql: string, values: Readonly<Record<string, string | null>>): BoundStatement {
+          if (plugin.language === undefined) throw new Error("A plugin that declares sql needs language.");
+          return plugin.language.bind(sql, values);
+        }
+
+        it("givenParams_whenExecute_thenBoundAsValues", async () => {
+          const statement = bound("SELECT name FROM customers WHERE id = :id AND name <> ':id'", { ":id": "2" });
+          await withSession(plugin, fixture, async (session) => {
+            expect(await collect((await session.execute(statement.sql, statement.params)).rows)).toEqual([
+              ["Grace Hopper"],
+            ]);
+          });
+        });
+
+        it("givenNullParam_whenExecute_thenBindsNull", async () => {
+          const statement = bound("SELECT name FROM customers WHERE id = :id OR :id IS NULL ORDER BY id", {
+            ":id": null,
+          });
+          await withSession(plugin, fixture, async (session) => {
+            expect(await collect((await session.execute(statement.sql, statement.params)).rows)).toEqual([
+              ["Ada Lovelace"],
+              ["Grace Hopper"],
+            ]);
+          });
+        });
+
+        it("givenQuoteInParam_whenExecute_thenLandsAsData", async () => {
+          const value = "'; DROP TABLE customers; --";
+          const statement = bound("SELECT name FROM customers WHERE name = :name OR id = :id", {
+            ":name": value,
+            ":id": "1",
+          });
+          await withSession(plugin, fixture, async (session) => {
+            expect(await collect((await session.execute(statement.sql, statement.params)).rows)).toEqual([
+              ["Ada Lovelace"],
+            ]);
+            const remaining = await session.execute("SELECT id FROM customers ORDER BY id");
+            expect(await collect(remaining.rows)).toEqual([[1], [2]]);
+          });
+        });
+
+        it("givenParamsThenPlainStatement_whenExecuted_thenBothRun", async () => {
+          const statement = bound("SELECT name FROM customers WHERE id = :id", { ":id": "1" });
+          await withSession(plugin, fixture, async (session) => {
+            for (let run = 0; run < 2; run += 1) {
+              expect(await collect((await session.execute(statement.sql, statement.params)).rows)).toEqual([
+                ["Ada Lovelace"],
+              ]);
+            }
+            expect(await collect((await session.execute("SELECT 1 AS one")).rows)).toEqual([[1]]);
+          });
+        });
+
+        it("givenLanguage_whenFormatAndBind_thenRoundTripsThroughExecute", async () => {
+          const language = plugin.language;
+          if (language === undefined) throw new Error("A plugin that declares sql needs language.");
+          const formatted = language.format("select name from customers where id = :id -- the second", {
+            keywordCase: "upper",
+            indentWidth: 2,
+            linesBetweenStatements: 1,
+          });
+          expect(formatted).toContain("-- the second");
+          expect(language.parameters(formatted).map((parameter) => parameter.name)).toEqual([":id"]);
+          const statement = language.bind(formatted, { ":id": "2" });
+          await withSession(plugin, fixture, async (session) => {
+            expect(await collect((await session.execute(statement.sql, statement.params)).rows)).toEqual([
+              ["Grace Hopper"],
+            ]);
+          });
         });
       });
 

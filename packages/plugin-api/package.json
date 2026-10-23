@@ -10,6 +10,7 @@
     "./testing": "./src/testing/index.ts"
   },
   "dependencies": {
+    "sql-formatter": "^15.9.0",
     "zod": "^4.1.0"
   },
   "peerDependencies": {

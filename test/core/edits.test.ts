@@ -25,14 +25,18 @@ import {
   defaultValuesInsert,
   quoteIdentifierWith,
   sqlCompleter,
+  sqlFormatter,
   sqlGenerator,
   sqlLiteral,
+  sqlParameters,
   sqlSplitter,
   classifyTokens,
 } from "@table-craft/plugin-api/sql";
 import { describe, expect, it } from "vitest";
 
 const LANGUAGE: SqlLanguage = {
+  ...sqlFormatter({ dialect: "sqlite", lexer: {}, parameters: [] }),
+  ...sqlParameters({ dialect: {}, styles: [], native: "positional" }),
   split: sqlSplitter({}),
   classify: (sql) => classifyTokens(sql, {}),
   quoteIdentifier: quoteIdentifierWith('"'),
