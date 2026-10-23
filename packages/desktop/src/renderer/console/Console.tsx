@@ -69,25 +69,26 @@ export function Console({ consoleId }: { readonly consoleId: string }) {
           </button>
         )}
         {datasource === undefined ? null : (
-          // The datasource and plugin names truncate, the namespace never: it is what changes under
-          // the console, and a long error beside it once squeezed it out of sight (plan 022).
+          // The datasource and plugin names give up their width first, the namespace last: it is what
+          // changes under the console, and a long error beside it once squeezed it out of sight
+          // (plan 022). A namespace longer than the whole toolbar's room still ends in an ellipsis.
           <span
             data-testid="console-datasource"
             className="ml-auto flex min-w-0 items-center overflow-hidden whitespace-pre text-ink-muted"
           >
             {datasource.readOnly ? <ReadOnlyIcon aria-hidden className="mr-1 size-icon shrink-0" /> : null}
-            <span className="min-w-0 truncate">
+            <span className="min-w-0 shrink-first truncate">
               {datasource.readOnly ? "read-only · " : ""}
               {datasource.name}
             </span>
             {capabilities.includes("currentNamespace") ? (
-              <span className="flex shrink-0 items-center">
+              <span className="flex min-w-0 items-center">
                 {" · "}
                 <NamespaceSwitcher consoleId={consoleId} session={session} />
               </span>
             ) : null}
             {plugin === undefined ? null : (
-              <span className="min-w-0 overflow-hidden text-ellipsis">{` · ${plugin.name}`}</span>
+              <span className="min-w-0 shrink-first overflow-hidden text-ellipsis">{` · ${plugin.name}`}</span>
             )}
           </span>
         )}

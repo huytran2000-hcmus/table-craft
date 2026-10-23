@@ -151,7 +151,7 @@ export function NamespaceSwitcher({ consoleId, session }: { consoleId: string; s
           aria-expanded={open}
           aria-disabled={blocked !== null}
           className={cn(
-            "flex shrink-0 items-center gap-1 rounded px-1 text-ink",
+            "flex min-w-0 items-center gap-1 rounded px-1 text-ink",
             blocked === null ? "hover:bg-raised" : "cursor-default opacity-50",
           )}
           onMouseDown={(event) => event.preventDefault()}
@@ -162,9 +162,11 @@ export function NamespaceSwitcher({ consoleId, session }: { consoleId: string; s
           {namespace === null ? (
             <span className="text-ink-muted">{UNKNOWN_NAMESPACE}</span>
           ) : (
-            <span data-testid="console-namespace">{namespace.text}</span>
+            <span data-testid="console-namespace" className="min-w-0 truncate" title={namespace.title}>
+              {namespace.text}
+            </span>
           )}
-          <DropdownIcon aria-hidden className="size-icon text-ink-muted" />
+          <DropdownIcon aria-hidden className="size-icon shrink-0 text-ink-muted" />
         </button>
       </Tooltip>
       {open && anchor !== null ? <SwitcherList session={session} anchor={anchor} /> : null}

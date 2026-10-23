@@ -78,6 +78,13 @@ body {
   font-size: var(--text-ui);
 }
 
+/* Gives up its width before flex siblings that shrink normally: the deficit is shared in proportion
+   to the shrink factor, and an item at its minimum width stops taking. A small factor on the
+   sibling instead would not work: factors summing below 1 leave the rest of the deficit overflowing. */
+@utility shrink-first {
+  flex-shrink: 1000;
+}
+
 .app-drag {
   app-region: drag;
   -webkit-app-region: drag;
