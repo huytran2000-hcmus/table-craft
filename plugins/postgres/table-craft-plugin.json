@@ -2,7 +2,7 @@
   "id": "postgres",
   "name": "PostgreSQL",
   "version": "0.0.0",
-  "apiVersion": "0.11.0",
+  "apiVersion": "0.12.0",
   "entry": "index.js",
   "capabilities": ["sql", "cancel", "schemaTree", "transactions", "ddl", "explain", "explainAnalyze"],
   "highlight": "postgresql",

@@ -19,7 +19,7 @@ its own MessagePort (decision 002).
 
 A plugin is a directory with `table-craft-plugin.json` and an ESM entry exporting a
 `DatasourcePlugin` (decisions 005 to 008). The contract lives in `@table-craft/plugin-api`.
-`API_VERSION` is `0.11.0`; while it is `0.x` the contract is unstable and every minor is a break.
+`API_VERSION` is `0.12.0`; while it is `0.x` the contract is unstable and every minor is a break.
 
 ### Discovery
 
@@ -133,16 +133,22 @@ type GeneratedStatement = "drop" | "select" | "insert" | "update";
 
 interface ConnectOptions {
   readonly readOnly: boolean; // a guard against mistakes, not a security boundary (decision 011)
+  readonly keepAliveInitialDelayMs?: number; // TCP keepalive on network drivers; an export asks (decision 040)
+}
+
+interface ExecuteOptions {
+  readonly fullBytes?: boolean; // BytesValue.preview carries every byte; an export asks (decision 040)
 }
 
 interface Session {
   readonly serverVersion: string | null; // "17.4", "8.4.3", "3.53.4"
-  execute(sql: string, params?: readonly ParameterValue[]): Promise<ExecuteResult>; // one at a time; params bind the driver's placeholders; rejects with a PluginError
+  execute(sql: string, params?: readonly ParameterValue[], options?: ExecuteOptions): Promise<ExecuteResult>; // one at a time; params bind the driver's placeholders; rejects with a PluginError
+  readonly privateDatabase?: boolean; // another session on the same config sees another database (SQLite :memory:)
   cancel?(): Promise<void>; // present exactly when `cancel` is declared; no-op when idle
   readonly introspector?: Introspector; // present exactly when `schemaTree` is declared
   readonly transactions?: Transactions; // present exactly when `transactions` is declared
   explain?(sql: string, options: ExplainOptions): Promise<ExplainedPlan>; // present exactly when `explain` is declared
-  close(): Promise<void>;
+  close(): Promise<void>; // settles in bounded time even on a dead network
 }
 
 interface Transactions {
@@ -711,7 +717,7 @@ file may be many gigabytes at flat memory:
 
 - Source. A result whose statement reads (`classify` is `read`), on a session with no open
   transaction and no private database, is re-run on a session of the export's own, read-only, with
-  TCP keepalive and `fullBytes` (contract 0.11.0); one statement reads one snapshot. Otherwise a
+  TCP keepalive and `fullBytes` (contract 0.12.0); one statement reads one snapshot. Otherwise a
   complete result is written from memory, and an open cursor is drained (the grid shows
   Exporting… until it ends). A table export runs `SELECT <columns> FROM <table>` on its own
   session. Bytes are exported whole except from memory or a drained cursor, where the task counts

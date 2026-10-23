@@ -16,7 +16,7 @@ Where the rows come from:
 
 - A read statement (the plugin's `classify` says `read`) whose console has no open transaction is
   run again on a session of the export's own, opened read-only with TCP keepalive and asked for
-  whole binary values (`ExecuteOptions.fullBytes`, plugin API 0.11.0). The console stays free. A
+  whole binary values (`ExecuteOptions.fullBytes`, plugin API 0.12.0). The console stays free. A
   plugin whose sessions cannot see each other's data (`Session.privateDatabase`, SQLite's
   `:memory:`) is never re-run elsewhere.
 - Otherwise a result that has read every row exports what the engine holds, and one with an open
@@ -66,7 +66,7 @@ timer per open window and late cancels.
 - The engine has push events; the renderer's engine client dispatches messages with no `id` to
   listeners, and the Services tree shows them under an Exports node, with the status bar's
   `Exporting N`.
-- The plugin contract is 0.11.0: `Session.execute(sql, options?)` with `fullBytes`,
+- The plugin contract is 0.12.0: `Session.execute(sql, params?, options?)` with `fullBytes`,
   `ConnectOptions.keepAliveInitialDelayMs`, `Session.privateDatabase` and a bounded `close()`. A
   plugin that ignores `fullBytes` still exports, with previews counted on the task.
 - The chaos suite (`test/db/export.chaos.test.ts`) proves stalls, resets, slow links and cancel

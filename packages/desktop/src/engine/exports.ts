@@ -15,6 +15,7 @@ import {
   type SinkFiles,
 } from "@table-craft/core";
 import type { Column, Row } from "@table-craft/plugin-api";
+import type { Logger } from "@table-craft/desktop/log/record.js";
 import type {
   EngineErrorCode,
   ExportEvent,
@@ -79,7 +80,8 @@ export interface ExportTasksOptions {
   readonly files?: SinkFiles;
   /** Free bytes in a folder; null when the platform cannot tell. */
   readonly freeBytes?: (folder: string) => Promise<number | null>;
-  readonly log?: Pick<Console, "info" | "warn">;
+  /** How each task ended, never its rows or the statement (decision 038); silent when absent. */
+  readonly log?: Pick<Logger, "info" | "warn">;
 }
 
 interface Running {
@@ -132,6 +134,8 @@ function withinGrace(pending: Promise<void>, clock: ExportClock): Promise<void> 
   });
 }
 
+const SILENT: Pick<Logger, "info" | "warn"> = { info: () => undefined, warn: () => undefined };
+
 /**
  * The engine's export tasks (decision 040). One table for the whole engine, not per renderer
  * port, so a reloaded window finds its exports still running.
@@ -140,7 +144,7 @@ export function exportTasks(options: ExportTasksOptions = {}): ExportTasks {
   const clock = options.clock ?? systemClock;
   const files = options.files ?? nodeSinkFiles;
   const freeBytes = options.freeBytes ?? systemFreeBytes;
-  const log = options.log ?? console;
+  const log = options.log ?? SILENT;
   const tasks = new Map<string, Running>();
   const listeners = new Set<ExportListener>();
   let next = 1;
@@ -214,11 +218,17 @@ export function exportTasks(options: ExportTasksOptions = {}): ExportTasks {
     await withinGrace(closeSource(), clock);
     update({ ...outcome.patch, elapsedMs: clock.now() - started });
     const { task } = entry;
-    if (task.state === "done") {
-      log.info(`Export ${taskId} done: ${String(task.rows)} rows, ${byteSize(task.bytes)} to ${task.path}.`);
-    } else {
-      log.warn(`Export ${taskId} ${task.state}: ${task.error?.message ?? ""}`);
-    }
+    const fields = {
+      taskId,
+      format: task.format,
+      origin: task.origin,
+      rows: task.rows,
+      bytes: task.bytes,
+      elapsedMs: task.elapsedMs,
+    };
+    if (task.state === "done") log.info("export finished", { ...fields, sheets: task.sheets });
+    else if (task.state === "cancelled") log.info("export cancelled", fields);
+    else log.warn("export failed", { ...fields, reason: task.error?.reason, error: task.error?.message });
     emit(outcome.type, task);
   }
 
@@ -248,7 +258,6 @@ export function exportTasks(options: ExportTasksOptions = {}): ExportTasks {
       },
     };
     tasks.set(taskId, entry);
-    log.info(`Export ${taskId} started: ${job.format} from ${job.origin} to ${job.path}.`);
     entry.done = run(entry, stallMs);
     return entry.task;
   }

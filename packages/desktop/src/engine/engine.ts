@@ -485,7 +485,7 @@ export function createEngine(options: EngineOptions, now: () => number = Date.no
     return language.resolve(request, await completionCatalogOf());
   }
 
-  const tasks = exportTasks();
+  const tasks = exportTasks(log === null ? {} : { log: log.child("export") });
 
   /** An export's rows from `sql` on a read-only session of its own, every byte of binary values in full. */
   async function exportRowsOf(sql: string): Promise<ExportRows> {

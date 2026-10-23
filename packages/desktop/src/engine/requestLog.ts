@@ -49,7 +49,9 @@ const SCOPES: Readonly<Record<string, string>> = {
   "transaction.setMode": "transaction",
   "transaction.commit": "transaction",
   "transaction.rollback": "transaction",
-  "result.export": "export",
+  "export.start": "export",
+  "export.cancel": "export",
+  "export.retry": "export",
   "edits.submit": "edits",
 };
 const DEFAULT_SCOPE = "request";
@@ -97,8 +99,14 @@ function summary(request: LoggedRequest, result: unknown, context: RequestContex
       return ["transaction committed", { ...base, sessionId: request.sessionId }];
     case "transaction.rollback":
       return ["transaction rolled back", { ...base, sessionId: request.sessionId }];
-    case "result.export":
-      return ["result exported", { ...base, extractor: request.extractor, rows: value.rows, bytes: value.bytes }];
+    case "export.start":
+    case "export.retry":
+      return [
+        "export started",
+        { ...base, taskId: value.taskId, format: value.format, origin: value.origin, retryOf: request.taskId },
+      ];
+    case "export.cancel":
+      return ["export cancel requested", { ...base, taskId: request.taskId }];
     case "edits.submit":
       return [
         "edits submitted",
@@ -117,7 +125,8 @@ function summary(request: LoggedRequest, result: unknown, context: RequestContex
 const FAILURE_MESSAGES: Readonly<Record<string, string>> = {
   "session.open": "connect failed",
   "statement.execute": "statement failed",
-  "result.export": "export failed",
+  "export.start": "export refused",
+  "export.retry": "export refused",
   "edits.submit": "edits rejected",
 };
 

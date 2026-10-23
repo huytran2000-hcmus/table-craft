@@ -1,8 +1,11 @@
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import type { PluginLoadResult } from "@table-craft/core";
 import sqlite from "@table-craft/plugin-sqlite";
 import { createEngine } from "@table-craft/desktop/engine/engine.js";
-import { RESULT_FETCH_ALL_CAP, RESULT_PAGE_ROWS } from "@table-craft/desktop/engine/protocol.js";
+import { RESULT_FETCH_ALL_CAP, RESULT_PAGE_ROWS, type EngineEvent } from "@table-craft/desktop/engine/protocol.js";
 import { connectionTarget } from "@table-craft/desktop/engine/requestLog.js";
 import { createLogger, type LogRecord } from "@table-craft/desktop/log/record.js";
 import { SQLITE_MANIFEST } from "../support/manifests.js";
@@ -16,7 +19,7 @@ const LOADED_SQLITE: PluginLoadResult = {
 };
 const SECRET_TEXT = "SELECT 'a row value nobody may log' AS v";
 
-async function loggedSession() {
+async function loggedSession(emit: (event: EngineEvent) => void = () => undefined) {
   const records: LogRecord[] = [];
   const connection = createEngine(
     {
@@ -25,7 +28,7 @@ async function loggedSession() {
       log: createLogger({ process: "engine", scope: "engine", sink: (record) => records.push(record) }),
     },
     () => 0,
-  ).connect();
+  ).connect(emit);
   const opened = (await connection.handle({ id: 1, type: "session.open" })) as { result: { sessionId: string } };
   return { connection, records, sessionId: opened.result.sessionId };
 }
@@ -65,6 +68,52 @@ describe("engine request log", () => {
     expect(failed).toMatchObject({ level: "warn", requestId: 9, code: "statementFailed" });
     expect(failed?.err?.cause?.message).toContain("syntax error");
     expect(JSON.stringify(failed)).not.toContain('nonsense"');
+  });
+
+  it("givenExport_whenItEnds_thenStartAndFinishLoggedWithoutPathOrRows", async () => {
+    const folder = await mkdtemp(join(tmpdir(), "table-craft-export-log-"));
+    let ended = (): void => undefined;
+    const done = new Promise<void>((resolve) => {
+      ended = resolve;
+    });
+    const { connection, records, sessionId } = await loggedSession((event) => {
+      if (event.type === "export.done") ended();
+    });
+    try {
+      const executed = (await connection.handle({
+        id: 2,
+        type: "statement.execute",
+        sessionId,
+        sql: SECRET_TEXT,
+        ...PAGING,
+      })) as { result: { handle: string } };
+      await connection.handle({
+        id: 3,
+        type: "export.start",
+        source: { kind: "result", handle: executed.result.handle, columns: [0] },
+        format: "csv",
+        path: join(folder, "secret-name.csv"),
+        stallSeconds: 120,
+      });
+      await done;
+
+      expect(records.find((record) => record.msg === "export started")).toMatchObject({
+        scope: "export",
+        requestId: 3,
+        format: "csv",
+        origin: "memory",
+      });
+      expect(records.find((record) => record.msg === "export finished")).toMatchObject({
+        level: "info",
+        scope: "export",
+        rows: 1,
+      });
+      expect(JSON.stringify(records)).not.toContain("row value");
+      expect(JSON.stringify(records)).not.toContain("secret-name");
+    } finally {
+      await connection.close();
+      await rm(folder, { recursive: true, force: true });
+    }
   });
 
   it("givenManifestFields_whenTarget_thenSecretsAndUserDropped", () => {
