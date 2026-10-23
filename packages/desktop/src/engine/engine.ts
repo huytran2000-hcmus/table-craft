@@ -19,9 +19,12 @@ import {
   ResultStore,
   RowsRefused,
   rowWriter,
+  submitConsoleEdits,
   submitEdits,
   applyDdl,
   tableCount,
+  CONSOLE_READ_ONLY_REASONS,
+  consoleEditable,
   tableSelect,
   type EditTable,
   type ExportEncoderOptions,
@@ -48,6 +51,7 @@ import {
   type ResolveRequest,
   type Row,
   type Session,
+  type SavepointStatements,
   type SqlLanguage,
   type TableDesign,
   type Transactions,
@@ -84,6 +88,7 @@ import type {
   ResultOf,
   ResultPaging,
   RowRange,
+  ResultEditable,
   TableQuery,
   TransactionState,
 } from "@table-craft/desktop/engine/protocol.js";
@@ -1088,6 +1093,10 @@ export function createEngine(options: EngineOptions, now: () => number = Date.no
     const tables = new Map<string, TableResult>();
     /** The statement behind each handle, so an export can run it again on a session of its own. */
     const statements = new Map<string, string>();
+    /** The text each console statement ran, so `result.editable` can read where its rows came from. */
+    const ran = new Map<string, string>();
+    /** The console results `result.editable` found editable, with what editing them needs (decision 056). */
+    const edited = new Map<string, TableResult>();
     const unsubscribe = tasks.subscribe(emit);
     const unsubscribeImports = imports.subscribe(emit);
 
@@ -1095,6 +1104,8 @@ export function createEngine(options: EngineOptions, now: () => number = Date.no
       handles.delete(handle);
       tables.delete(handle);
       statements.delete(handle);
+      ran.delete(handle);
+      edited.delete(handle);
     }
 
     async function releaseHandlesOf(sessionId: string): Promise<void> {
@@ -1541,6 +1552,7 @@ export function createEngine(options: EngineOptions, now: () => number = Date.no
         }
         handles.set(summary.handle, sessionId);
         if (!open.moved) statements.set(summary.handle, sql);
+        ran.set(summary.handle, sql);
         if (summary.cursorOpen) cursors.set(sessionId, summary.handle);
         // An open cursor keeps the session busy, and no statement that switches returns rows.
         // A statement that switches namespaces, or ends a transaction that may have, is followed by a read.
@@ -1621,8 +1633,47 @@ export function createEngine(options: EngineOptions, now: () => number = Date.no
       return { statement, sql, editable, columns, foreignKeys: relation.foreignKeys, referencing };
     }
 
+    /** Whether a console result can be edited (decision 056); remembers an editable one for `edits.*`. */
+    async function resultEditable(request: RequestOf<"result.editable">): Promise<ResultEditable> {
+      const handle = ownedHandle(request.handle);
+      const open = sessionFor(handles.get(handle) ?? "");
+      const reported = results.columns(handle);
+      const fallback = reported.map(reportedColumn);
+      const readOnly = (reason: string): ResultEditable => {
+        edited.delete(handle);
+        return { editable: { readOnly: reason }, columns: fallback, readOnlyColumns: reported.map(() => true) };
+      };
+      const language = sqlLanguage();
+      const sql = ran.get(handle);
+      if (sql === undefined || language.selectSource === undefined || tables.has(handle)) {
+        return readOnly(CONSOLE_READ_ONLY_REASONS.unsupported);
+      }
+      const source = await language.selectSource(sql, await completionCatalogOf(request.current));
+      const described = source.kind === "table" ? await relationOf(source.path, source.relation) : null;
+      const checked = consoleEditable({
+        source,
+        relation: described?.relation ?? null,
+        qualified: described?.qualified ?? "",
+        result: reported,
+        readOnly: options.datasource.readOnly,
+        capabilities: open.capabilities,
+      });
+      if (checked.kind === "readOnly") return readOnly(checked.reason);
+      if (!handles.has(handle)) return readOnly(CONSOLE_READ_ONLY_REASONS.unsupported);
+      edited.set(handle, { ...checked.table, readOnly: null });
+      const identity = checked.table.identity.map((index) => checked.table.columns[index]?.name ?? "");
+      return {
+        editable: { identity },
+        columns: checked.columns.map(
+          (meta, index) => meta ?? fallback[index] ?? reportedColumn({ name: "", type: null }, index),
+        ),
+        readOnlyColumns: checked.table.columns.map((column) => column.readOnly),
+      };
+    }
+
     function tableFor(handle: string): TableResult {
-      const table = tables.get(ownedHandle(handle));
+      const owned = ownedHandle(handle);
+      const table = tables.get(owned) ?? edited.get(owned);
       if (table === undefined) {
         throw new EngineFailure({
           code: "invalidRequest",
@@ -1646,7 +1697,7 @@ export function createEngine(options: EngineOptions, now: () => number = Date.no
       return generateEdits({ ...table, rows: (row) => held[row], edits, language: sqlLanguage() });
     }
 
-    async function submit(request: RequestOf<"edits.submit">) {
+    async function submit(request: RequestOf<"edits.submit">): Promise<ResultOf<"edits.submit">> {
       const open = sessionFor(request.sessionId);
       if (handles.get(request.handle) !== request.sessionId) {
         throw new EngineFailure({
@@ -1656,8 +1707,41 @@ export function createEngine(options: EngineOptions, now: () => number = Date.no
         });
       }
       const statements = editStatements(request.handle, request.edits);
+      if (edited.has(request.handle)) return submitConsole(request.sessionId, open, statements);
       if (mustSettle(request.sessionId, open)) await afterClose(request.sessionId, open);
-      return submitEdits(open.session, statements);
+      return { ...(await submitEdits(open.session, statements)), transactionOpen: false };
+    }
+
+    /**
+     * A console result's edits on the console's own session (decision 056). Like a statement, they
+     * wait for a closing cursor and prove an idle session alive first; a transaction the session lost
+     * is reported, never silently replaced (plans 025, 027).
+     */
+    async function submitConsole(
+      sessionId: string,
+      open: OpenSession,
+      statements: readonly string[],
+    ): Promise<ResultOf<"edits.submit">> {
+      if (open.lost !== null && open.session.transactions?.open === true) throw transactionLost();
+      const settled = mustSettle(sessionId, open) ? await afterClose(sessionId, open) : undefined;
+      if (settled === undefined && needsCheck(open)) await ensureLive(sessionId, open);
+      open.running += 1;
+      try {
+        const submitted = await submitConsoleEdits(open.session, statements, savepointsOf(sqlLanguage()));
+        return { ...submitted, transactionOpen: open.session.transactions?.open ?? false };
+      } catch (cause) {
+        if (isPluginError(cause) && cause.code === "sessionBusy") {
+          throw busyRefused(sessionId, open).transaction ? transactionLost() : sessionBusy();
+        }
+        if (isPluginError(cause) && cause.code === "connectionLost") {
+          if (abandon(sessionId, open, "driver reported").transaction) throw transactionLost();
+          throw statementFailed(cause, options.datasource.readOnly);
+        }
+        throw cause;
+      } finally {
+        open.running -= 1;
+        open.lastUsed = now();
+      }
     }
 
     function condition(handle: string, rows: readonly number[], columns: readonly ConditionColumn[]): string {
@@ -1889,6 +1973,7 @@ export function createEngine(options: EngineOptions, now: () => number = Date.no
       "table.count": ({ path, relation, where }) => countRows(path, relation, where),
       "table.condition": ({ handle, rows, columns }) => Promise.resolve(condition(handle, rows, columns)),
       "table.orderBy": ({ terms }) => Promise.resolve(orderClause(sqlLanguage(), terms)),
+      "result.editable": (request) => resultEditable(request),
       "edits.preview": ({ handle, edits }) => Promise.resolve(editStatements(handle, edits)),
       "edits.submit": (request) => submit(request),
     };
@@ -1957,4 +2042,8 @@ export function createEngine(options: EngineOptions, now: () => number = Date.no
     },
     close,
   };
+}
+
+function savepointsOf(language: SqlLanguage): ((name: string) => SavepointStatements) | undefined {
+  return language.savepoint?.bind(language);
 }

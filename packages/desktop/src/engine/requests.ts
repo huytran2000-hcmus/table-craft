@@ -218,6 +218,7 @@ export const engineRequestSchema = z.discriminatedUnion("type", [
     from: z.strictObject({ row: index, column: index }).nullable(),
     backward: z.boolean(),
   }),
+  z.strictObject({ id: requestId, type: z.literal("result.editable"), handle, current: namespacePath.optional() }),
   z.strictObject({
     id: requestId,
     type: z.literal("result.extract"),

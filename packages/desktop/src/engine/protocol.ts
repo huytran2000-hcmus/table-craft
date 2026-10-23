@@ -44,6 +44,13 @@ export type Row = readonly WireValue[];
 export interface Column {
   readonly name: string;
   readonly type: string | null;
+  readonly origin?: ColumnOrigin | null;
+}
+
+/** Mirrors `ColumnOrigin` in plugin-api. */
+export interface ColumnOrigin {
+  readonly table: string;
+  readonly column: string;
 }
 
 /** Mirrors `Capability` in plugin-api. The renderer branches on these, never on a plugin id (decision 007). */
@@ -697,6 +704,15 @@ export interface TableQuery {
   readonly referencing: readonly ReferencingKey[];
 }
 
+/** Whether a console result may be edited in its grid, and how (decision 056). */
+export interface ResultEditable {
+  readonly editable: EditableIdentity;
+  /** The catalog's view of each result column, or what the driver reported for an expression. */
+  readonly columns: readonly ColumnMeta[];
+  /** Per result column: a computed, aliased-expression or repeated column no edit may write. */
+  readonly readOnlyColumns: readonly boolean[];
+}
+
 /** A foreign key of the relation at `path`.`relation` that points at another table. */
 export interface ReferencingKey {
   readonly path: readonly string[];
@@ -917,6 +933,19 @@ export interface EngineCalls {
     result: FoundMatch | null;
   };
   /** The given rows and columns as `extractor` text, for the clipboard. */
+  /**
+   * Whether a console result can be edited in its grid (decision 056): the plugin reads the
+   * statement, the catalog names the key, the driver's column origins confirm. After it answers an
+   * editable result, `edits.preview` and `edits.submit` accept the handle.
+   */
+  "result.editable": {
+    params: {
+      readonly handle: string;
+      /** The console's namespace, which unqualified names resolve against. */
+      readonly current?: readonly string[];
+    };
+    result: ResultEditable;
+  };
   "result.extract": {
     params: {
       readonly handle: string;
@@ -1081,11 +1110,13 @@ export interface EngineCalls {
   };
   /**
    * Runs the edits in one transaction on the table's session; any statement that fails or touches
-   * other than one row rolls everything back with `editRejected` (decision 026).
+   * other than one row rolls everything back with `editRejected` (decision 026). A console result's
+   * edits run on the console's session in its transaction mode: in manual mode they stay in its
+   * open transaction, and a rejected batch undoes only itself (decision 056).
    */
   "edits.submit": {
     params: { readonly sessionId: string; readonly handle: string; readonly edits: readonly RowEdit[] };
-    result: SubmittedEdits;
+    result: SubmittedEdits & { readonly transactionOpen: boolean };
   };
 }
 
