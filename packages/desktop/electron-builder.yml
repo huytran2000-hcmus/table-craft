@@ -25,7 +25,9 @@ asar: true
 npmRebuild: false
 icon: build/icon.png
 # The default leaves x64 unnamed, which reads as universal beside the arm64 DMG.
-artifactName: ${productName}-${version}-${arch}.${ext}
+# Literal, not ${productName}: scripts/update-manifest.ts finds the installers by this name, and the
+# live test's build renames the product (plan 020).
+artifactName: TableCraft-${version}-${arch}.${ext}
 
 mac:
   category: public.app-category.developer-tools

@@ -18,6 +18,13 @@ const DEVELOPER_ID_VARIABLES = ["CSC_LINK", "CSC_NAME"];
  */
 const AD_HOC_SIGNING = ["-c.mac.identity=-", "-c.mac.hardenedRuntime=false"];
 
+/**
+ * Plan 020's live-test build gets its own product name, so its bundle, its `safeStorage` keychain
+ * item and its profile can never be mistaken for an installed TableCraft's (decision 044).
+ */
+const TEST_BUILD_ENV = "TABLE_CRAFT_UPDATE_TEST_BUILD";
+const TEST_BUILD_PRODUCT = ['-c.productName="TableCraft Update Test"'];
+
 function hasDeveloperId(env: NodeJS.ProcessEnv): boolean {
   return DEVELOPER_ID_VARIABLES.some((name) => (env[name] ?? "") !== "");
 }
@@ -36,6 +43,7 @@ const args = [
   ...passed,
   `-c.extraMetadata.version=${version}`,
   ...(process.platform === "darwin" && !hasDeveloperId(process.env) ? AD_HOC_SIGNING : []),
+  ...(process.env[TEST_BUILD_ENV] === "1" ? TEST_BUILD_PRODUCT : []),
   "--publish",
   "never",
 ];
