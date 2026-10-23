@@ -64,4 +64,6 @@ started, not when it is merged.
 | 053 | [SQLite alters a table by rebuilding it](053-sqlite-alters-a-table-by-rebuilding-it.md)                                                                                |
 | 054 | [The engine keeps sessions alive, times statements out and reconnects](054-the-engine-keeps-sessions-alive-times-statements-out-and-reconnects.md)                     |
 | 055 | [Connection URLs are manifest data](055-connection-urls-are-manifest-data.md)                                                                                          |
+| 056 | [A console result is editable when it provably reads one table](056-a-console-result-is-editable-when-it-provably-reads-one-table.md)                                  |
+| 057 | [Submit preempts Run in a grid with pending edits](057-submit-preempts-run-in-a-grid-with-pending-edits.md)                                                            |
 | 058 | [A closing result holds the session](058-a-closing-result-holds-the-session.md)                                                                                        |

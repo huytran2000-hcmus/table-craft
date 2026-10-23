@@ -251,6 +251,12 @@ submit. **Preview Pending Changes** (`⇧⌘P`) shows the SQL, and **Submit** (`
 transaction: if any statement fails or touches more than one row, everything rolls back and your
 edits stay. `⌘B` on a foreign key cell opens the referenced row.
 
+A console result is editable too when it reads one table and shows its primary key, as
+`SELECT * FROM orders WHERE …` does: the same chords edit it, and **Submit** runs on the console's
+own session, so in manual commit mode your edits wait in its open transaction for **Commit**.
+Joins, aggregates, `DISTINCT` and results without a key stay read-only, and the toolbar says why;
+computed columns in an editable result take no edits.
+
 ![Table data editor](docs/media/table-editor.gif)
 
 See [Table data editor](docs/design/specification.md#table-data-editor).

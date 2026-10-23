@@ -144,7 +144,13 @@ interface SqlLanguage {
   bind(statement: string, values: Readonly<Record<string, ParameterValue>>): BoundStatement; // { sql, params }
   importType?(column: InferredColumn): string; // { kind, integerDigits, scale } to a column type; with `bulkInsert`
   createTable?(qualifiedName: string, columns: readonly NewColumn[]): string; // CREATE TABLE for an import; with `bulkInsert`
+  selectSource?(sql: string, catalog: CompletionCatalog): Promise<SelectSource>; // the one table a plain SELECT reads; sqlCompleter
+  savepoint?(name: string): SavepointStatements; // { set, rollback, release }; sqlSavepoints
 }
+
+type SelectSource =
+  | { kind: "table"; path: readonly string[]; relation: string; columns: readonly (string | null)[] } // null: an expression
+  | { kind: "readOnly"; reason: string }; // "the result joins two or more tables"
 
 interface ExplainOptions {
   readonly analyze: boolean;
@@ -218,6 +224,12 @@ interface ExecuteResult {
 interface Column {
   readonly name: string;
   readonly type: string | null; // the database's declared type, when it has one
+  readonly origin?: ColumnOrigin | null; // the base column it reads; null for an expression, absent when the driver cannot tell
+}
+
+interface ColumnOrigin {
+  readonly table: string; // the driver's id: PostgreSQL's table OID, MySQL's and SQLite's db.table
+  readonly column: string;
 }
 ```
 
@@ -414,7 +426,8 @@ handles belong to the port that created them and are released when it closes.
 | `completion.complete`   | `text`, `offset`, `scope?: { path, relation }`, `current?`                                        | `{ from, to, items, validFor }`; see Completion and navigation                                                                           |
 | `navigation.resolve`    | `text`, `offset`, `current?`                                                                      | `Declaration` or `null`; see Completion and navigation                                                                                   |
 | `edits.preview`         | `handle`, `edits: RowEdit[]`                                                                      | the statements Submit would run                                                                                                          |
-| `edits.submit`          | `sessionId`, `handle`, `edits: RowEdit[]`                                                         | `{ statements, rowsAffected }`, or `editRejected` after a rollback                                                                       |
+| `edits.submit`          | `sessionId`, `handle`, `edits: RowEdit[]`                                                         | `{ statements, rowsAffected, transactionOpen }`, or `editRejected` after a rollback                                                      |
+| `result.editable`       | `handle`, `current?`                                                                              | `ResultEditable { editable, columns, readOnlyColumns }`; see Editing a console result                                                    |
 
 A statement reads its first page and keeps the cursor open; the session's next statement, a
 commit, rollback or mode switch, `result.release`, `session.close` and the engine's exit close it
@@ -830,6 +843,27 @@ recompute the view. Copy and Select All take shown rows; Export asks "Visible ro
 table editor the chips read `Local filter (fetched rows):` beside the server-side WHERE bar, and
 pending edits keep naming held rows through `ViewState.sources`.
 
+**Editing a console result.** Plan 026, decision 056. A console result is editable when it comes
+from one plain `SELECT` over one base table whose key columns it shows; the grid then edits like
+the table editor (see Table data editor), with the same actions, preview and `editRejected`. After
+a run the grid asks `result.editable`: the plugin's `language.selectSource` reads the statement
+(no joins, `DISTINCT`, `GROUP BY`, aggregates, window functions, set operations, `WITH` or
+subqueries in `FROM`) and names the table and which result column reads which table column; the
+engine checks it against the catalog (primary key, else a unique `NOT NULL` key) and the driver's
+`Column.origin`. An expression, an aliased computation or a repeated column is read-only and takes
+no edit; any other answer leaves the whole result read-only and the toolbar says why:
+`Read-only: the result joins two or more tables`, `… has no primary key column`, `… reads a view`.
+
+Edits run on the console's own session and follow its transaction mode. In auto mode Submit runs
+them in one transaction and commits, exactly like the table editor. In manual mode they run inside
+the console's transaction under a savepoint (`language.savepoint`) and stay uncommitted until
+Commit or Rollback; a rejected edit rolls back to the savepoint only, so the rest of the
+transaction survives. After a submit the console re-runs the statement in place. Run, Explain,
+Rerun, sort, a filter change while sorted, closing the console, disconnecting and quitting with
+pending edits ask Submit, Discard or Cancel (re-numbering would point edits at other rows); a
+session that closes on its own discards them with a line in Output. Submit (⌘↵) in a console grid
+with pending edits preempts Run (decision 057).
+
 **Selection and copy.** Click, shift-click, drag, the arrows (shift extends), Page Up/Down,
 Home/End select a rectangle; the gutter selects rows, ⌘-click on a header a column, `grid.selectAll`
 every fetched row. Copy asks the engine for `result.extract` over the selection's rows and visible
@@ -1048,9 +1082,10 @@ the rows again with the same bars. Bytes cells and read-only tables refuse edits
 | Apply Value             | ⌘↵        | value panel        |
 | Go to Referenced Row    | ⌘B        | grid               |
 
-Table actions apply only while a table tab is active (`Action.tabKind`); the keymap counts two
-chords as a clash only when their regions and tab kinds overlap, so ⌘↵ runs in a console and
-submits in a table. Inside a text field the field's own editing chords (⌘Z, ⌘A, ⌘C, ⌘X, ⌘V, ⌘⌫)
+Table-only actions apply only while a table tab is active (`Action.tabKind`); the editing actions
+also act on an editable console result. The keymap counts two chords as a clash only when their
+regions and tab kinds overlap, or neither preempts the other: Submit and Apply Value list Run in
+`Action.preempts`, so ⌘↵ in a grid with pending edits submits and otherwise runs (decision 057). Inside a text field the field's own editing chords (⌘Z, ⌘A, ⌘C, ⌘X, ⌘V, ⌘⌫)
 stay the field's. Go to Referenced Row opens the foreign key's target filtered to the focused row's
 values; Show Referencing Rows… lists the foreign keys pointing at this table and opens the chosen
 one filtered to the selected row. Reload, a filter or sort change, Rerun, closing the tab,
