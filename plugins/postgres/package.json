@@ -7,15 +7,18 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
-    "./explain": "./src/explain.ts"
+    "./explain": "./src/explain.ts",
+    "./bulk": "./src/bulk.ts"
   },
   "dependencies": {
     "@table-craft/plugin-api": "workspace:*",
     "pg": "^8.23.1",
+    "pg-copy-streams": "^7.0.0",
     "pg-cursor": "^2.22.1"
   },
   "devDependencies": {
     "@types/pg": "^8.23.1",
+    "@types/pg-copy-streams": "^1.2.5",
     "@types/pg-cursor": "^2.7.2"
   }
 }

@@ -19,6 +19,11 @@ export default defineConfig({
         find: /^@table-craft\/plugin-(sqlite|postgres|mysql)\/explain$/,
         replacement: resolve(WORKSPACE_ROOT, "plugins/$1/src/explain.ts"),
       },
+      // The bulk writers' row encoders, which the encoder tests feed exporter text (plan 021).
+      {
+        find: /^@table-craft\/plugin-(postgres|mysql)\/bulk$/,
+        replacement: resolve(WORKSPACE_ROOT, "plugins/$1/src/bulk.ts"),
+      },
       { find: "@table-craft/plugin-sqlite", replacement: resolve(WORKSPACE_ROOT, "plugins/sqlite/src/index.ts") },
       { find: "@table-craft/plugin-postgres", replacement: resolve(WORKSPACE_ROOT, "plugins/postgres/src/index.ts") },
       { find: "@table-craft/plugin-mysql", replacement: resolve(WORKSPACE_ROOT, "plugins/mysql/src/index.ts") },

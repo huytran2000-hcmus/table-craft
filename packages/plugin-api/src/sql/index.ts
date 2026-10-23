@@ -23,7 +23,7 @@ export {
   sqlLiteral,
   type SqlLiteralOptions,
 } from "./literals.js";
-export { sqlGenerator, type GeneratorOptions } from "./generate.js";
+export { sqlGenerator, sqlImporter, type GeneratorOptions, type ImporterOptions } from "./generate.js";
 export {
   ALREADY_EXPLAIN,
   commonExplainRefusal,

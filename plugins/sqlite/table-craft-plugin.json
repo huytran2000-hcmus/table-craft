@@ -2,9 +2,9 @@
   "id": "sqlite",
   "name": "SQLite",
   "version": "0.0.0",
-  "apiVersion": "0.14.0",
+  "apiVersion": "0.15.0",
   "entry": "index.js",
-  "capabilities": ["sql", "schemaTree", "transactions", "ddl", "explain"],
+  "capabilities": ["sql", "schemaTree", "transactions", "ddl", "explain", "bulkInsert"],
   "highlight": "sqlite",
   "connection": {
     "fields": [

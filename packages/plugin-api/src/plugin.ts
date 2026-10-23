@@ -24,6 +24,7 @@ export const CAPABILITIES = [
   "explainAnalyze",
   "currentNamespace",
   "keepAlive",
+  "bulkInsert",
 ] as const;
 
 export type Capability = (typeof CAPABILITIES)[number];
@@ -61,6 +62,33 @@ export interface ExecuteOptions {
   readonly fullBytes?: boolean;
 }
 
+/** Kinds a file importer infers from a column's text, narrowest first within each family (plan 021). */
+export const IMPORT_KINDS = ["boolean", "integer", "bigint", "decimal", "double", "date", "timestamp", "text"] as const;
+
+export type ImportKind = (typeof IMPORT_KINDS)[number];
+
+/** What a sample of one column's text looks like; `integerDigits` and `scale` are the widest `decimal` seen. */
+export interface InferredColumn {
+  readonly kind: ImportKind;
+  readonly integerDigits: number;
+  readonly scale: number;
+}
+
+/** A column of a table an import creates, typed in the dialect. */
+export interface NewColumn {
+  readonly name: string;
+  readonly type: string;
+}
+
+/** Where `Session.insertRows` writes: `table` as the introspector qualifies it, `columns` as it describes them. */
+export interface InsertTarget {
+  readonly table: string;
+  readonly columns: readonly Column[];
+}
+
+/** One row for `Session.insertRows`, a value per target column: text as a file holds it, or SQL NULL. */
+export type InsertRow = readonly ParameterValue[];
+
 export interface Session {
   /**
    * Rejects with a `PluginError`: `cancelled` when `cancel` interrupted it, `connectionLost` when
@@ -97,6 +125,15 @@ export interface Session {
    * nothing runs, and bounds how long it waits.
    */
   ping?(): Promise<void>;
+  /**
+   * Present exactly when the plugin declares `bulkInsert` (decision 046). Writes `rows` into
+   * `target` by the dialect's fastest safe path, values never spliced into SQL. Atomic: when the
+   * database refuses any row it rejects with `statementFailed`, none of `rows` is kept, and an open
+   * transaction stays usable; a lost connection rejects with `connectionFailed`. Text is converted
+   * where the column needs it, so what TableCraft's CSV export writes inserts back the same: `0x…`
+   * hex into a binary column, `true`/`false` into a boolean stored as a number.
+   */
+  insertRows?(target: InsertTarget, rows: readonly InsertRow[]): Promise<void>;
   /**
    * Settles in bounded time even when the network is gone: a graceful goodbye that does not
    * answer within a few seconds gives way to dropping the socket (decision 040).
@@ -236,6 +273,13 @@ export interface SqlLanguage {
    * `statementFailed` naming a placeholder `values` has no entry for.
    */
   bind(statement: string, values: Readonly<Record<string, ParameterValue>>): BoundStatement;
+  /**
+   * Present exactly when the plugin declares `bulkInsert`: the column type an import proposes for
+   * text that looks like `column` (decision 046). Every value of the sample inserts into it.
+   */
+  importType?(column: InferredColumn): string;
+  /** Present exactly when the plugin declares `bulkInsert`: the `CREATE TABLE` for a new import target. */
+  createTable?(qualifiedName: string, columns: readonly NewColumn[]): string;
 }
 
 export const TRANSACTION_MODES = ["auto", "manual"] as const;

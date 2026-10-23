@@ -16,7 +16,9 @@
       "@table-craft/plugin-mysql": ["plugins/mysql/src/index.ts"],
       "@table-craft/plugin-sqlite/explain": ["plugins/sqlite/src/explain.ts"],
       "@table-craft/plugin-postgres/explain": ["plugins/postgres/src/explain.ts"],
-      "@table-craft/plugin-mysql/explain": ["plugins/mysql/src/explain.ts"]
+      "@table-craft/plugin-mysql/explain": ["plugins/mysql/src/explain.ts"],
+      "@table-craft/plugin-postgres/bulk": ["plugins/postgres/src/bulk.ts"],
+      "@table-craft/plugin-mysql/bulk": ["plugins/mysql/src/bulk.ts"]
     },
     "types": ["node"],
     "strict": true,

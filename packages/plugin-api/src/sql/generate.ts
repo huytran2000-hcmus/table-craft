@@ -1,4 +1,12 @@
-import type { ColumnMeta, GeneratedStatement, Relation, SqlLanguage } from "@table-craft/plugin-api";
+import type {
+  ColumnMeta,
+  GeneratedStatement,
+  ImportKind,
+  InferredColumn,
+  NewColumn,
+  Relation,
+  SqlLanguage,
+} from "@table-craft/plugin-api";
 
 /** What the shared generator needs to know about a dialect (decision 029). */
 export interface GeneratorOptions {
@@ -20,15 +28,17 @@ const DROP_KEYWORDS: Readonly<Record<Relation["kind"], string>> = {
 };
 
 /** DROP, SELECT, INSERT and UPDATE for a catalog relation, which every built-in plugin spreads into its `SqlLanguage`. */
-export function sqlGenerator(options: GeneratorOptions): Pick<SqlLanguage, "generate"> {
+/** The completer's rule, so a generated statement spells a name as completion inserts it. */
+function identifierWriter(options: Omit<GeneratorOptions, "updateDefault">): (identifier: string) => string {
   const reserved = new Set(options.keywords.map((keyword) => keyword.toUpperCase()));
-
-  // The completer's rule, so a generated statement spells a name as completion inserts it.
-  function name(identifier: string): string {
-    return options.plainIdentifier.test(identifier) && !reserved.has(identifier.toUpperCase())
+  return (identifier) =>
+    options.plainIdentifier.test(identifier) && !reserved.has(identifier.toUpperCase())
       ? identifier
       : options.quoteIdentifier(identifier);
-  }
+}
+
+export function sqlGenerator(options: GeneratorOptions): Pick<SqlLanguage, "generate"> {
+  const name = identifierWriter(options);
 
   function list(columns: readonly ColumnMeta[]): string {
     return columns.map((column) => name(column.name)).join(", ");
@@ -68,5 +78,24 @@ export function sqlGenerator(options: GeneratorOptions): Pick<SqlLanguage, "gene
           return update(relation, qualifiedName);
       }
     },
+  };
+}
+
+/** What `sqlImporter` needs: the generator's naming rule, and the dialect's column type per inferred kind. */
+export interface ImporterOptions extends Omit<GeneratorOptions, "updateDefault"> {
+  /** The type for a kind; `decimal` also gets the sample's digits, so a dialect can size it. */
+  readonly types: Readonly<Record<Exclude<ImportKind, "decimal">, string>>;
+  readonly decimal: (column: InferredColumn) => string;
+}
+
+/** `importType` and `createTable` for a plugin that declares `bulkInsert` (decision 046). */
+export function sqlImporter(options: ImporterOptions): Required<Pick<SqlLanguage, "importType" | "createTable">> {
+  const name = identifierWriter(options);
+  return {
+    importType: (column) => (column.kind === "decimal" ? options.decimal(column) : options.types[column.kind]),
+    createTable: (qualifiedName: string, columns: readonly NewColumn[]) =>
+      `CREATE TABLE ${qualifiedName} (\n${columns
+        .map((column) => `${INDENT}${name(column.name)} ${column.type}`)
+        .join(",\n")}\n);`,
   };
 }

@@ -2,7 +2,7 @@
   "id": "mysql",
   "name": "MySQL",
   "version": "0.0.0",
-  "apiVersion": "0.14.0",
+  "apiVersion": "0.15.0",
   "entry": "index.js",
   "capabilities": [
     "sql",
@@ -13,7 +13,8 @@
     "explain",
     "explainAnalyze",
     "currentNamespace",
-    "keepAlive"
+    "keepAlive",
+    "bulkInsert"
   ],
   "highlight": "mysql",
   "connection": {

@@ -13,6 +13,8 @@ import {
   type ExecuteResult,
   type ExplainedPlan,
   type ExplainOptions,
+  type InsertRow,
+  type InsertTarget,
   type Introspector,
   type ParameterValue,
   type Row,
@@ -35,6 +37,7 @@ import {
   sqlExplainable,
   sqlFormatter,
   sqlGenerator,
+  sqlImporter,
   sqlLiteral,
   sqlParameters,
   sqlSplitter,
@@ -43,6 +46,7 @@ import {
   type SqlDialectOptions,
   type SqlLiteralOptions,
 } from "@table-craft/plugin-api/sql";
+import { insertStatement, MYSQL_IMPORT_TYPES, mysqlDecimal } from "./bulk.js";
 import { ANALYZE_VERBS, EXPLAIN_VERBS, explainStatement, planFormat, readJson, readTree } from "./explain.js";
 import { mysqlIntrospector } from "./introspect.js";
 
@@ -57,6 +61,7 @@ const CAPABILITIES: readonly Capability[] = [
   "explainAnalyze",
   "currentNamespace",
   "keepAlive",
+  "bulkInsert",
 ];
 
 /** What the mysql client accepts: `'\''`, `# comments`, `DELIMITER //` and `BEGIN … END` routine bodies. */
@@ -108,6 +113,13 @@ const language: SqlLanguage = {
   explainable,
   ...sqlFormatter({ dialect: "mysql", lexer: DIALECT, parameters: PARAMETERS.styles }),
   ...sqlParameters(PARAMETERS),
+  ...sqlImporter({
+    quoteIdentifier,
+    plainIdentifier: PLAIN_IDENTIFIER,
+    keywords: KEYWORDS,
+    types: MYSQL_IMPORT_TYPES,
+    decimal: mysqlDecimal,
+  }),
 };
 
 /** Manual mode is autocommit off: the server opens a transaction with the next statement. */
@@ -115,6 +127,10 @@ const MANUAL_SQL = "SET autocommit = 0";
 const AUTO_SQL = "SET autocommit = 1";
 const COMMIT_SQL = "COMMIT";
 const ROLLBACK_SQL = "ROLLBACK";
+/** Each batch of an import is atomic inside the import's transaction (decision 046). */
+const SAVEPOINT_SQL = "SAVEPOINT table_craft_insert";
+const RELEASE_SQL = "RELEASE SAVEPOINT table_craft_insert";
+const ROLLBACK_TO_SQL = "ROLLBACK TO SAVEPOINT table_craft_insert";
 const OPEN_TRANSACTION_MESSAGE = "A transaction is open; commit or roll it back before switching to auto-commit.";
 const BUSY_MESSAGE = "Another statement is still running in this session.";
 
@@ -382,6 +398,11 @@ function start(
   return { rows: stream[Symbol.asyncIterator](), stream, ended, fields };
 }
 
+/** mysql2 marks an error that ended the connection, as opposed to one the server answered with. */
+function isFatal(cause: unknown): boolean {
+  return (cause as { fatal?: unknown }).fatal === true;
+}
+
 class MysqlSession implements Session {
   readonly #config: MysqlConfig;
   readonly #connection: mysql.Connection;
@@ -479,6 +500,62 @@ class MysqlSession implements Session {
       this.#connection.ping((error: mysql.QueryError | null | undefined) => {
         if (error === null || error === undefined) resolve();
         else reject(new PluginError("connectionLost", `The connection was lost: ${error.message}`, { cause: error }));
+      });
+    });
+  }
+
+  async insertRows(target: InsertTarget, rows: readonly InsertRow[]): Promise<void> {
+    if (this.#broken !== null) {
+      throw new PluginError("connectionFailed", `The connection was lost: ${this.#broken.message}`);
+    }
+    if (this.#running !== null) throw new PluginError("statementFailed", BUSY_MESSAGE);
+    if (rows.length === 0) return;
+    await this.#cancelling.catch(() => undefined);
+    const running: Running = { cancelRequested: false };
+    this.#running = running;
+    const state = this.#transaction;
+    const { sql, values } = insertStatement(target.table, target.columns, quoteIdentifier, rows);
+    try {
+      // With autocommit off the savepoint itself opens the transaction.
+      const savepoint = state.mode === "manual" || state.open;
+      if (savepoint) {
+        await this.#send(SAVEPOINT_SQL, []);
+        state.open = true;
+      }
+      try {
+        await this.#send(sql, values);
+        if (savepoint) await this.#send(RELEASE_SQL, []);
+      } catch (cause) {
+        // A deadlock rolls back the whole transaction and the savepoint with it: nothing is left to keep.
+        if (savepoint && !isFatal(cause)) {
+          await this.#send(ROLLBACK_TO_SQL, []).catch((lost: unknown) => {
+            this.#broken ??= lost instanceof Error ? lost : new Error(String(lost));
+          });
+        }
+        throw cause;
+      }
+    } catch (cause) {
+      if (isFatal(cause)) this.#broken ??= cause instanceof Error ? cause : new Error(String(cause));
+      const lost = this.#lost();
+      if (lost !== null)
+        throw new PluginError("connectionFailed", `The connection was lost: ${lost.message}`, { cause });
+      throw this.#failure(cause, running);
+    } finally {
+      this.#running = null;
+    }
+  }
+
+  /** Read through a method: the connection's `error` event sets it while a statement is awaited. */
+  #lost(): Error | null {
+    return this.#broken;
+  }
+
+  /** The text protocol with values escaped by the driver; a callback, so a lost link rejects instead of hanging. */
+  #send(sql: string, values: readonly (string | Buffer | null)[]): Promise<void> {
+    return new Promise((resolve, reject) => {
+      this.#connection.query(sql, [...values], (error) => {
+        if (error === null) resolve();
+        else reject(error);
       });
     });
   }

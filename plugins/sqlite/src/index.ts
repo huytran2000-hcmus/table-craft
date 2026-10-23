@@ -12,6 +12,8 @@ import {
   type ExecuteResult,
   type ExplainedPlan,
   type ExplainOptions,
+  type InsertRow,
+  type InsertTarget,
   type Introspector,
   type ParameterValue,
   type PluginErrorCode,
@@ -32,6 +34,7 @@ import {
   sqlExplainable,
   sqlFormatter,
   sqlGenerator,
+  sqlImporter,
   sqlLiteral,
   sqlParameters,
   sqlSplitter,
@@ -45,7 +48,7 @@ import { sqliteIntrospector } from "./introspect.js";
 
 const PLUGIN_ID = "sqlite";
 /** No `cancel`: node:sqlite runs a statement synchronously, so nothing could deliver the request. */
-const CAPABILITIES: readonly Capability[] = ["sql", "schemaTree", "transactions", "ddl", "explain"];
+const CAPABILITIES: readonly Capability[] = ["sql", "schemaTree", "transactions", "ddl", "explain", "bulkInsert"];
 
 /** Trigger bodies are `BEGIN … END` and hold semicolons. */
 const DIALECT: SqlDialectOptions = { blockKeywords: ["BEGIN"] };
@@ -83,11 +86,40 @@ const language: SqlLanguage = {
   explainable,
   ...sqlFormatter({ dialect: "sqlite", lexer: DIALECT, parameters: PARAMETERS.styles }),
   ...sqlParameters(PARAMETERS),
+  ...sqlImporter({
+    quoteIdentifier,
+    plainIdentifier: PLAIN_IDENTIFIER,
+    keywords: KEYWORDS,
+    types: {
+      boolean: "BOOLEAN",
+      integer: "INTEGER",
+      bigint: "INTEGER",
+      double: "REAL",
+      date: "DATE",
+      timestamp: "TIMESTAMP",
+      text: "TEXT",
+    },
+    // NUMERIC keeps text it cannot hold exactly, such as more than 15 significant digits, as text.
+    decimal: () => "NUMERIC",
+  }),
 };
 
 const BEGIN_SQL = "BEGIN";
 const COMMIT_SQL = "COMMIT";
 const ROLLBACK_SQL = "ROLLBACK";
+/** Each batch of an import is atomic inside the import's transaction (decision 046). */
+const SAVEPOINT_SQL = "SAVEPOINT table_craft_insert";
+const RELEASE_SQL = "RELEASE SAVEPOINT table_craft_insert";
+const ROLLBACK_TO_SQL = "ROLLBACK TO SAVEPOINT table_craft_insert";
+/** SQLITE_MAX_VARIABLE_NUMBER since 3.32. */
+const MAX_PARAMETERS = 32_766;
+/** How the exporter writes bytes (`cellText`): `0x` and hex. */
+const EXPORTED_BYTES = /^0x([0-9a-fA-F]*)$/u;
+const BLOB_DECLARATION = /BLOB/iu;
+const BOOLEAN_TEXT: ReadonlyMap<string, number> = new Map([
+  ["true", 1],
+  ["false", 0],
+]);
 const OPEN_TRANSACTION_MESSAGE = "A transaction is open; commit or roll it back before switching to auto-commit.";
 
 const connectionSchema = z.strictObject({
@@ -105,6 +137,19 @@ const BOOLEAN_DECLARATION = /^BOOL(EAN)?$/i;
 const JSON_DECLARATION = /^JSONB?$/i;
 
 type Cell = (value: unknown) => WireValue;
+
+type Bound = string | number | Uint8Array | null;
+
+/** What the exporter wrote, as the declared type wants it: bytes for `0x…` in a BLOB, 1/0 for a BOOLEAN's text. */
+function bound(value: string | null, declared: string | null): Bound {
+  if (value === null || declared === null) return value;
+  if (BLOB_DECLARATION.test(declared)) {
+    const hex = EXPORTED_BYTES.exec(value);
+    if (hex !== null) return Buffer.from(hex[1] ?? "", "hex");
+  }
+  if (BOOLEAN_DECLARATION.test(declared)) return BOOLEAN_TEXT.get(value.toLowerCase()) ?? value;
+  return value;
+}
 
 function plainCell(value: unknown): WireValue {
   return typeof value === "bigint" ? toWireInteger(value) : toWireValue(value);
@@ -221,6 +266,36 @@ class SqliteSession implements Session {
         ),
         rowsAffected: null,
       };
+    });
+  }
+
+  insertRows(target: InsertTarget, rows: readonly InsertRow[]): Promise<void> {
+    return settle("statementFailed", () => {
+      if (rows.length === 0) return;
+      const database = this.#database;
+      if (this.#mode === "manual" && !database.isTransaction) database.exec(BEGIN_SQL);
+      const width = Math.max(1, target.columns.length);
+      const perStatement = Math.max(1, Math.floor(MAX_PARAMETERS / width));
+      const names = target.columns.map((column) => quoteIdentifier(column.name)).join(", ");
+      const tuple = `(${target.columns.map(() => "?").join(", ")})`;
+      database.exec(SAVEPOINT_SQL);
+      try {
+        for (let from = 0; from < rows.length; from += perStatement) {
+          const chunk = rows.slice(from, from + perStatement);
+          const values: Bound[] = [];
+          for (const row of chunk) {
+            row.forEach((value, index) => values.push(bound(value, target.columns[index]?.type ?? null)));
+          }
+          database
+            .prepare(`INSERT INTO ${target.table} (${names}) VALUES ${chunk.map(() => tuple).join(", ")}`)
+            .run(...values);
+        }
+        database.exec(RELEASE_SQL);
+      } catch (cause) {
+        database.exec(ROLLBACK_TO_SQL);
+        database.exec(RELEASE_SQL);
+        throw cause;
+      }
     });
   }
 

@@ -1,4 +1,7 @@
+import { pipeline } from "node:stream/promises";
+import { Readable } from "node:stream";
 import pg from "pg";
+import { from as copyFrom } from "pg-copy-streams";
 import Cursor from "pg-cursor";
 import {
   BYTES_PREVIEW_LENGTH,
@@ -13,6 +16,8 @@ import {
   type ExecuteResult,
   type ExplainedPlan,
   type ExplainOptions,
+  type InsertRow,
+  type InsertTarget,
   type Introspector,
   type ParameterValue,
   type Row,
@@ -34,6 +39,7 @@ import {
   sqlExplainable,
   sqlFormatter,
   sqlGenerator,
+  sqlImporter,
   sqlLiteral,
   sqlParameters,
   sqlSplitter,
@@ -42,6 +48,7 @@ import {
   type SqlDialectOptions,
   type SqlLiteralOptions,
 } from "@table-craft/plugin-api/sql";
+import { copyLine, POSTGRES_IMPORT_TYPES, postgresDecimal } from "./bulk.js";
 import { EXPLAIN_VERBS, explainStatement, readPlan } from "./explain.js";
 import { postgresIntrospector } from "./introspect.js";
 
@@ -56,6 +63,7 @@ const CAPABILITIES: readonly Capability[] = [
   "explainAnalyze",
   "currentNamespace",
   "keepAlive",
+  "bulkInsert",
 ];
 
 /** Function bodies live in dollar quotes; `BEGIN ATOMIC … END` holds a SQL-standard body. */
@@ -107,11 +115,22 @@ const language: SqlLanguage = {
   explainable,
   ...sqlFormatter({ dialect: "postgresql", lexer: DIALECT, parameters: PARAMETERS.styles }),
   ...sqlParameters(PARAMETERS),
+  ...sqlImporter({
+    quoteIdentifier,
+    plainIdentifier: PLAIN_IDENTIFIER,
+    keywords: KEYWORDS,
+    types: POSTGRES_IMPORT_TYPES,
+    decimal: postgresDecimal,
+  }),
 };
 
 const BEGIN_SQL = "BEGIN";
 const COMMIT_SQL = "COMMIT";
 const ROLLBACK_SQL = "ROLLBACK";
+/** Each batch of an import is atomic inside the import's transaction (decision 046). */
+const SAVEPOINT_SQL = "SAVEPOINT table_craft_insert";
+const RELEASE_SQL = "RELEASE SAVEPOINT table_craft_insert";
+const ROLLBACK_TO_SQL = "ROLLBACK TO SAVEPOINT table_craft_insert";
 const OPEN_TRANSACTION_MESSAGE = "A transaction is open; commit or roll it back before switching to auto-commit.";
 const BUSY_MESSAGE = "Another statement is still running in this session.";
 
@@ -288,6 +307,19 @@ function shortVersion(reported: string | undefined): string | null {
   return version === "" ? null : version;
 }
 
+/** SQLSTATE classes the server sends when the connection itself is going away. */
+const CONNECTION_CLASSES = ["08", "57P01", "57P02", "57P03"];
+
+/** An error the server sent in answer to a statement, not one the socket or the client raised. */
+function isServerError(cause: unknown): boolean {
+  const { code, severity } = cause as { code?: unknown; severity?: unknown };
+  return (
+    typeof severity === "string" &&
+    typeof code === "string" &&
+    !CONNECTION_CLASSES.some((prefix) => code.startsWith(prefix))
+  );
+}
+
 class PostgresSession implements Session {
   readonly #config: PostgresConfig;
   readonly #client: pg.Client;
@@ -426,6 +458,59 @@ class PostgresSession implements Session {
     } catch (cause) {
       throw new PluginError("connectionLost", `The connection was lost: ${messageOf(cause)}`, { cause });
     }
+  }
+
+  async insertRows(target: InsertTarget, rows: readonly InsertRow[]): Promise<void> {
+    if (this.#broken !== null) {
+      throw new PluginError("connectionFailed", `The connection was lost: ${this.#broken.message}`);
+    }
+    if (this.#running !== null) throw new PluginError("statementFailed", BUSY_MESSAGE);
+    if (rows.length === 0) return;
+    await this.#cancelling.catch(() => undefined);
+    const running: Running = { cancelRequested: false };
+    this.#running = running;
+    const state = this.#transaction;
+    try {
+      if (state.mode === "manual" && !state.open) {
+        await this.#client.query(BEGIN_SQL);
+        state.open = true;
+      }
+      // Outside a transaction COPY is atomic by itself; inside one, a refused row would abort it.
+      const savepoint = state.open;
+      if (savepoint) await this.#client.query(SAVEPOINT_SQL);
+      try {
+        await this.#copy(target, rows);
+        if (savepoint) await this.#client.query(RELEASE_SQL);
+      } catch (cause) {
+        if (savepoint && this.#lost() === null) {
+          await this.#client.query(ROLLBACK_TO_SQL).catch((lost: unknown) => {
+            this.#broken ??= lost instanceof Error ? lost : new Error(String(lost));
+          });
+        }
+        throw cause;
+      }
+    } catch (cause) {
+      // Only the server refuses rows; anything else (a reset socket, a closed client) is the link.
+      if (!isServerError(cause)) this.#broken ??= cause instanceof Error ? cause : new Error(String(cause));
+      const lost = this.#lost();
+      if (lost !== null)
+        throw new PluginError("connectionFailed", `The connection was lost: ${lost.message}`, { cause });
+      throw this.#failure(cause, running);
+    } finally {
+      this.#running = null;
+    }
+  }
+
+  /** Read through a method: the client's `error` event sets it while a statement is awaited. */
+  #lost(): Error | null {
+    return this.#broken;
+  }
+
+  async #copy(target: InsertTarget, rows: readonly InsertRow[]): Promise<void> {
+    const columns = target.columns.map((column) => quoteIdentifier(column.name)).join(", ");
+    const stream = this.#client.query(copyFrom(`COPY ${target.table} (${columns}) FROM STDIN`));
+    const text = rows.map((row) => copyLine(row, target.columns)).join("");
+    await pipeline(Readable.from([text]), stream);
   }
 
   async explain(sql: string, options: ExplainOptions): Promise<ExplainedPlan> {

@@ -117,6 +117,11 @@ export const pluginManifestSchema = z
   .refine((manifest) => !manifest.capabilities.includes("currentNamespace") || manifest.capabilities.includes("sql"), {
     message: "the currentNamespace capability requires sql",
     path: ["capabilities"],
-  });
+  })
+  // An import commits at boundaries it chooses and rolls back the rest (decision 046).
+  .refine(
+    (manifest) => !manifest.capabilities.includes("bulkInsert") || manifest.capabilities.includes("transactions"),
+    { message: "the bulkInsert capability requires transactions", path: ["capabilities"] },
+  );
 
 export type PluginManifest = z.infer<typeof pluginManifestSchema>;

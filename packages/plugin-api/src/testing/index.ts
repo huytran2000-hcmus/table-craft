@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   BYTES_PREVIEW_LENGTH,
   CAPABILITIES,
+  IMPORT_KINDS,
   DefinitionNotFoundError,
   isPluginError,
   z,
@@ -13,6 +14,9 @@ import {
   type ExecuteOptions,
   type ExplainedPlan,
   type GeneratedStatement,
+  type ImportKind,
+  type InsertRow,
+  type InsertTarget,
   type PlanNode,
   type PluginErrorCode,
   type PluginManifest,
@@ -23,6 +27,7 @@ import {
   type Session,
   type SqlLanguage,
   type Transactions,
+  type WireValue,
 } from "@table-craft/plugin-api";
 
 export interface ContractFixture {
@@ -194,6 +199,38 @@ const ROWS_READ_BEFORE_RETURN = 3;
 const LONG_BYTES_LENGTH = 48;
 const LONG_BYTES_HEX = "c3";
 const HEX_DIGITS_PER_BYTE = 2;
+
+/** Created and dropped by the import-type case. */
+const IMPORT_PROBE_TABLE = "table_craft_import_probe";
+/** Text a file holds for each inferred kind; every proposed type must take it. */
+const IMPORT_SAMPLES: Readonly<Record<ImportKind, string>> = {
+  boolean: "true",
+  integer: "-42",
+  bigint: "9007199254740993",
+  decimal: "1234567.891",
+  double: "1.5e3",
+  date: "2024-02-29",
+  timestamp: "2024-02-29 13:45:30",
+  text: "plain",
+};
+/** Characters a bulk path must carry through its own framing: COPY's tab, newline and backslash among them. */
+const AWKWARD_TEXTS = ["tab\there", "line\nbreak\r\nand", "back\\slash \\N", "\\N", "quote \" ' ,", ""];
+
+/** A cell as TableCraft's CSV export writes it (`cellText` in core), the text an import reads back. */
+function exportedText(value: WireValue): string | null {
+  if (value === null) return null;
+  if (typeof value !== "object") return String(value);
+  switch (value.kind) {
+    case "bigint":
+      return value.value;
+    case "json":
+      return value.text;
+    case "date":
+      return value.iso;
+    case "bytes":
+      return `0x${value.preview}`;
+  }
+}
 
 const SLEEP_SECONDS = 30;
 /** Long enough for the statement to reach the database before it is cancelled. */
@@ -425,6 +462,17 @@ export function runPluginContract(plugin: DatasourcePlugin, fixture: ContractFix
       if (declared) expect(plugin.capabilities).toContain("sql");
       await withSession(plugin, fixture, (session) => {
         expect(session.currentNamespace !== undefined).toBe(declared);
+        return Promise.resolve();
+      });
+    });
+
+    it("givenPlugin_whenInspected_thenHasInsertRowsAndImportLanguageExactlyWhenBulkInsertDeclared", async () => {
+      const bulk = plugin.capabilities.includes("bulkInsert");
+      if (bulk) expect(plugin.capabilities).toContain("transactions");
+      expect(plugin.language?.importType !== undefined).toBe(bulk);
+      expect(plugin.language?.createTable !== undefined).toBe(bulk);
+      await withSession(plugin, fixture, (session) => {
+        expect(session.insertRows !== undefined).toBe(bulk);
         return Promise.resolve();
       });
     });
@@ -721,6 +769,119 @@ export function runPluginContract(plugin: DatasourcePlugin, fixture: ContractFix
         expect(language().classify("SELECT 1").kind).toBe("read");
         expect(language().classify("INSERT INTO t VALUES (1)").kind).toBe("write");
         expect(language().classify("COMMIT").kind).toBe("transaction");
+      });
+    });
+
+    describe.runIf(plugin.capabilities.includes("bulkInsert"))("bulkInsert", () => {
+      const run = async (session: Session, sql: string): Promise<Row[]> => collect((await session.execute(sql)).rows);
+
+      function insertRowsOf(session: Session): (target: InsertTarget, rows: readonly InsertRow[]) => Promise<void> {
+        const insert = session.insertRows?.bind(session);
+        if (insert === undefined) throw new Error("A bulkInsert session needs insertRows.");
+        return insert;
+      }
+
+      /** The copy table as the engine targets it: named and typed by the introspector. */
+      async function copyTarget(session: Session): Promise<InsertTarget> {
+        await run(session, `DROP TABLE IF EXISTS ${TYPE_PROBE_COPY_TABLE}`);
+        await run(session, fixture.typeProbe.copyTable);
+        const introspector = session.introspector;
+        if (introspector === undefined) {
+          const probe = await session.execute(`SELECT * FROM ${TYPE_PROBE_COPY_TABLE}`);
+          await collect(probe.rows);
+          return { table: TYPE_PROBE_COPY_TABLE, columns: probe.columns };
+        }
+        const path = catalogPathOf(fixture);
+        const relation = (await introspector.describe(path)).relations.find(
+          (candidate) => candidate.name === TYPE_PROBE_COPY_TABLE,
+        );
+        if (relation === undefined) throw new Error(`${TYPE_PROBE_COPY_TABLE} was not described.`);
+        return {
+          table: introspector.qualifiedName(path, TYPE_PROBE_COPY_TABLE),
+          columns: relation.columns.map((column) => ({ name: column.name, type: column.type })),
+        };
+      }
+
+      async function withCopy(use: (session: Session, target: InsertTarget) => Promise<void>): Promise<void> {
+        await withSession(plugin, fixture, async (session) => {
+          try {
+            await use(session, await copyTarget(session));
+          } finally {
+            await session.transactions?.rollback();
+            await run(session, `DROP TABLE IF EXISTS ${TYPE_PROBE_COPY_TABLE}`);
+          }
+        });
+      }
+
+      it("givenBulkInsert_whenTypeProbeTextInserted_thenReadBackEqual", async () => {
+        await withCopy(async (session, target) => {
+          const rows = fixture.typeProbe.expected.map((row) => row.map(exportedText));
+
+          await insertRowsOf(session)(target, rows);
+
+          expect(await run(session, `SELECT * FROM ${TYPE_PROBE_COPY_TABLE} ORDER BY id`)).toEqual(
+            fixture.typeProbe.expected,
+          );
+        });
+      });
+
+      it("givenBulkInsert_whenBatchRefused_thenNothingOfItAndTransactionUsable", async () => {
+        await withCopy(async (session, target) => {
+          const insert = insertRowsOf(session);
+          const row = (id: string): InsertRow => target.columns.map((column) => (column.name === "id" ? id : null));
+          await session.transactions?.setMode("manual");
+
+          await insert(target, [row("1")]);
+          const refused = await rejectionCode(insert(target, [row("2"), row("not a number")]));
+          const open = session.transactions?.open;
+          await insert(target, [row("3")]);
+          await session.transactions?.commit();
+          await session.transactions?.setMode("auto");
+
+          expect(refused).toBe("statementFailed");
+          expect(open).toBe(true);
+          expect(await run(session, `SELECT id FROM ${TYPE_PROBE_COPY_TABLE} ORDER BY id`)).toEqual([[1], [3]]);
+        });
+      });
+
+      it("givenBulkInsert_whenControlCharacters_thenRoundTrip", async () => {
+        await withCopy(async (session, target) => {
+          const texts = AWKWARD_TEXTS;
+          const rows = texts.map((text, index) =>
+            target.columns.map((column) =>
+              column.name === "id" ? String(index + 1) : column.name === "unicode_text" ? text : null,
+            ),
+          );
+
+          await insertRowsOf(session)(target, rows);
+
+          expect(await run(session, `SELECT unicode_text FROM ${TYPE_PROBE_COPY_TABLE} ORDER BY id`)).toEqual(
+            texts.map((text) => [text]),
+          );
+        });
+      });
+
+      it("givenCreateTable_whenEveryImportType_thenTableTakesSampleText", async () => {
+        const dialect = plugin.language;
+        if (dialect === undefined) throw new Error("A bulkInsert plugin needs language.");
+        await withSession(plugin, fixture, async (session) => {
+          const columns = IMPORT_KINDS.map((kind) => ({
+            name: `${kind}_value`,
+            type: dialect.importType?.({ kind, integerDigits: 7, scale: 3 }) ?? "",
+          }));
+          const create = dialect.createTable?.(IMPORT_PROBE_TABLE, columns) ?? "";
+          await run(session, `DROP TABLE IF EXISTS ${IMPORT_PROBE_TABLE}`);
+          try {
+            expect(dialect.classify(create).kind).toBe("ddl");
+            await run(session, create);
+            await insertRowsOf(session)({ table: IMPORT_PROBE_TABLE, columns }, [
+              IMPORT_KINDS.map((kind) => IMPORT_SAMPLES[kind]),
+            ]);
+            expect(await run(session, `SELECT COUNT(*) AS n FROM ${IMPORT_PROBE_TABLE}`)).toHaveLength(1);
+          } finally {
+            await run(session, `DROP TABLE IF EXISTS ${IMPORT_PROBE_TABLE}`);
+          }
+        });
       });
     });
 
