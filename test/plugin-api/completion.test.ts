@@ -1,4 +1,4 @@
-import type { CompletionResult, Relation } from "@table-craft/plugin-api";
+import type { CompletionResult, Namespace, Relation } from "@table-craft/plugin-api";
 import { quoteIdentifierWith, SQL_FUNCTIONS, SQL_KEYWORDS, sqlCompleter } from "@table-craft/plugin-api/sql";
 import { describe, expect, it } from "vitest";
 import { ARCHIVE, fakeCatalog, fixtureRelations, PUBLIC, relation } from "../support/completionCatalog.js";
@@ -384,7 +384,6 @@ describe("sqlCompleter follows the script's namespace statements", () => {
         [JSON.stringify(MYSQL_ARCHIVE), relations.get(JSON.stringify(ARCHIVE)) ?? []],
       ]),
       MYSQL_HOME,
-      "database",
     );
   }
 
@@ -421,6 +420,21 @@ describe("sqlCompleter follows the script's namespace statements", () => {
 
   it("givenQuotedSearchPathNotMatchingCase_whenCompletingFrom_thenCatalogCurrent", async () => {
     const result = await complete('SET search_path TO "ARCHIVE";\nSELECT * FROM |', followingPostgres);
+
+    expect(labels(result, "table")).toEqual(["Line Items", "customers", "orders"]);
+  });
+
+  it("givenSearchPathNamingTheDatabase_whenCompletingFrom_thenCatalogCurrent", async () => {
+    const schemas = fakeCatalog();
+    const database: Namespace = {
+      path: ["table_craft"],
+      name: "table_craft",
+      kind: "database",
+      system: false,
+      current: false,
+    };
+    const catalog = { ...schemas, namespaces: async () => [database, ...(await schemas.namespaces())] };
+    const result = await complete("SET search_path TO table_craft;\nSELECT * FROM |", followingPostgres, catalog);
 
     expect(labels(result, "table")).toEqual(["Line Items", "customers", "orders"]);
   });

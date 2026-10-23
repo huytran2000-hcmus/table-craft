@@ -101,14 +101,13 @@ export interface FakeCatalog extends CompletionCatalog {
 export function fakeCatalog(
   relations: Map<string, Relation[]> = fixtureRelations(),
   current: readonly string[] = PUBLIC,
-  kind: Namespace["kind"] = "schema",
 ): FakeCatalog {
   const namespaces: Namespace[] = [...relations.keys()].map((key) => {
     const path = JSON.parse(key) as string[];
     return {
       path,
       name: path.at(-1) ?? "",
-      kind,
+      kind: "schema",
       system: false,
       current: JSON.stringify(path) === JSON.stringify(current),
     };

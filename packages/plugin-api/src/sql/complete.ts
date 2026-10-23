@@ -19,7 +19,7 @@ import {
   type ScopeAt,
   type Source,
 } from "./scope.js";
-import { namespaceTarget } from "./namespace.js";
+import { namespaceTarget, type NamespaceTarget } from "./namespace.js";
 import { sqlSplitter } from "./splitter.js";
 import type { SqlDialectOptions } from "./tokens.js";
 
@@ -147,6 +147,15 @@ function samePath(left: readonly string[] | null, right: readonly string[] | nul
   );
 }
 
+/**
+ * Whether `namespace` is one `target` can switch to. Not by `Namespace.kind`: MySQL lists its
+ * databases as top-level schemas, the namespaces holding relations, so a `USE` picks a top-level
+ * namespace whatever its kind, and a search path a schema (found live, plan 022).
+ */
+function targetable(target: NamespaceTarget, namespace: Namespace): boolean {
+  return target.kind === "database" ? namespace.path.length === 1 : namespace.kind === "schema";
+}
+
 function relationKind(relation: Relation): CompletionKind {
   return relation.kind === "table" ? "table" : "view";
 }
@@ -244,7 +253,7 @@ export function sqlCompleter(options: CompleterOptions): Pick<SqlLanguage, "comp
         const span = preceding[at];
         const target = span === undefined ? null : namespaceTarget(span.sql, options.dialect);
         if (target === null) continue;
-        const namespaces = (await this.namespaces()).filter((namespace) => namespace.kind === target.kind);
+        const namespaces = (await this.namespaces()).filter((namespace) => targetable(target, namespace));
         for (const candidate of target.candidates) {
           const found = namespaces.find((namespace) => denotes(candidate, namespace.path.at(-1) ?? ""));
           if (found !== undefined) {
