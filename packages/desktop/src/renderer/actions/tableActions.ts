@@ -7,23 +7,20 @@ import {
   reloadTable,
   type OpenTableArgs,
 } from "@table-craft/desktop/renderer/actions/tableCommands.js";
-import { visibleColumns } from "@table-craft/desktop/renderer/model/columnLayout.js";
-import { bufferRowAt, type BufferCell } from "@table-craft/desktop/renderer/model/editBuffer.js";
+import { ACTION_IDS } from "@table-craft/desktop/renderer/actions/appActions.js";
+import {
+  editableSurfaceOf,
+  editSurfaceOf,
+  focusedColumn,
+  hasEditableSelection,
+  heldRows,
+  selectedCells,
+  selectedRows,
+} from "@table-craft/desktop/renderer/actions/resultEditing.js";
 import { relationKey } from "@table-craft/desktop/renderer/model/explorerTree.js";
-import { formatCount } from "@table-craft/desktop/renderer/model/format.js";
-import { rectOf, selectCell } from "@table-craft/desktop/renderer/model/gridSelection.js";
-import { focusRegion } from "@table-craft/desktop/renderer/shell/focus.js";
 import { useModal } from "@table-craft/desktop/renderer/state/modal.js";
 import { usePalette } from "@table-craft/desktop/renderer/state/palette.js";
-import { shownHeld } from "@table-craft/desktop/renderer/state/resultTab.js";
-import {
-  canReload,
-  isEditable,
-  pendingOf,
-  tableRowCount,
-  useTables,
-  type TableSession,
-} from "@table-craft/desktop/renderer/state/tables.js";
+import { canReload, useTables, type TableSession } from "@table-craft/desktop/renderer/state/tables.js";
 
 export const TABLE_ACTION_IDS = {
   openTable: "table.open",
@@ -70,51 +67,6 @@ function tableOf(context: ActionContext): { readonly id: string; readonly sessio
   return { id: context.activeTab.id, session: context.table };
 }
 
-function editable(context: ActionContext): { readonly id: string; readonly session: TableSession } | null {
-  const target = tableOf(context);
-  return target !== null && isEditable(target.session) ? target : null;
-}
-
-/** The selected cells as grid rows and result columns. */
-export function selectedCells(session: TableSession): readonly BufferCell[] {
-  const result = session.result;
-  if (result?.selection == null) return [];
-  const rect = rectOf(result.selection);
-  const visible = visibleColumns(result.layout);
-  const cells: BufferCell[] = [];
-  for (let row = rect.top; row <= rect.bottom; row++) {
-    for (let position = rect.left; position <= rect.right; position++) {
-      const column = visible[position];
-      if (column !== undefined) cells.push({ row, column });
-    }
-  }
-  return cells;
-}
-
-/** The grid rows the selection spans. */
-export function selectedRows(session: TableSession): readonly number[] {
-  const selection = session.result?.selection;
-  if (selection == null) return [];
-  const rect = rectOf(selection);
-  return Array.from({ length: rect.bottom - rect.top + 1 }, (_, index) => rect.top + index);
-}
-
-/** The selected rows the engine holds, by result row: values that are not pending in the buffer. */
-function heldRows(session: TableSession): readonly number[] {
-  const held = session.result === null ? 0 : shownHeld(session.result);
-  return selectedRows(session).flatMap((index) => {
-    const row = bufferRowAt(session.buffer, held, index);
-    return row?.kind === "held" ? [row.row] : [];
-  });
-}
-
-/** The focused cell's result column. */
-function focusedColumn(session: TableSession): number | null {
-  const result = session.result;
-  if (result?.selection == null) return null;
-  return visibleColumns(result.layout)[result.selection.focus.column] ?? null;
-}
-
 /** The foreign key the focused column is part of. */
 export function foreignKeyAt(session: TableSession): ForeignKey | null {
   const column = focusedColumn(session);
@@ -147,21 +99,6 @@ export function selectedRelation(context: ActionContext): OpenTableArgs | null {
   if (selection?.kind !== "catalog" || selection.name === null) return null;
   if (selection.key !== relationKey(selection.id, selection.path, selection.name)) return null;
   return { datasourceId: selection.id, path: selection.path, relation: selection.name };
-}
-
-function hasSelection(context: ActionContext): boolean {
-  const target = editable(context);
-  return target !== null && target.session.result?.selection != null && target.session.editing === null;
-}
-
-/** Selects the grid's last row, where Add Row and Duplicate put theirs, and gives the grid focus. */
-function selectLastRow(id: string): void {
-  const session = useTables.getState().tables[id];
-  const result = session?.result;
-  if (session === undefined || result == null) return;
-  const row = tableRowCount(session) - 1;
-  useTables.getState().select(id, result.id, selectCell({ row, column: result.selection?.focus.column ?? 0 }));
-  focusRegion("grid");
 }
 
 export const TABLE_ACTIONS: readonly AnyAction[] = [
@@ -230,14 +167,13 @@ export const TABLE_ACTIONS: readonly AnyAction[] = [
     category: "Table Editor",
     shortcut: "Enter",
     shortcutRegion: "grid",
-    tabKind: "table",
-    when: hasSelection,
+    when: hasEditableSelection,
     run: (context) => {
-      const target = editable(context);
-      const focus = target?.session.result?.selection?.focus;
-      const column = target === null ? null : focusedColumn(target.session);
-      if (target === null || focus === undefined || column === null) return;
-      useTables.getState().beginEdit(target.id, { row: focus.row, column });
+      const surface = editableSurfaceOf(context);
+      const focus = surface?.target.result?.selection?.focus;
+      const column = surface === null ? null : focusedColumn(surface.target);
+      if (surface === null || focus === undefined || column === null) return;
+      surface.beginEdit({ row: focus.row, column });
     },
   }),
   defineAction({
@@ -246,11 +182,10 @@ export const TABLE_ACTIONS: readonly AnyAction[] = [
     category: "Table Editor",
     shortcut: "Mod+Alt+N",
     shortcutRegion: "grid",
-    tabKind: "table",
-    when: hasSelection,
+    when: hasEditableSelection,
     run: (context) => {
-      const target = editable(context);
-      if (target !== null) useTables.getState().setCells(target.id, selectedCells(target.session), { kind: "null" });
+      const surface = editableSurfaceOf(context);
+      surface?.setCells(selectedCells(surface.target), { kind: "null" });
     },
   }),
   defineAction({
@@ -259,13 +194,10 @@ export const TABLE_ACTIONS: readonly AnyAction[] = [
     category: "Table Editor",
     shortcut: "Mod+Alt+D",
     shortcutRegion: "grid",
-    tabKind: "table",
-    when: hasSelection,
+    when: hasEditableSelection,
     run: (context) => {
-      const target = editable(context);
-      if (target !== null) {
-        useTables.getState().setCells(target.id, selectedCells(target.session), { kind: "default" });
-      }
+      const surface = editableSurfaceOf(context);
+      surface?.setCells(selectedCells(surface.target), { kind: "default" });
     },
   }),
   defineAction({
@@ -275,13 +207,12 @@ export const TABLE_ACTIONS: readonly AnyAction[] = [
     icon: "add",
     shortcut: "Mod+N",
     shortcutRegion: SUBMIT_REGIONS,
-    tabKind: "table",
-    when: (context) => editable(context) !== null,
+    when: (context) => editableSurfaceOf(context) !== null,
     run: (context) => {
-      const target = editable(context);
-      if (target === null) return;
-      useTables.getState().addRow(target.id);
-      selectLastRow(target.id);
+      const surface = editableSurfaceOf(context);
+      if (surface === null) return;
+      surface.addRow();
+      surface.selectLastRow();
     },
   }),
   defineAction({
@@ -291,13 +222,12 @@ export const TABLE_ACTIONS: readonly AnyAction[] = [
     icon: "duplicate",
     shortcut: "Mod+D",
     shortcutRegion: "grid",
-    tabKind: "table",
-    when: hasSelection,
+    when: hasEditableSelection,
     run: (context) => {
-      const target = editable(context);
-      if (target === null) return;
-      useTables.getState().duplicateRows(target.id, selectedRows(target.session));
-      selectLastRow(target.id);
+      const surface = editableSurfaceOf(context);
+      if (surface === null) return;
+      surface.duplicateRows(selectedRows(surface.target));
+      surface.selectLastRow();
     },
   }),
   defineAction({
@@ -307,11 +237,10 @@ export const TABLE_ACTIONS: readonly AnyAction[] = [
     icon: "delete",
     shortcut: "Mod+Backspace",
     shortcutRegion: "grid",
-    tabKind: "table",
-    when: hasSelection,
+    when: hasEditableSelection,
     run: (context) => {
-      const target = editable(context);
-      if (target !== null) useTables.getState().deleteRows(target.id, selectedRows(target.session));
+      const surface = editableSurfaceOf(context);
+      surface?.deleteRows(selectedRows(surface.target));
     },
   }),
   defineAction({
@@ -321,23 +250,18 @@ export const TABLE_ACTIONS: readonly AnyAction[] = [
     icon: "revert",
     shortcut: "Mod+Alt+Z",
     shortcutRegion: "grid",
-    tabKind: "table",
-    when: (context) => hasSelection(context) && pendingOf(context.table ?? undefined) > 0,
+    when: (context) => hasEditableSelection(context) && (editSurfaceOf(context)?.pending ?? 0) > 0,
     run: (context) => {
-      const target = editable(context);
-      if (target !== null) useTables.getState().revert(target.id, selectedCells(target.session));
+      const surface = editableSurfaceOf(context);
+      surface?.revert(selectedCells(surface.target));
     },
   }),
   defineAction({
     id: TABLE_ACTION_IDS.revertAll,
     title: "Revert All",
     category: "Table Editor",
-    tabKind: "table",
-    when: (context) => pendingOf(context.table ?? undefined) > 0,
-    run: (context) => {
-      const target = tableOf(context);
-      if (target !== null) useTables.getState().revertAll(target.id);
-    },
+    when: (context) => (editSurfaceOf(context)?.pending ?? 0) > 0,
+    run: (context) => editSurfaceOf(context)?.revertAll(),
   }),
   defineAction({
     id: TABLE_ACTION_IDS.preview,
@@ -346,22 +270,21 @@ export const TABLE_ACTIONS: readonly AnyAction[] = [
     icon: "preview",
     shortcut: "Mod+Shift+P",
     shortcutRegion: SUBMIT_REGIONS,
-    tabKind: "table",
-    when: (context) => editable(context) !== null && pendingOf(context.table ?? undefined) > 0,
+    when: (context) => (editableSurfaceOf(context)?.pending ?? 0) > 0,
     run: async (context) => {
-      const target = editable(context);
-      if (target === null) return;
-      useTables.getState().commitEdit(target.id);
-      const statements = await useTables.getState().preview(target.id);
+      const surface = editableSurfaceOf(context);
+      if (surface === null) return;
+      surface.commitEdit();
+      const statements = await surface.preview();
       if (statements === null) return;
       const answer = await useModal.getState().ask({
         kind: "statements",
         title: "Pending changes",
-        message: `Submit runs ${formatCount(statements.length)} ${statements.length === 1 ? "statement" : "statements"} in one transaction.`,
+        message: surface.submitsAs(statements.length),
         statements,
         confirm: "Submit",
       });
-      if (answer !== null) await useTables.getState().submit(target.id);
+      if (answer !== null) await surface.submit();
     },
   }),
   defineAction({
@@ -371,12 +294,14 @@ export const TABLE_ACTIONS: readonly AnyAction[] = [
     icon: "submit",
     shortcut: "Mod+Enter",
     shortcutRegion: SUBMIT_REGIONS,
-    tabKind: "table",
-    when: (context) =>
-      editable(context) !== null && (pendingOf(context.table ?? undefined) > 0 || context.table?.editing != null),
+    // In a console grid ⌘↩ submits while edits are pending and runs the console otherwise (decision 057).
+    preempts: [ACTION_IDS.run],
+    when: (context) => {
+      const surface = editableSurfaceOf(context);
+      return surface !== null && (surface.pending > 0 || surface.editing !== null);
+    },
     run: async (context) => {
-      const target = editable(context);
-      if (target !== null) await useTables.getState().submit(target.id);
+      await editableSurfaceOf(context)?.submit();
     },
   }),
   defineAction({
@@ -494,11 +419,8 @@ export const TABLE_ACTIONS: readonly AnyAction[] = [
     category: "Table Editor",
     shortcut: "Mod+Enter",
     shortcutRegion: "valuePanel",
-    tabKind: "table",
-    when: (context) => editable(context) !== null && context.table?.panel != null,
-    run: (context) => {
-      const target = editable(context);
-      if (target !== null) useTables.getState().applyPanel(target.id);
-    },
+    preempts: [ACTION_IDS.run],
+    when: (context) => editableSurfaceOf(context)?.panel != null,
+    run: (context) => editableSurfaceOf(context)?.applyPanel(),
   }),
 ];

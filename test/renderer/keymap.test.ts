@@ -350,21 +350,52 @@ describe("table editor keymap", () => {
     expect(ran).toEqual(["table.submit"]);
   });
 
-  it("givenTableShortcuts_whenListed_thenEachBoundToTableTabs", () => {
+  it("givenTableShortcuts_whenListed_thenEachScopedToARegion", () => {
     const bound = tableActions.filter((action) => action.shortcut !== undefined);
     expect(bound.length).toBeGreaterThan(0);
-    expect(bound.every((action) => action.tabKind === "table" && action.shortcutRegion !== undefined)).toBe(true);
+    expect(bound.every((action) => action.shortcutRegion !== undefined)).toBe(true);
   });
 
-  it("givenModEnter_whenListed_thenRunInConsolesSubmitInTables", () => {
+  it("givenModEnter_whenListed_thenRunInConsolesAndSubmitAheadOfIt", () => {
     const owners = ALL_ACTIONS.filter((action) => action.shortcut === "Mod+Enter").map((action) => [
       action.id,
       action.tabKind,
+      action.preempts,
     ]);
     expect(owners).toEqual([
-      ["console.run", "console"],
-      ["table.submit", "table"],
-      ["table.applyValue", "table"],
+      ["console.run", "console", undefined],
+      ["table.submit", undefined, ["console.run"]],
+      ["table.applyValue", undefined, ["console.run"]],
     ]);
+  });
+
+  it.each([
+    [true, ["table.submit"]],
+    [false, ["console.run"]],
+  ])("givenConsoleGridWithPendingEdits_%s_whenModEnter_thenSubmitElseRun", (pending, expected) => {
+    const ran: string[] = [];
+    const registry = createActionRegistry(() => ({
+      ...IDLE_CONTEXT,
+      activeTab: { id: "console-0", kind: "console", title: "console" },
+    }));
+    registry.register(
+      ALL_ACTIONS.filter((action) => action.shortcut === "Mod+Enter").map((action) =>
+        defineAction({
+          ...action,
+          when: () => action.id === "console.run" || (pending && action.id === "table.submit"),
+          run: () => void ran.push(action.id),
+        }),
+      ),
+    );
+    const dispatch = createKeyDispatcher({
+      registry,
+      platform: "mac",
+      paletteOpen: () => false,
+      focusedRegion: () => "grid",
+    });
+
+    dispatch(keydown({ key: "Enter", code: "Enter", metaKey: true }));
+
+    expect(ran).toEqual(expected);
   });
 });

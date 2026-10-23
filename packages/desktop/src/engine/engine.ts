@@ -1693,7 +1693,7 @@ export function createEngine(options: EngineOptions, now: () => number = Date.no
           hint: "Edit it with statements in a console.",
         });
       }
-      const held = results.rows(handle);
+      const held = results.heldRows(handle);
       return generateEdits({ ...table, rows: (row) => held[row], edits, language: sqlLanguage() });
     }
 
@@ -1745,7 +1745,7 @@ export function createEngine(options: EngineOptions, now: () => number = Date.no
     }
 
     function condition(handle: string, rows: readonly number[], columns: readonly ConditionColumn[]): string {
-      const held = results.rows(ownedHandle(handle));
+      const held = results.heldRows(ownedHandle(handle));
       const table = tables.get(handle);
       const reported = results.columns(handle);
       const typed = columns.map(({ column, name }) => ({

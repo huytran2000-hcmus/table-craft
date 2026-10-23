@@ -84,6 +84,11 @@ export interface Action<A = void> {
    */
   readonly tabKind?: TabKind;
   /**
+   * Actions sharing this one's chord that it goes before while both could fire; one that does not
+   * run then leaves the chord to them, as Submit leaves ⌘↩ to Run when nothing is pending (decision 057).
+   */
+  readonly preempts?: readonly string[];
+  /**
    * Whether the action exists for the active tab at all, as when its datasource's plugin lacks the
    * capability (decision 007); absent means always. Unavailable actions leave the palette and never run.
    */

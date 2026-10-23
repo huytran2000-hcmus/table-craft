@@ -169,12 +169,22 @@ export async function settleTransactions(consoleIds: readonly string[], verb: st
   return ended.every(Boolean);
 }
 
+/** Settles the pending result edits of the consoles among `ids` (plan 026), one console at a time. */
+async function settleConsoleEdits(ids: readonly string[], verb: string): Promise<boolean> {
+  for (const id of ids) {
+    if (useConsoles.getState().consoles[id] === undefined) continue;
+    if (!(await useConsoles.getState().settleEdits(id, verb))) return false;
+  }
+  return true;
+}
+
 /**
  * Closes tabs as `close` picks them, once their consoles' open transactions (decision 15) and their
  * tables' pending changes (plan 008) are settled.
  */
 export async function closeTabs(ids: readonly string[], close: () => readonly Tab[]): Promise<void> {
   if (!(await settlePendingEdits(ids, "close"))) return;
+  if (!(await settleConsoleEdits(ids, "close"))) return;
   if (!(await settleTransactions(ids, "close"))) return;
   for (const tab of close()) {
     if (tab.kind === "console") useConsoles.getState().close(tab.id);
@@ -185,6 +195,7 @@ export async function closeTabs(ids: readonly string[], close: () => readonly Ta
 
 export async function disconnectDatasource(datasourceId: string): Promise<void> {
   if (!(await settlePendingEdits(tablesOf(useTables.getState().tables, datasourceId), "disconnect"))) return;
+  if (!(await settleConsoleEdits(consolesOf(useConsoles.getState().consoles, datasourceId), "disconnect"))) return;
   if (!(await settleTransactions(consolesOf(useConsoles.getState().consoles, datasourceId), "disconnect"))) return;
   await useDatasources.getState().disconnect(datasourceId);
 }
@@ -195,6 +206,7 @@ export function answerCloseRequests(): () => void {
     void (async () => {
       const proceed =
         (await settlePendingEdits(pendingTables(useTables.getState().tables), "quit")) &&
+        (await settleConsoleEdits(Object.keys(useConsoles.getState().consoles), "quit")) &&
         (await settleTransactions(openTransactions(useConsoles.getState().consoles), "quit"));
       if (proceed) await autosave.flush();
       await bridge().answerClose(proceed);

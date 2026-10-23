@@ -65,7 +65,7 @@ export function createKeyDispatcher(options: KeymapOptions): (event: KeyEventLik
   }
 
   function dispatch(event: KeyEventLike, candidates: readonly AnyAction[]): void {
-    for (const action of candidates) {
+    for (const action of preemptingFirst(candidates)) {
       if (!inRegion(action)) continue;
       if (registry.invoke(action.id) !== "ran") continue;
       event.preventDefault();
@@ -126,8 +126,25 @@ function regionsOf(action: AnyAction): readonly FocusRegion[] | null {
   return typeof scope === "string" ? [scope] : scope;
 }
 
-/** Whether two actions' shortcuts can both be live at once: their regions and tab kinds overlap. */
+/** `candidates` with each action that preempts another ahead of the ones it preempts. */
+function preemptingFirst(candidates: readonly AnyAction[]): readonly AnyAction[] {
+  const preempted = new Set(candidates.flatMap((action) => action.preempts ?? []));
+  return [
+    ...candidates.filter((action) => !preempted.has(action.id)),
+    ...candidates.filter((action) => preempted.has(action.id)),
+  ];
+}
+
+function preempts(a: AnyAction, b: AnyAction): boolean {
+  return a.preempts?.includes(b.id) === true || b.preempts?.includes(a.id) === true;
+}
+
+/**
+ * Whether two actions' shortcuts can both be live at once: their regions and tab kinds overlap,
+ * and neither declares it goes first.
+ */
 function overlap(a: AnyAction, b: AnyAction): boolean {
+  if (preempts(a, b)) return false;
   if (a.tabKind !== undefined && b.tabKind !== undefined && a.tabKind !== b.tabKind) return false;
   const regionsA = regionsOf(a);
   const regionsB = regionsOf(b);

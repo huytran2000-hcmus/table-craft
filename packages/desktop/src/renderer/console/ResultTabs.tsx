@@ -1,9 +1,9 @@
 import type { ReactNode } from "react";
 import { ACTION_IDS } from "@table-craft/desktop/renderer/actions/appActions.js";
 import { invoke } from "@table-craft/desktop/renderer/actions/index.js";
+import { ConsoleResult } from "@table-craft/desktop/renderer/console/ConsoleResult.js";
 import { OutputLog } from "@table-craft/desktop/renderer/console/OutputLog.js";
 import { PlanView } from "@table-craft/desktop/renderer/console/PlanView.js";
-import { ResultGrid } from "@table-craft/desktop/renderer/grid/ResultGrid.js";
 import {
   activeTabOf,
   OUTPUT_TAB,
@@ -105,7 +105,7 @@ export function ResultTabs({ consoleId, session }: { readonly consoleId: string;
         ) : active.kind === "plan" ? (
           <PlanView key={active.id} consoleId={consoleId} plan={active} />
         ) : (
-          <ResultGrid key={active.id} ownerId={consoleId} result={active} host={useConsoles.getState} />
+          <ConsoleResult key={active.id} consoleId={consoleId} session={session} result={active} />
         )}
       </div>
     </div>

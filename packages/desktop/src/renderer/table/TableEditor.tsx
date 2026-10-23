@@ -208,6 +208,7 @@ export function TableEditor({ tableId }: { readonly tableId: string }) {
           result={result}
           host={useTables.getState}
           edits={edits}
+          serverSorted
           staleText={STALE_TEXT}
           panel={(focus) => <TablePanel tableId={tableId} session={session} focus={focus} />}
           toolbar={

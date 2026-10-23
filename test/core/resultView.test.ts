@@ -155,6 +155,17 @@ describe("result view", () => {
     expect(store.rows(handle)).toHaveLength(ROWS.length);
   });
 
+  it("givenSortedResult_whenHeldRowsRead_thenIndexedAsTheWindowsNameThem", async () => {
+    const { store, handle } = await stored();
+    store.sort(handle, [{ column: 0, direction: "desc" }]);
+
+    expect(store.heldRows(handle).map((row) => row[0])).toEqual([1234, 4, 3, 2, 1]);
+    const { sources } = store.setView(handle, spec({ rowsOnly: true }, "alpha"));
+    const held = store.heldRows(handle);
+
+    expect((sources ?? []).map((index) => held[index]?.[0])).toEqual([4, 3, 1]);
+  });
+
   it("givenMatches_whenFindMatchStepped_thenWrapsBothWays", async () => {
     const { store, handle } = await stored();
     store.setView(handle, spec({}, "alpha"));

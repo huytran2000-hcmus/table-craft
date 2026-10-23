@@ -275,6 +275,15 @@ export class ResultStore {
     return this.#ordered(this.#stored(handle));
   }
 
+  /**
+   * Every held row by the index a window names it with: by arrival while a filtered view stands,
+   * whose sources index the rows as they arrived, else in the current sort order. What edits read.
+   */
+  heldRows(handle: ResultHandle): readonly Row[] {
+    const stored = this.#stored(handle);
+    return (this.#view(stored)?.sources ?? null) === null ? this.#ordered(stored) : stored.rows;
+  }
+
   /** The rows the current view shows, in its order: what copy and a visible-only export read. */
   shownRows(handle: ResultHandle): readonly Row[] {
     const stored = this.#stored(handle);

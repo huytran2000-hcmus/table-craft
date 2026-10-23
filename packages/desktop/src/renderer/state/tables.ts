@@ -13,25 +13,30 @@ import type {
 } from "@table-craft/desktop/engine/protocol.js";
 import type { HistoryEntry } from "@table-craft/desktop/preload/bridge.js";
 import type { EngineClient } from "@table-craft/desktop/renderer/engine/client.js";
-import { formatCell } from "@table-craft/desktop/renderer/grid/format.js";
 import { carriedLayout, type ColumnLayout } from "@table-craft/desktop/renderer/model/columnLayout.js";
 import {
-  addRow,
-  bufferRowAt,
-  deleteRows,
-  duplicateRows,
   EMPTY_BUFFER,
   gridRowCount,
-  inputOf,
   pendingCount,
-  pendingInput,
-  revertCells,
-  setCell,
   toEdits,
   type BufferCell,
   type EditBuffer,
-  type HeldRows,
 } from "@table-craft/desktop/renderer/model/editBuffer.js";
+import {
+  canEditCell,
+  clampedTo,
+  editCellText,
+  editorAt,
+  withAddedRow,
+  withCells,
+  withDeletes,
+  withDuplicates,
+  withReverted,
+  submitLabel,
+  submittedScript,
+  submittedText,
+  type CellEditor,
+} from "@table-craft/desktop/renderer/model/resultEdits.js";
 import { clampSelection, type GridSelection } from "@table-craft/desktop/renderer/model/gridSelection.js";
 import { datasourceById, useDatasources } from "@table-craft/desktop/renderer/state/datasources.js";
 import { NO_EXPORTS, useExports, type ExportStarter } from "@table-craft/desktop/renderer/state/exports.js";
@@ -44,7 +49,6 @@ import {
 import { history } from "@table-craft/desktop/renderer/state/history.js";
 import {
   resultTabOf,
-  rowAt,
   searchedColumnsChanged,
   shownHeld,
   type ResultSearch,
@@ -66,12 +70,8 @@ export interface TableTarget {
  */
 export type TableStatus = "connecting" | "ready" | "loading" | "submitting" | "failed" | "disconnected";
 
-/** The cell being edited in place: its grid row, result column and the text typed so far. */
-export interface CellEditor extends BufferCell {
-  readonly text: string;
-  /** The text the editor opened with; committing it unchanged writes nothing. */
-  readonly initial: string;
-}
+export type { CellEditor };
+export { submittedScript };
 
 /** What the WHERE and ORDER BY bars hold. */
 export interface TableClauses {
@@ -244,15 +244,7 @@ export function tableRowCount(session: TableSession): number {
 
 /** The text a cell shows and edits from: its pending input, else its value; null and default edit as empty. */
 export function cellText(session: TableSession, cell: BufferCell): string {
-  const result = session.result;
-  if (result === null) return "";
-  const row = bufferRowAt(session.buffer, shownHeld(result), cell.row);
-  if (row === null) return "";
-  const pending = pendingInput(session.buffer, row, cell.column);
-  if (pending !== undefined) return pending.kind === "text" ? pending.text : "";
-  if (row.kind === "inserted") return "";
-  const value = rowAt(result.windows, cell.row)?.[cell.column];
-  return value === undefined || value === null ? "" : formatCell(value);
+  return editCellText(session, cell);
 }
 
 /** Disconnected until its first read opens a session. */
@@ -283,23 +275,6 @@ function newTable(target: TableTarget, where: string): TableSession {
 export const LOAD_LABEL = "Load rows";
 export const COUNT_LABEL = "Count rows";
 const SUBMIT_LABEL = "Submit changes";
-
-function submitLabel(statements: number): string {
-  return `Submit ${String(statements)} ${statements === 1 ? "statement" : "statements"}`;
-}
-
-/** A submit as one script that runs as it ran: each statement ends in `;`, one per line. */
-export function submittedScript(statements: readonly string[]): string {
-  return statements
-    .map((statement) => statement.trimEnd())
-    .map((statement) => (statement.endsWith(";") ? statement : `${statement};`))
-    .join("\n");
-}
-
-/** The footer notice after a submit. */
-function submittedText(statements: number): string {
-  return `Submitted ${String(statements)} ${statements === 1 ? "statement" : "statements"}`;
-}
 
 export function createTablesStore(dependencies: TablesDependencies) {
   const clients = new Map<string, EngineClient>();
@@ -362,13 +337,7 @@ export function createTablesStore(dependencies: TablesDependencies) {
       if (current === undefined || current.result === null) return;
       const buffer = change(current);
       if (buffer === current.buffer) return;
-      const rows = gridRowCount(buffer, shownHeld(current.result));
-      const columns = current.result.layout.hidden.filter((hidden) => !hidden).length;
-      patch(id, {
-        buffer,
-        notice: null,
-        result: { ...current.result, selection: clampSelection(current.result.selection, { rows, columns }) },
-      });
+      patch(id, { buffer, notice: null, result: clampedTo(current.result, buffer) });
     }
 
     /** The engine closes a session's open cursor when the session runs anything. */
@@ -487,10 +456,6 @@ export function createTablesStore(dependencies: TablesDependencies) {
       } finally {
         patch(id, { status: settled(id) });
       }
-    }
-
-    function heldRowsOf(session: TableSession): HeldRows {
-      return session.result === null ? 0 : shownHeld(session.result);
     }
 
     return {
@@ -624,12 +589,8 @@ export function createTablesStore(dependencies: TablesDependencies) {
       beginEdit(id, cell, text) {
         const current = get().tables[id];
         if (!isEditable(current)) return;
-        // Bytes arrive as a preview only, so there is nothing whole to edit (plan 008 decision 9).
-        if (current.result?.typeClasses[cell.column] === "bytes") return;
-        const row = bufferRowAt(current.buffer, heldRowsOf(current), cell.row);
-        if (row === null || (row.kind === "held" && current.buffer.deletes.has(row.row))) return;
-        const initial = cellText(current, cell);
-        patch(id, { editing: { ...cell, text: text ?? initial, initial } });
+        const editing = editorAt(current, cell, text);
+        if (editing !== null) patch(id, { editing });
       },
 
       changeEdit(id, text) {
@@ -659,7 +620,7 @@ export function createTablesStore(dependencies: TablesDependencies) {
           if (current.panel !== null) patch(id, { panel: null });
           return;
         }
-        if (!isEditable(current) || current.result?.typeClasses[cell.column] === "bytes") return;
+        if (!isEditable(current) || !canEditCell(current, cell)) return;
         const same = current.panel?.row === cell.row && current.panel.column === cell.column;
         const initial = same ? current.panel.initial : cellText(current, cell);
         patch(id, { panel: { row: cell.row, column: cell.column, text: text ?? initial, initial } });
@@ -674,57 +635,23 @@ export function createTablesStore(dependencies: TablesDependencies) {
       },
 
       setCells(id, cells, input) {
-        editBuffer(id, (session) =>
-          cells.reduce((buffer, cell) => {
-            const row = bufferRowAt(buffer, heldRowsOf(session), cell.row);
-            return row === null ? buffer : setCell(buffer, row, cell.column, input);
-          }, session.buffer),
-        );
+        editBuffer(id, (session) => withCells(session, cells, input));
       },
 
       addRow(id) {
-        editBuffer(id, (session) => addRow(session.buffer, session.result?.columns.length ?? 0));
+        editBuffer(id, (session) => withAddedRow(session));
       },
 
       duplicateRows(id, rows) {
-        editBuffer(id, (session) => {
-          const result = session.result;
-          if (result === null) return session.buffer;
-          const sources = rows.flatMap((index) => {
-            const row = bufferRowAt(session.buffer, shownHeld(result), index);
-            if (row === null) return [];
-            if (row.kind === "inserted") {
-              return [session.buffer.inserts.find((inserted) => inserted.id === row.id)?.values ?? []];
-            }
-            const values = rowAt(result.windows, index);
-            if (values === undefined) return [];
-            return [
-              result.columns.map((_, column) => pendingInput(session.buffer, row, column) ?? inputOf(values[column])),
-            ];
-          });
-          const defaulted = result.columns.map((column) => {
-            const meta = session.columns.find((each) => each.name === column.name);
-            const identity =
-              session.editable !== null && "identity" in session.editable ? session.editable.identity : [];
-            return meta?.autoIncrement === true || (identity.includes(column.name) && meta?.default != null);
-          });
-          return duplicateRows(session.buffer, sources, defaulted);
-        });
+        editBuffer(id, (session) => withDuplicates(session, rows));
       },
 
       deleteRows(id, rows) {
-        editBuffer(id, (session) => {
-          const held = heldRowsOf(session);
-          const named = rows.flatMap((index) => {
-            const row = bufferRowAt(session.buffer, held, index);
-            return row === null ? [] : [row];
-          });
-          return deleteRows(session.buffer, named);
-        });
+        editBuffer(id, (session) => withDeletes(session, rows));
       },
 
       revert(id, cells) {
-        editBuffer(id, (session) => revertCells(session.buffer, heldRowsOf(session), cells));
+        editBuffer(id, (session) => withReverted(session, cells));
       },
 
       revertAll(id) {

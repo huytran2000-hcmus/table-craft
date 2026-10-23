@@ -34,7 +34,16 @@ import {
 } from "@table-craft/desktop/renderer/model/parameters.js";
 import { caretAfterReformat } from "@table-craft/desktop/renderer/model/reformat.js";
 import { statementsToRun, type RunScope, type TextSpan } from "@table-craft/desktop/renderer/model/statementAt.js";
+import { EMPTY_BUFFER, pendingCount, pendingText, toEdits } from "@table-craft/desktop/renderer/model/editBuffer.js";
+import { submitLabel, submittedScript, submittedText } from "@table-craft/desktop/renderer/model/resultEdits.js";
 import { useCatalog } from "@table-craft/desktop/renderer/state/catalog.js";
+import {
+  createConsoleEdits,
+  pendingEditsOf,
+  pendingResults,
+  type ConsoleEdits,
+  type ConsoleResultEdits,
+} from "@table-craft/desktop/renderer/state/consoleEdits.js";
 import { datasourceById, useDatasources } from "@table-craft/desktop/renderer/state/datasources.js";
 import { NO_EXPORTS, useExports, type ExportStarter } from "@table-craft/desktop/renderer/state/exports.js";
 import {
@@ -145,6 +154,8 @@ export interface ConsoleSession {
   readonly replacement: Replacement | null;
   /** The values the Parameters dialog last ran with, pre-filled next time; never written to disk. */
   readonly parameterValues: ParameterValues;
+  /** Each editable result's pending edits, by result id (plan 026). */
+  readonly edits: Readonly<Record<string, ConsoleResultEdits>>;
 }
 
 export interface Insertion {
@@ -181,8 +192,13 @@ export interface OpenOptions {
   readonly parameterValues?: ParameterValues;
 }
 
-export interface ConsolesState {
+export interface ConsolesState extends ConsoleEdits {
   readonly consoles: Readonly<Record<string, ConsoleSession>>;
+  /**
+   * Asks once whether to submit or discard the console's pending result edits, among `resultIds`
+   * when given, then does it; false when the user cancelled or a submit failed.
+   */
+  readonly settleEdits: (id: string, verb: string, resultIds?: readonly string[]) => Promise<boolean>;
   /** Adds a console on `datasourceId`, opening its session unless `connect` is false. */
   readonly open: (id: string, datasourceId: string, options?: OpenOptions) => Promise<void>;
   /** Forgets the console and closes its session, which releases its results. */
@@ -345,7 +361,16 @@ export interface ConsolesDependencies {
   readonly exports?: ExportStarter;
   /** The statement timeout for the datasource's consoles in seconds, 0 for none (decision 054). */
   readonly statementTimeout?: (datasourceId: string) => number;
+  /** Asks whether to submit or discard pending result edits before `verb`; null cancels (plan 026). */
+  readonly askPendingEdits?: (request: PendingEditsRequest) => Promise<PendingEditsAnswer | null>;
 }
+
+export interface PendingEditsRequest {
+  readonly changes: number;
+  readonly verb: string;
+}
+
+export type PendingEditsAnswer = "submit" | "discard";
 
 function newConsole(datasourceId: string, name: string, sql: string, connect: boolean): ConsoleSession {
   return {
@@ -368,6 +393,7 @@ function newConsole(datasourceId: string, name: string, sql: string, connect: bo
     insertion: null,
     replacement: null,
     parameterValues: {},
+    edits: {},
   };
 }
 
@@ -415,6 +441,7 @@ export function createConsolesStore(dependencies: ConsolesDependencies) {
   const executions = dependencies.executions ?? NO_EXECUTION_REPORTER;
   const exports = dependencies.exports ?? NO_EXPORTS;
   const statementTimeout = dependencies.statementTimeout ?? (() => 0);
+  const askPendingEdits = dependencies.askPendingEdits ?? (() => Promise.resolve<PendingEditsAnswer>("discard"));
   /** The execution each result tab came from, by result id, so fetching more updates its row count. */
   const producedBy = new Map<string, number>();
   /** When each console's current run started; a confirmation restarts it once answered. */
@@ -559,6 +586,11 @@ export function createConsolesStore(dependencies: ConsolesDependencies) {
     }
 
     function release(id: string, results: readonly ConsoleTab[]): void {
+      const current = get().consoles[id];
+      if (current !== undefined && results.some((result) => result.id in current.edits)) {
+        const released = new Set(results.map((result) => result.id));
+        patch(id, { edits: Object.fromEntries(Object.entries(current.edits).filter(([key]) => !released.has(key))) });
+      }
       const client = clients.get(id);
       for (const result of results) {
         forget(result.id);
@@ -733,6 +765,106 @@ export function createConsolesStore(dependencies: ConsolesDependencies) {
       }
     }
 
+    function setEdits(id: string, resultId: string, edits: ConsoleResultEdits | null): void {
+      const current = get().consoles[id];
+      if (current === undefined) return;
+      const { [resultId]: _dropped, ...rest } = current.edits;
+      patch(id, { edits: edits === null ? rest : { ...rest, [resultId]: edits } });
+    }
+
+    /**
+     * Submits a result's edits on the console's session (plan 026): its transaction mode decides
+     * whether they commit, and the result runs again to show the rows as stored.
+     */
+    async function submitResultEdits(
+      id: string,
+      resultId: string,
+      client: EngineClient,
+      sessionId: string,
+      edits: ConsoleResultEdits,
+    ): Promise<boolean> {
+      const changes = toEdits(edits.buffer);
+      const preview = await client.call("edits.preview", { handle: edits.handle, edits: changes }).catch(() => null);
+      const script = preview === null ? "" : submittedScript(preview);
+      const label = submitLabel(preview?.length ?? pendingCount(edits.buffer));
+      runStarts.set(id, dependencies.now());
+      patch(id, { status: "running", error: null });
+      const ended = started(id, script, label);
+      const startedAt = dependencies.now();
+      try {
+        cursorsClosed(id);
+        const submitted = await client.call("edits.submit", { sessionId, handle: edits.handle, edits: changes });
+        const sql = submittedScript(submitted.statements);
+        ended({
+          durationMs: dependencies.now() - startedAt,
+          outcome: "success",
+          rowCount: submitted.rowsAffected,
+          message: null,
+          sql,
+        });
+        const done = submittedText(submitted.statements.length);
+        log(id, {
+          sql: "",
+          message: submitted.transactionOpen ? `${done}; they stay in the open transaction` : done,
+          tone: "success",
+        });
+        const latest = get().consoles[id]?.edits[resultId];
+        if (latest !== undefined)
+          setEdits(id, resultId, { ...latest, buffer: EMPTY_BUFFER, editing: null, panel: null });
+        patch(id, { transactionOpen: submitted.transactionOpen, status: "ready" });
+        await get().rerun(id, resultId);
+        return true;
+      } catch (cause) {
+        const error = toError(cause);
+        ended(failureEnd(error, dependencies.now() - startedAt));
+        logError(id, firstLine(script), error);
+        const latest = get().consoles[id];
+        const kept = latest?.edits[resultId];
+        if (kept !== undefined) setEdits(id, resultId, { ...kept, error });
+        patch(id, {
+          status: latest?.status === "disconnected" || latest?.status === "failed" ? latest.status : "ready",
+        });
+        return false;
+      }
+    }
+
+    const consoleEdits = createConsoleEdits({
+      session: (id) => get().consoles[id],
+      result: (id, resultId) => resultOf(id, resultId),
+      client: (id) => clients.get(id),
+      setEdits,
+      updateResult,
+      submit: submitResultEdits,
+    });
+
+    async function settleEdits(id: string, verb: string, resultIds?: readonly string[]): Promise<boolean> {
+      const current = get().consoles[id];
+      const pending = pendingResults(current, resultIds);
+      if (current === undefined || pending.length === 0) return true;
+      for (const resultId of pending) consoleEdits.commitEdit(id, resultId);
+      const latest = get().consoles[id];
+      const changes = pending.reduce((sum, resultId) => sum + pendingEditsOf(latest?.edits[resultId]), 0);
+      if (changes === 0) return true;
+      const answer = await askPendingEdits({ changes, verb });
+      if (answer === null) return false;
+      if (answer === "discard") {
+        for (const resultId of pending) consoleEdits.revertAllEdits(id, resultId);
+        return true;
+      }
+      for (const resultId of pending) if (!(await consoleEdits.submitEdits(id, resultId))) return false;
+      return true;
+    }
+
+    /** The unpinned results a run replaces (decision 10). */
+    function unpinned(id: string): readonly string[] {
+      return (get().consoles[id]?.results ?? []).filter((result) => !result.pinned).map((result) => result.id);
+    }
+
+    /** Whether reordering the result would move its pending edits to other rows. */
+    function editsPinOrder(id: string, resultId: string): boolean {
+      return pendingResults(get().consoles[id], [resultId]).length > 0;
+    }
+
     /**
      * Runs `body` on the console's session as Run does: opening one first when it has none, marking
      * the console running, and recording the outcome as its last run.
@@ -882,6 +1014,8 @@ export function createConsolesStore(dependencies: ConsolesDependencies) {
 
     return {
       consoles: {},
+      ...consoleEdits,
+      settleEdits,
 
       async open(id, datasourceId, options = {}) {
         const connect = options.connect ?? true;
@@ -917,7 +1051,15 @@ export function createConsolesStore(dependencies: ConsolesDependencies) {
           if (session.transactionOpen) {
             log(id, { sql: "", message: "The session closed; its open transaction was rolled back.", tone: "warning" });
           }
+          if (pendingResults(session).length > 0) {
+            log(id, {
+              sql: "",
+              message: "The session closed; the results' pending edits were discarded.",
+              tone: "warning",
+            });
+          }
           patch(id, {
+            edits: {},
             sessionId: null,
             status: error === null ? "disconnected" : "failed",
             error: error ?? session.error,
@@ -1010,6 +1152,7 @@ export function createConsolesStore(dependencies: ConsolesDependencies) {
       async run(id, scope) {
         const before = get().consoles[id];
         if (before === undefined || !canRun(before.status)) return;
+        if (!(await settleEdits(id, "run", unpinned(id)))) return;
         if (before.status !== "ready" && !(await openSession(id))) return;
         const current = get().consoles[id];
         const client = clients.get(id);
@@ -1062,10 +1205,16 @@ export function createConsolesStore(dependencies: ConsolesDependencies) {
       },
 
       ensureWindow: windows.ensureWindow,
-      fetchMore: windows.fetchMore,
+      async fetchMore(id, resultId, all) {
+        // Rows fetched into a sorted result take positions among the held ones, which edits name.
+        const sorted = (resultOf(id, resultId)?.sort.length ?? 0) > 0;
+        if (sorted && editsPinOrder(id, resultId) && !(await settleEdits(id, "fetch more rows", [resultId]))) return;
+        await windows.fetchMore(id, resultId, all);
+      },
       stopFetch: windows.stopFetch,
 
       async sort(id, resultId, keys) {
+        if (editsPinOrder(id, resultId) && !(await settleEdits(id, "sort", [resultId]))) return;
         const result = resultOf(id, resultId);
         const client = clients.get(id);
         if (result === undefined) return;
@@ -1104,15 +1253,26 @@ export function createConsolesStore(dependencies: ConsolesDependencies) {
         if (before !== undefined && searchedColumnsChanged(before.layout, layout)) void windows.applyView(id, resultId);
       },
 
-      search: windows.search,
+      async search(id, resultId, change) {
+        // An open editor names its cell by shown row, which a new view moves; edits name held rows and stay.
+        consoleEdits.commitEdit(id, resultId);
+        consoleEdits.applyPanel(id, resultId);
+        const result = resultOf(id, resultId);
+        // A sorted result's rows are held by position until filtered, then by arrival (plan 026).
+        const refilters =
+          result !== undefined && result.sort.length > 0 && filterOf(change(result.search)) !== filterOf(result.search);
+        if (refilters && editsPinOrder(id, resultId) && !(await settleEdits(id, "filter", [resultId]))) return;
+        await windows.search(id, resultId, change);
+      },
       findNext: windows.findNext,
 
       select(id, resultId, selection) {
         updateResult(id, resultId, (latest) => (latest.selection === selection ? latest : { ...latest, selection }));
       },
 
-      explain: (id, analyze) =>
-        onSession(id, async (client, sessionId, session) => {
+      explain: async (id, analyze) => {
+        if (!(await settleEdits(id, "explain", unpinned(id)))) return;
+        await onSession(id, async (client, sessionId, session) => {
           const statements = await resolveTarget(client, session, "caret");
           const [statement] = statements;
           if (statement === undefined) {
@@ -1122,7 +1282,8 @@ export function createConsolesStore(dependencies: ConsolesDependencies) {
           }
           if (statements.length > 1) return notRun(id, "", EXPLAIN_ONE_STATEMENT);
           return explainOne(id, client, sessionId, statement, analyze, null);
-        }),
+        });
+      },
 
       async rerun(id, resultId) {
         const plan = planOf(id, resultId);
@@ -1138,6 +1299,7 @@ export function createConsolesStore(dependencies: ConsolesDependencies) {
         }
         const before = get().consoles[id];
         if (before === undefined || resultOf(id, resultId) === undefined || !canRun(before.status)) return;
+        if (!(await settleEdits(id, "run it again", [resultId]))) return;
         if (before.status !== "ready" && !(await openSession(id))) return;
         const current = get().consoles[id];
         const client = clients.get(id);
@@ -1294,6 +1456,25 @@ export function createConsolesStore(dependencies: ConsolesDependencies) {
 
 export type ConsolesStore = ReturnType<typeof createConsolesStore>;
 
+/** What decides a local filter's rows: the find query counts only while it filters. */
+function filterOf(search: ResultSearch): string {
+  return JSON.stringify({ filters: search.filters, query: search.rowsOnly ? search.query : null });
+}
+
+async function askPendingEditsInDialog({ changes, verb }: PendingEditsRequest): Promise<PendingEditsAnswer | null> {
+  const answer = await useModal.getState().ask({
+    kind: "choice",
+    title: "Pending changes",
+    message: `This result has changes not yet submitted. Submit or discard them to ${verb}.`,
+    items: [{ label: pendingText(changes) ?? "", detail: "" }],
+    choices: [
+      { id: "submit", label: "Submit", variant: "primary" },
+      { id: "discard", label: "Discard", variant: "danger" },
+    ],
+  });
+  return answer === "submit" || answer === "discard" ? answer : null;
+}
+
 /** The destructive-statement confirmation (decision 9): one dialog for the whole batch. */
 async function askDestructive(statements: readonly ClassifiedStatement[]): Promise<boolean> {
   const answer = await useModal.getState().ask({
@@ -1341,6 +1522,7 @@ export const useConsoles = createConsolesStore({
   confirmDestructive: askDestructive,
   confirmAnalyse: askAnalyse,
   askParameters: askParametersInDialog,
+  askPendingEdits: askPendingEditsInDialog,
   onDdl: (datasourceId) => void useCatalog.getState().refreshCached(datasourceId),
   executions: {
     start: (tabId, start) => useExecutions.getState().start(tabId, start),

@@ -129,6 +129,8 @@ export interface ResultGridProps {
   readonly result: ResultTab;
   readonly host: () => GridHost;
   readonly edits?: GridEdits;
+  /** The rows are ordered and filtered in the database, as a table tab's are; sorting and filter chips here are local. */
+  readonly serverSorted?: boolean;
   /** Buttons the owner adds to the grid's toolbar, after fetch and rerun. */
   readonly toolbar?: ReactNode;
   readonly staleText?: string;
@@ -137,7 +139,16 @@ export interface ResultGridProps {
 }
 
 /** The result grid: toolbar, rows, and the value panel beside them (plan 007). */
-export function ResultGrid({ ownerId, result, host, edits, toolbar, staleText, panel }: ResultGridProps) {
+export function ResultGrid({
+  ownerId,
+  result,
+  host,
+  edits,
+  serverSorted = false,
+  toolbar,
+  staleText,
+  panel,
+}: ResultGridProps) {
   const valuePanel = useLayout((state) => state.layout.valuePanel);
   const visible = useMemo(() => visibleColumns(result.layout), [result.layout]);
   const focus = result.selection?.focus ?? null;
@@ -150,11 +161,11 @@ export function ResultGrid({ ownerId, result, host, edits, toolbar, staleText, p
       data-loaded-windows={Object.keys(result.windows).length}
       data-stale={result.stale}
     >
-      <GridToolbar result={result} serverSorted={edits !== undefined}>
+      <GridToolbar result={result} serverSorted={serverSorted}>
         {toolbar}
       </GridToolbar>
       {result.search.open ? <FindBar ownerId={ownerId} result={result} host={host} /> : null}
-      {result.search.filters.length > 0 ? <FilterChips result={result} local={edits !== undefined} /> : null}
+      {result.search.filters.length > 0 ? <FilterChips result={result} local={serverSorted} /> : null}
       {result.stale ? (
         <div
           role="status"

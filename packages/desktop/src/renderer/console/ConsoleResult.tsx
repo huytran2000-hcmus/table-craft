@@ -1,0 +1,178 @@
+import { useEffect } from "react";
+import { currentPlatform, formatChord } from "@table-craft/desktop/renderer/actions/chords.js";
+import { registry } from "@table-craft/desktop/renderer/actions/index.js";
+import { TABLE_ACTION_IDS } from "@table-craft/desktop/renderer/actions/tableActions.js";
+import { ResultGrid, type GridEdits } from "@table-craft/desktop/renderer/grid/ResultGrid.js";
+import { ValueEditor, ValuePanel } from "@table-craft/desktop/renderer/grid/ValuePanel.js";
+import { visibleColumns } from "@table-craft/desktop/renderer/model/columnLayout.js";
+import { bufferRowAt, pendingCount, pendingText } from "@table-craft/desktop/renderer/model/editBuffer.js";
+import { canEditCell, editCellText } from "@table-craft/desktop/renderer/model/resultEdits.js";
+import {
+  consoleReadOnlyReason,
+  editsOf,
+  editTargetOf,
+  isConsoleEditable,
+  type ConsoleResultEdits,
+} from "@table-craft/desktop/renderer/state/consoleEdits.js";
+import { useConsoles, type ConsoleSession } from "@table-craft/desktop/renderer/state/consoles.js";
+import { rowAt, shownHeld, type ResultTab } from "@table-craft/desktop/renderer/state/resultTab.js";
+import { ActionButton } from "@table-craft/desktop/renderer/ui/ActionButton.js";
+import { ReadOnlyIcon } from "@table-craft/desktop/renderer/ui/icons.js";
+
+/** The cell menu of an editable console result: the table editor's edit commands (plan 026). */
+export const CONSOLE_CELL_MENU: readonly (string | null)[] = [
+  TABLE_ACTION_IDS.editCell,
+  TABLE_ACTION_IDS.setNull,
+  TABLE_ACTION_IDS.setDefault,
+  null,
+  TABLE_ACTION_IDS.addRow,
+  TABLE_ACTION_IDS.duplicateRow,
+  TABLE_ACTION_IDS.deleteRows,
+  TABLE_ACTION_IDS.revertSelected,
+];
+
+function shortcutText(actionId: string): string {
+  const shortcut = registry.get(actionId)?.shortcut;
+  return shortcut === undefined ? "" : formatChord(shortcut, currentPlatform());
+}
+
+function EditablePanel({
+  consoleId,
+  result,
+  edits,
+  editable,
+  focus,
+}: {
+  readonly consoleId: string;
+  readonly result: ResultTab;
+  readonly edits: ConsoleResultEdits;
+  readonly editable: boolean;
+  readonly focus: { readonly row: number; readonly column: number } | null;
+}) {
+  const column = focus === null ? null : (result.columns[focus.column] ?? null);
+  if (focus === null) return <ValuePanel column={column} value={undefined} />;
+  const target = editTargetOf(result, edits);
+  if (editable && canEditCell(target, focus)) {
+    const text = editCellText(target, focus);
+    const draft = edits.panel?.row === focus.row && edits.panel.column === focus.column ? edits.panel : null;
+    return (
+      <ValueEditor
+        key={`${String(focus.row)}:${String(focus.column)}:${text}`}
+        column={column}
+        text={draft?.text ?? text}
+        json={result.typeClasses[focus.column] === "json"}
+        applyHint={shortcutText(TABLE_ACTION_IDS.applyValue)}
+        onChange={(next) => useConsoles.getState().editPanel(consoleId, result.id, focus, next)}
+      />
+    );
+  }
+  const row = bufferRowAt(edits.buffer, shownHeld(result), focus.row);
+  const value = row?.kind === "held" ? rowAt(result.windows, focus.row)?.[focus.column] : null;
+  return <ValuePanel column={column} value={value} />;
+}
+
+function EditToolbar({ edits, editable }: { readonly edits: ConsoleResultEdits; readonly editable: boolean }) {
+  const reason = consoleReadOnlyReason(edits);
+  if (reason !== null) {
+    return (
+      <span
+        role="status"
+        data-testid="result-read-only"
+        title={`Read-only: ${reason}`}
+        className="flex min-w-0 shrink items-center gap-1 px-1 text-ink-muted"
+      >
+        <span className="mx-1 h-4 w-px shrink-0 bg-line" />
+        <ReadOnlyIcon aria-hidden className="size-icon shrink-0" />
+        <span className="truncate">Read-only: {reason}</span>
+      </span>
+    );
+  }
+  if (!editable && edits.editable === null) return null;
+  const pending = pendingText(pendingCount(edits.buffer));
+  return (
+    <>
+      <span className="mx-1 h-4 w-px shrink-0 bg-line" />
+      <ActionButton actionId={TABLE_ACTION_IDS.addRow} compact />
+      <ActionButton actionId={TABLE_ACTION_IDS.duplicateRow} compact />
+      <ActionButton actionId={TABLE_ACTION_IDS.deleteRows} compact />
+      <ActionButton actionId={TABLE_ACTION_IDS.revertSelected} compact />
+      <ActionButton actionId={TABLE_ACTION_IDS.preview} compact />
+      <ActionButton actionId={TABLE_ACTION_IDS.submit} compact />
+      {pending === null ? null : (
+        <span data-testid="pending-changes" className="shrink-0 px-1 text-ink">
+          {pending}
+        </span>
+      )}
+    </>
+  );
+}
+
+/**
+ * A console's row result: the grid, editable like the table editor's when the engine says the
+ * statement reads one table by its key (plan 026), else read-only with the reason in its toolbar.
+ */
+export function ConsoleResult({
+  consoleId,
+  session,
+  result,
+}: {
+  readonly consoleId: string;
+  readonly session: ConsoleSession;
+  readonly result: ResultTab;
+}) {
+  const checkEditable = useConsoles((state) => state.checkEditable);
+  const { handle, stale } = result;
+  const resultId = result.id;
+  useEffect(() => {
+    if (!stale) void checkEditable(consoleId, resultId);
+  }, [checkEditable, consoleId, resultId, handle, stale]);
+
+  const edits = editsOf(session, result);
+  const editable = isConsoleEditable(session, result);
+  const store = useConsoles.getState;
+  const gridEdits: GridEdits | undefined =
+    edits === null || !("identity" in (edits.editable ?? {}))
+      ? undefined
+      : {
+          buffer: edits.buffer,
+          editing: edits.editing,
+          begin: (text) => {
+            const focus = result.selection?.focus;
+            const column = focus === undefined ? undefined : visibleColumns(result.layout)[focus.column];
+            if (focus === undefined || column === undefined) return;
+            store().beginEdit(consoleId, resultId, { row: focus.row, column }, text);
+          },
+          change: (text) => store().changeEdit(consoleId, resultId, text),
+          commit: () => void store().commitEdit(consoleId, resultId),
+          cancel: () => store().cancelEdit(consoleId, resultId),
+          menu: CONSOLE_CELL_MENU,
+        };
+
+  return (
+    <>
+      {edits?.error == null ? null : (
+        <div
+          role="alert"
+          data-testid="result-edit-error"
+          className="shrink-0 border-b border-line bg-panel px-gap py-1 break-words text-danger"
+        >
+          {edits.error.message} <span className="text-ink-muted">{edits.error.hint}</span>
+        </div>
+      )}
+      <ResultGrid
+        ownerId={consoleId}
+        result={result}
+        host={useConsoles.getState}
+        edits={gridEdits}
+        toolbar={edits === null ? undefined : <EditToolbar edits={edits} editable={editable} />}
+        panel={
+          gridEdits === undefined || edits === null
+            ? undefined
+            : (focus) => (
+                <EditablePanel consoleId={consoleId} result={result} edits={edits} editable={editable} focus={focus} />
+              )
+        }
+      />
+    </>
+  );
+}
