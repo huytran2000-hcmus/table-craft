@@ -22,6 +22,7 @@ import { Palette } from "@table-craft/desktop/renderer/palette/Palette.js";
 import { Shell } from "@table-craft/desktop/renderer/shell/Shell.js";
 import { useDatasources } from "@table-craft/desktop/renderer/state/datasources.js";
 import { useTabs } from "@table-craft/desktop/renderer/state/tabs.js";
+import { installUpdateState } from "@table-craft/desktop/renderer/state/update.js";
 import { installWindowState } from "@table-craft/desktop/renderer/state/windowState.js";
 import { installDatasourceSync } from "@table-craft/desktop/renderer/state/wiring.js";
 import { TooltipProvider } from "@table-craft/desktop/renderer/ui/Tooltip.js";
@@ -76,6 +77,8 @@ export function App() {
   useEffect(() => answerCloseRequests(), []);
 
   useEffect(() => installWindowState(), []);
+
+  useEffect(() => installUpdateState(), []);
 
   return (
     <TooltipProvider>

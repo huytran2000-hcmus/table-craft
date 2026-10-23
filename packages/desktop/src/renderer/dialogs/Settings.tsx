@@ -10,6 +10,7 @@ import { currentPlatform, formatChord } from "@table-craft/desktop/renderer/acti
 import { ACTION_IDS } from "@table-craft/desktop/renderer/actions/appActions.js";
 import { registry } from "@table-craft/desktop/renderer/actions/index.js";
 import { LOG_ACTION_IDS } from "@table-craft/desktop/renderer/actions/logActions.js";
+import { UPDATE_ACTION_IDS } from "@table-craft/desktop/renderer/actions/updateActions.js";
 import { SETTINGS_ACTION_IDS } from "@table-craft/desktop/renderer/actions/settingsActions.js";
 import { WINDOW_ACTION_IDS } from "@table-craft/desktop/renderer/actions/windowActions.js";
 import {
@@ -651,7 +652,9 @@ function DataEditorPage() {
 
 function AdvancedPage() {
   const level = useSettings((state) => state.settings.log.level);
+  const checkAutomatically = useSettings((state) => state.settings.updates.checkAutomatically);
   const debugId = useId();
+  const updatesId = useId();
   return (
     <>
       <SectionTitle>Log</SectionTitle>
@@ -675,6 +678,26 @@ function AdvancedPage() {
       <FieldRow label="Log file">
         <ActionButton actionId={LOG_ACTION_IDS.reveal} />
         <ActionButton actionId={LOG_ACTION_IDS.exportDiagnostics} />
+      </FieldRow>
+      <SectionTitle>Updates</SectionTitle>
+      <FieldRow label="New versions" htmlFor={updatesId}>
+        <label className="flex items-center gap-cell">
+          <input
+            id={updatesId}
+            type="checkbox"
+            checked={checkAutomatically}
+            onChange={(event) =>
+              update((current) => ({ ...current, updates: { checkAutomatically: event.target.checked } }))
+            }
+          />
+          Check for updates automatically
+        </label>
+      </FieldRow>
+      <p className="col-start-2 text-ink-muted">
+        Looks once after launch and then daily. Nothing downloads or installs until you click Update in the toolbar.
+      </p>
+      <FieldRow label="Check now">
+        <ActionButton actionId={UPDATE_ACTION_IDS.check} />
       </FieldRow>
     </>
   );

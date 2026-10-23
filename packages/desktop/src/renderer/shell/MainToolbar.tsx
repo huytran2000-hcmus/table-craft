@@ -6,6 +6,7 @@ import { SETTINGS_ACTION_IDS } from "@table-craft/desktop/renderer/actions/setti
 import { MAIN_MENU_ANCHOR_ATTRIBUTE, WINDOW_ACTION_IDS } from "@table-craft/desktop/renderer/actions/windowActions.js";
 import { tabCaption, windowTitle } from "@table-craft/desktop/renderer/model/windowTitle.js";
 import { DatasourceWidget } from "@table-craft/desktop/renderer/shell/DatasourceWidget.js";
+import { UpdateButton } from "@table-craft/desktop/renderer/shell/UpdateButton.js";
 import { useConsoles } from "@table-craft/desktop/renderer/state/consoles.js";
 import { datasourceById, useDatasources } from "@table-craft/desktop/renderer/state/datasources.js";
 import { useDdl } from "@table-craft/desktop/renderer/state/ddl.js";
@@ -34,7 +35,8 @@ function AvailableButton({ actionId }: { readonly actionId: string }) {
 
 /**
  * The window's title bar is this toolbar (decision 034): the traffic lights or the main-menu button,
- * the datasource widget, the title, the run controls, Search Everywhere and Settings. Its empty
+ * the datasource widget, the title, the run controls, Search Everywhere, Update (only while one is
+ * offered, decision 045) and Settings. Its empty
  * space drags the window; every control in it is `app-no-drag`.
  */
 export function MainToolbar() {
@@ -78,6 +80,7 @@ export function MainToolbar() {
       </div>
       <div className="flex shrink-0 items-center gap-1">
         <ActionButton actionId={ACTION_IDS.searchEverywhere} compact />
+        <UpdateButton />
         <ActionButton actionId={SETTINGS_ACTION_IDS.show} compact />
       </div>
     </div>

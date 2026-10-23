@@ -1,4 +1,6 @@
 import {
+  ArrowCircleUp,
+  DownloadSimple,
   FileZip,
   Scroll,
   GearSix,
@@ -175,4 +177,6 @@ export const ACTION_ICONS: Readonly<Record<ActionIcon, Icon>> = {
   menu: List,
   log: Scroll,
   diagnostics: FileZip,
+  update: ArrowCircleUp,
+  download: DownloadSimple,
 };

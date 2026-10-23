@@ -63,7 +63,9 @@ export type ActionIcon =
   | "settings"
   | "menu"
   | "log"
-  | "diagnostics";
+  | "diagnostics"
+  | "update"
+  | "download";
 
 export interface Action<A = void> {
   readonly id: string;
