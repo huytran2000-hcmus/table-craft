@@ -340,7 +340,10 @@ handles belong to the port that created them and are released when it closes.
 | `result.stopFetch`      | `handle`                                                                       | `ResultState`; stops a running fetch, the cursor stays open                                                    |
 | `result.sort`           | `handle`, `keys: { column, direction }[]`                                      | `ResultState`; windows read through the new order, `[]` restores it                                            |
 | `result.extract`        | `handle`, `extractor`, `rows: { from, to }[]`, `columns`                       | the text, rows in sorted order                                                                                 |
-| `result.export`         | `handle`, `extractor`, `path`, `columns`                                       | `{ path, rows, bytes, elapsedMs }`; `path` must be absolute                                                    |
+| `export.start`          | `source`, `format`, `path`, `stallSeconds`                                     | `ExportTask`; starts a background export (decision 040); `path` must be absolute                               |
+| `export.cancel`         | `taskId`                                                                       | `null`; the task ends `cancelled` and its `.part` file is removed                                              |
+| `export.retry`          | `taskId`, `stallSeconds`                                                       | a new `ExportTask` from row 0; only a re-run or table export is retryable                                      |
+| `export.list`           | none                                                                           | `ExportTask[]`, every task of the engine                                                                       |
 | `session.close`         | `sessionId`                                                                    | `null`; releases the session's handles, then closes it                                                         |
 | `catalog.namespaces`    | `refresh?`                                                                     | `Namespace[]`                                                                                                  |
 | `catalog.describe`      | `path`, `refresh?`                                                             | `{ catalog, introspectedAt, elapsedMs }`                                                                       |
@@ -359,8 +362,10 @@ handles belong to the port that created them and are released when it closes.
 A statement reads its first page and keeps the cursor open; the session's next statement, a
 commit, rollback or mode switch, `result.release`, `session.close` and the engine's exit close it
 first (decision 025). `result.fetchMore` calls on one handle run one after another; a cursor error
-closes it and answers `statementFailed`. `result.export` writes the held rows in sorted order, then
-drains the rest of the cursor uncapped, into `<path>.tmp` renamed into place, removed on failure.
+closes it and answers `statementFailed`. An export runs as a task of the engine, not of the
+request: `export.start` answers at once, and the engine pushes `export.progress` (at most every
+250 ms) and one of `export.done`, `export.failed` or `export.cancelled` to every renderer port,
+each a message with `id: null` carrying the whole `ExportTask`. See Export.
 A statement still running when its session closes is answered with `unknownSession`.
 `script.split` needs no session; it runs the plugin's `language` in the engine, so the renderer
 never parses SQL (decision 008). `transactionOpen` is `false` on a plugin without `transactions`,
@@ -481,10 +486,15 @@ run either.
 | `explorer.toggleSystemSchemas`           | Show System Schemas                   |          |                        |
 | `explorer.copyName`                      | Copy Qualified Name                   | `⌥⇧⌘C` ¹ | `Ctrl+Alt+Shift+C` ¹   |
 | `explorer.reveal`                        | Select in Database View               |          |                        |
+| `explorer.export`                        | Export Data…                          |          |                        |
 | `history.show`                           | Query History…                        | `⌥⌘E`    | `Ctrl+Alt+E`           |
 | `history.clear`                          | Clear Query History…                  |          |                        |
 | `console.reopen`                         | Open Closed Console…                  |          |                        |
 | `services.cancel`                        | Cancel Running Statement              |          |                        |
+| `export.cancel`                          | Cancel Export                         |          |                        |
+| `export.retry`                           | Retry Export                          |          |                        |
+| `export.reveal`                          | Reveal Exported File                  |          |                        |
+| `export.dismiss`                         | Remove Finished Export                |          |                        |
 | `services.clearExecutions`               | Clear Executions                      |          |                        |
 | `services.copySql`                       | Copy Execution SQL                    |          |                        |
 | `services.openInConsole`                 | Open Execution in Console             |          |                        |
@@ -690,12 +700,37 @@ it is disabled with the reason. The extractor is one setting in the layout, defa
 | SQL Inserts | `INSERT INTO MY_TABLE (…) VALUES (…);` per row with the plugin's quoting and literals    |
 | Markdown    | A pipe table; `\|` escaped, newlines as `<br>`, `NULL` empty                             |
 
-Bytes carry only their 32-byte preview, so a longer value copies clipped (`0x…` with `…`, or a
+Bytes in the grid carry only their 32-byte preview, so a longer value copies clipped (`0x…` with `…`, or a
 `/* 32 of 2048 bytes */` comment after the literal).
 
-**Export.** `grid.export` asks main for a path (`dialog.saveFile`, default name
-`<result title>.<ext>`), then sends `result.export` with the visible columns; Output logs rows,
-size and time.
+**Export.** `grid.export`, and `explorer.export` on a table or view, open the Export dialog:
+format (the five extractors and Excel (XLSX)), columns (the visible ones checked) and file, with
+Browse… asking main for a path (`dialog.saveFile`, default name `<title>.<ext>`). The engine then
+streams the rows to disk as a background task (decision 040), so a console stays usable and the
+file may be many gigabytes at flat memory:
+
+- Source. A result whose statement reads (`classify` is `read`), on a session with no open
+  transaction and no private database, is re-run on a session of the export's own, read-only, with
+  TCP keepalive and `fullBytes` (contract 0.11.0); one statement reads one snapshot. Otherwise a
+  complete result is written from memory, and an open cursor is drained (the grid shows
+  Exporting… until it ends). A table export runs `SELECT <columns> FROM <table>` on its own
+  session. Bytes are exported whole except from memory or a drained cursor, where the task counts
+  the previews it wrote.
+- File. Rows go to `<path>.<taskId>.part`, created exclusively, in 1 MiB writes that wait on the
+  disk; the finished file is fsynced, renamed over `path` and its folder fsynced. A failed or
+  cancelled export removes the part file and leaves an existing `path` untouched. A disk with less
+  than 1 GiB free adds a warning; a full disk fails as `diskFull` naming the bytes written.
+- Network. A source that delivers nothing for Settings' Export stall timeout (120 s) fails the task
+  as `stalled`; its session is closed without waiting, and `Session.close` is bounded even on a
+  dead link. A lost connection fails it as `source`. Every failure says how many rows were written
+  before it stopped. Nothing resumes; **Retry** runs a re-run or table export again from row 0.
+- XLSX is a streamed ZIP the engine writes itself (decision 041): one sheet per 1,048,575 rows with
+  a bold frozen header, numbers and booleans typed, text cut to 32,767 characters (counted), ZIP64
+  past 4 GiB.
+
+The Services tool window lists the engine's tasks under **Exports** with progress, rows, size and
+time, and **Cancel**, **Retry** and **Reveal Exported File**; the status bar shows `Exporting N`
+while any runs. A console's Output logs how its exports end.
 
 **Values.** `NULL` reads as Settings' NULL text (`<null>` by default) in `text-grid-null`
 italics, unlike the text `'<null>'`. With Group digits on, a number cell (`integer`, `decimal`,

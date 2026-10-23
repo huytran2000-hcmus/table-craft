@@ -50,5 +50,7 @@ started, not when it is merged.
 | 037 | [The product is named TableCraft](037-the-product-is-named-tablecraft.md)                                                                                              |
 | 038 | [Main writes one redacted, structured app log](038-main-writes-one-redacted-structured-app-log.md)                                                                     |
 | 039 | [The daily-friction release amends the v1 scope](039-the-daily-friction-release-amends-the-v1-scope.md)                                                                |
+| 040 | [Exports stream in the engine as background tasks](040-exports-stream-in-the-engine-as-background-tasks.md)                                                            |
+| 041 | [XLSX is written in-house as a streamed ZIP](041-xlsx-is-written-in-house-as-a-streamed-zip.md)                                                                        |
 | 042 | [Reformat is the plugin's language, over `sql-formatter`](042-reformat-is-the-plugins-language-over-sql-formatter.md)                                                  |
 | 043 | [Query parameters are found by the plugin and bound by the driver](043-query-parameters-are-found-by-the-plugin-and-bound-by-the-driver.md)                            |

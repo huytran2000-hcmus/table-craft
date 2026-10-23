@@ -95,4 +95,11 @@ describe("extractors", () => {
 
     expect(extract("csv", columns, [[{ kind: "bytes", preview: "00ff", length: 2048 }]])).toBe("payload\n0x00ff…\n");
   });
+
+  it("givenFullBytes_whenCsv_thenNoEllipsis", () => {
+    const columns: Column[] = [{ name: "payload", type: "bytea" }];
+    const whole = "ab".repeat(40);
+
+    expect(extract("csv", columns, [[{ kind: "bytes", preview: whole, length: 40 }]])).toBe(`payload\n0x${whole}\n`);
+  });
 });
