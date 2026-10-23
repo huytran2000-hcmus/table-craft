@@ -121,6 +121,8 @@ export interface LaunchOptions {
    * `TABLE_CRAFT_APP_EXECUTABLE`, else the `electron` binary running `dist/main/main.js`.
    */
   readonly executable?: string;
+  /** Variables added to the launch environment, such as plan 020's update overrides. */
+  readonly env?: Readonly<Record<string, string>>;
 }
 
 export interface GridText {
@@ -146,6 +148,7 @@ export async function launchApp(
   if (datasource !== null) env[DATASOURCE_ENV] = JSON.stringify(datasource);
   const userDataDir = options.userDataDir ?? newProfile();
   env[USER_DATA_ENV] = userDataDir;
+  Object.assign(env, options.env);
   const executable = options.executable ?? APP_EXECUTABLE;
   const entry = executable === undefined ? [MAIN_ENTRY] : [];
   const args = process.platform === "darwin" ? [MOCK_KEYCHAIN_FLAG, ...entry] : entry;
