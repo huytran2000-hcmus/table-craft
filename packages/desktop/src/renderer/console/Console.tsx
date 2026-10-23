@@ -54,7 +54,7 @@ export function Console({ consoleId }: { readonly consoleId: string }) {
           // The room the datasource label leaves, but never none; Output holds the whole error.
           <span
             role="alert"
-            className="min-w-24 flex-1 basis-0 truncate text-danger"
+            className="min-w-16 flex-1 basis-0 truncate text-danger"
             title={`${error.message} ${error.hint}`}
           >
             {error.message} <span className="text-ink-muted">{error.hint}</span>
@@ -70,8 +70,8 @@ export function Console({ consoleId }: { readonly consoleId: string }) {
           </button>
         )}
         {datasource === undefined ? null : (
-          // The datasource name truncates first: the namespace and plugin say where the console runs,
-          // and a long error beside them once squeezed the namespace out of sight (plan 022).
+          // The datasource and plugin names truncate, the namespace never: it is what changes under
+          // the console, and a long error beside it once squeezed it out of sight (plan 022).
           <span
             data-testid="console-datasource"
             className="ml-auto flex min-w-0 items-center overflow-hidden whitespace-pre text-ink-muted"
@@ -89,7 +89,9 @@ export function Console({ consoleId }: { readonly consoleId: string }) {
                 </span>
               </span>
             )}
-            {plugin === undefined ? null : <span className="shrink-0">{` · ${plugin.name}`}</span>}
+            {plugin === undefined ? null : (
+              <span className="min-w-0 overflow-hidden text-ellipsis">{` · ${plugin.name}`}</span>
+            )}
           </span>
         )}
       </div>
