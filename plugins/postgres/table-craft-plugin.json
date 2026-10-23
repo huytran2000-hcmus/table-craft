@@ -2,7 +2,7 @@
   "id": "postgres",
   "name": "PostgreSQL",
   "version": "0.0.0",
-  "apiVersion": "0.16.0",
+  "apiVersion": "0.17.0",
   "entry": "index.js",
   "capabilities": [
     "sql",
@@ -14,7 +14,8 @@
     "explainAnalyze",
     "currentNamespace",
     "keepAlive",
-    "bulkInsert"
+    "bulkInsert",
+    "objects"
   ],
   "highlight": "postgresql",
   "connection": {

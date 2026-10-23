@@ -27,9 +27,8 @@ const DROP_KEYWORDS: Readonly<Record<Relation["kind"], string>> = {
   materializedView: "DROP MATERIALIZED VIEW",
 };
 
-/** DROP, SELECT, INSERT and UPDATE for a catalog relation, which every built-in plugin spreads into its `SqlLanguage`. */
 /** The completer's rule, so a generated statement spells a name as completion inserts it. */
-function identifierWriter(options: Omit<GeneratorOptions, "updateDefault">): (identifier: string) => string {
+export function identifierWriter(options: Omit<GeneratorOptions, "updateDefault">): (identifier: string) => string {
   const reserved = new Set(options.keywords.map((keyword) => keyword.toUpperCase()));
   return (identifier) =>
     options.plainIdentifier.test(identifier) && !reserved.has(identifier.toUpperCase())
@@ -37,6 +36,7 @@ function identifierWriter(options: Omit<GeneratorOptions, "updateDefault">): (id
       : options.quoteIdentifier(identifier);
 }
 
+/** DROP, SELECT, INSERT and UPDATE for a catalog relation, which every built-in plugin spreads into its `SqlLanguage`. */
 export function sqlGenerator(options: GeneratorOptions): Pick<SqlLanguage, "generate"> {
   const name = identifierWriter(options);
 

@@ -39,6 +39,22 @@ export {
   type PlanProperty,
 } from "./explain.js";
 export {
+  OBJECT_KINDS,
+  type CatalogObject,
+  type CheckDesign,
+  type ColumnDesign,
+  type DdlContext,
+  type DdlScript,
+  type ForeignKeyDesign,
+  type IndexDesign,
+  type ObjectChange,
+  type ObjectChangeKind,
+  type ObjectEditor,
+  type ObjectFeatures,
+  type ObjectKind,
+  type TableDesign,
+} from "./objects.js";
+export {
   CONNECTION_FIELD_GROUPS,
   CONNECTION_FIELD_KINDS,
   CONNECTION_URL_FORMS,

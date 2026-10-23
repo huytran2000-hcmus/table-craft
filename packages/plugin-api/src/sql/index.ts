@@ -23,7 +23,26 @@ export {
   sqlLiteral,
   type SqlLiteralOptions,
 } from "./literals.js";
-export { sqlGenerator, sqlImporter, type GeneratorOptions, type ImporterOptions } from "./generate.js";
+export {
+  identifierWriter,
+  sqlGenerator,
+  sqlImporter,
+  type GeneratorOptions,
+  type ImporterOptions,
+} from "./generate.js";
+export {
+  columnChanged,
+  ddlScript,
+  designError,
+  NOTHING_TO_CHANGE,
+  REFERENTIAL_ACTIONS,
+  referencesClause,
+  tableDesignOf,
+  tableDifference,
+  unchanged,
+  validateDesign,
+  type TableDifference,
+} from "./objects.js";
 export {
   ALREADY_EXPLAIN,
   commonExplainRefusal,

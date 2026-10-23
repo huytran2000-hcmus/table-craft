@@ -57,7 +57,8 @@ export type Capability =
   | "explainAnalyze"
   | "currentNamespace"
   | "keepAlive"
-  | "bulkInsert";
+  | "bulkInsert"
+  | "objects";
 
 /** What the SQL Generator writes: `create` is the relation's definition, the rest mirror `GeneratedStatement` in plugin-api. */
 export type GeneratorStatement = "create" | "drop" | "select" | "insert" | "update";

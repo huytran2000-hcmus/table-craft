@@ -8,6 +8,7 @@ import type {
   ResolveRequest,
 } from "./completion.js";
 import type { ExplainedPlan, Explainability, ExplainOptions } from "./explain.js";
+import type { ObjectEditor } from "./objects.js";
 import type { WireValue } from "./values.js";
 
 /**
@@ -25,6 +26,7 @@ export const CAPABILITIES = [
   "currentNamespace",
   "keepAlive",
   "bulkInsert",
+  "objects",
 ] as const;
 
 export type Capability = (typeof CAPABILITIES)[number];
@@ -282,6 +284,8 @@ export interface SqlLanguage {
   importType?(column: InferredColumn): string;
   /** Present exactly when the plugin declares `bulkInsert`: the `CREATE TABLE` for a new import target. */
   createTable?(qualifiedName: string, columns: readonly NewColumn[]): string;
+  /** Present exactly when the plugin declares `objects`: the DDL for creating, altering, renaming and dropping (decision 052). */
+  readonly objects?: ObjectEditor;
 }
 
 export const TRANSACTION_MODES = ["auto", "manual"] as const;

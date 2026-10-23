@@ -122,6 +122,13 @@ export const pluginManifestSchema = z
   .refine(
     (manifest) => !manifest.capabilities.includes("bulkInsert") || manifest.capabilities.includes("transactions"),
     { message: "the bulkInsert capability requires transactions", path: ["capabilities"] },
+  )
+  // Object DDL is planned against described tables and reads its names from the introspector (decision 052).
+  .refine(
+    (manifest) =>
+      !manifest.capabilities.includes("objects") ||
+      (manifest.capabilities.includes("sql") && manifest.capabilities.includes("schemaTree")),
+    { message: "the objects capability requires sql and schemaTree", path: ["capabilities"] },
   );
 
 export type PluginManifest = z.infer<typeof pluginManifestSchema>;

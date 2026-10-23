@@ -7,10 +7,13 @@ import {
   isPluginError,
   z,
   type BoundStatement,
+  type ColumnDesign,
   type CompletionCatalog,
+  type DdlScript,
   type ConnectionUrlPart,
   type ConnectOptions,
   type DatasourcePlugin,
+  type DdlContext,
   type ExecuteOptions,
   type ExplainedPlan,
   type GeneratedStatement,
@@ -22,10 +25,13 @@ import {
   type PluginManifest,
   type Introspector,
   type NamespaceCatalog,
+  type ObjectChange,
+  type ObjectEditor,
   type Relation,
   type Row,
   type Session,
   type SqlLanguage,
+  type TableDesign,
   type Transactions,
   type WireValue,
 } from "@table-craft/plugin-api";
@@ -202,6 +208,19 @@ const HEX_DIGITS_PER_BYTE = 2;
 
 /** Created and dropped by the import-type case. */
 const IMPORT_PROBE_TABLE = "table_craft_import_probe";
+
+/** The tables the objects block creates, alters, renames and drops (decision 052). */
+const OBJECT_PARENT_TABLE = "table_craft_object_parent";
+const OBJECT_CHILD_TABLE = "table_craft_object_child";
+const OBJECT_RENAMED_TABLE = "table_craft_object_renamed";
+const OBJECT_INDEX = "table_craft_object_label_idx";
+const OBJECT_FOREIGN_KEY = "table_craft_object_parent_fk";
+const OBJECT_KEY_TYPE = "integer";
+const OBJECT_NARROW_TYPE = "varchar(40)";
+const OBJECT_WIDE_TYPE = "varchar(80)";
+const OBJECT_WIDE_LENGTH = /80/;
+const OBJECT_ROW =
+  "INSERT INTO table_craft_object_child (id, parent_id, label, obsolete) VALUES (1, 1, 'kept', 'gone')";
 /** Text a file holds for each inferred kind; every proposed type must take it. */
 const IMPORT_SAMPLES: Readonly<Record<ImportKind, string>> = {
   boolean: "true",
@@ -475,6 +494,12 @@ export function runPluginContract(plugin: DatasourcePlugin, fixture: ContractFix
         expect(session.insertRows !== undefined).toBe(bulk);
         return Promise.resolve();
       });
+    });
+
+    it("givenPlugin_whenInspected_thenHasObjectEditorExactlyWhenObjectsDeclared", () => {
+      const objects = plugin.capabilities.includes("objects");
+      if (objects) expect(plugin.capabilities).toEqual(expect.arrayContaining(["sql", "schemaTree"]));
+      expect(plugin.language?.objects !== undefined).toBe(objects);
     });
 
     it.runIf(fixture.wrongPasswordConfig !== undefined)(
@@ -882,6 +907,278 @@ export function runPluginContract(plugin: DatasourcePlugin, fixture: ContractFix
             await run(session, `DROP TABLE IF EXISTS ${IMPORT_PROBE_TABLE}`);
           }
         });
+      });
+    });
+
+    describe.runIf(plugin.capabilities.includes("objects"))("objects", () => {
+      const run = async (session: Session, sql: string): Promise<Row[]> => collect((await session.execute(sql)).rows);
+      const path = (): readonly string[] => catalogPathOf(fixture);
+
+      function editorOf(): ObjectEditor {
+        const editor = plugin.language?.objects;
+        if (editor === undefined) throw new Error("An objects plugin needs language.objects.");
+        return editor;
+      }
+
+      function introspectorOf(session: Session): Introspector {
+        if (session.introspector === undefined) throw new Error("An objects plugin needs an introspector.");
+        return session.introspector;
+      }
+
+      async function relationOf(session: Session, name: string): Promise<Relation | undefined> {
+        return (await introspectorOf(session).describe(path())).relations.find((relation) => relation.name === name);
+      }
+
+      /** Runs a script as the engine does: prepare, the statements in one transaction where it says so, verify, finish. */
+      async function apply(session: Session, script: DdlScript): Promise<void> {
+        for (const sql of script.prepare) await run(session, sql);
+        const transactions = script.transactional ? session.transactions : undefined;
+        try {
+          await transactions?.setMode("manual");
+          try {
+            for (const sql of script.statements) await run(session, sql);
+            for (const sql of script.verify) {
+              if ((await run(session, sql)).length > 0) throw new Error(`${sql} found rows.`);
+            }
+            await transactions?.commit();
+          } catch (error) {
+            await transactions?.rollback();
+            throw error;
+          } finally {
+            await transactions?.setMode("auto");
+          }
+        } finally {
+          for (const sql of script.finish) await run(session, sql);
+        }
+      }
+
+      async function scriptOf(session: Session, change: ObjectChange): Promise<DdlScript> {
+        const introspector = introspectorOf(session);
+        let current: TableDesign | null = null;
+        if (change.kind === "alterTable") {
+          const relation = await relationOf(session, change.relation);
+          if (relation === undefined) throw new Error(`${change.relation} was not described.`);
+          current = editorOf().design(relation);
+        }
+        const context: DdlContext = { qualifiedName: introspector.qualifiedName.bind(introspector), current };
+        return editorOf().script(change, context);
+      }
+
+      function column(name: string, type: string, nullable = true): ColumnDesign {
+        return { name, type, nullable, default: null, autoIncrement: false, comment: null, original: null };
+      }
+
+      function parentDesign(): TableDesign {
+        return {
+          name: OBJECT_PARENT_TABLE,
+          comment: null,
+          columns: [column("id", OBJECT_KEY_TYPE, false)],
+          primaryKey: ["id"],
+          primaryKeyName: null,
+          indexes: [],
+          foreignKeys: [],
+          checks: [],
+        };
+      }
+
+      function childDesign(): TableDesign {
+        return {
+          name: OBJECT_CHILD_TABLE,
+          comment: null,
+          columns: [
+            column("id", OBJECT_KEY_TYPE, false),
+            column("parent_id", OBJECT_KEY_TYPE),
+            column("label", OBJECT_NARROW_TYPE),
+            column("obsolete", OBJECT_NARROW_TYPE),
+          ],
+          primaryKey: ["id"],
+          primaryKeyName: null,
+          indexes: [{ name: OBJECT_INDEX, columns: ["label"], unique: false, original: null }],
+          foreignKeys: [
+            {
+              name: OBJECT_FOREIGN_KEY,
+              columns: ["parent_id"],
+              target: { path: path(), relation: OBJECT_PARENT_TABLE, columns: ["id"] },
+              onDelete: "CASCADE",
+              onUpdate: null,
+              original: null,
+            },
+          ],
+          checks: [],
+        };
+      }
+
+      async function dropAll(session: Session): Promise<void> {
+        const introspector = introspectorOf(session);
+        for (const table of [OBJECT_CHILD_TABLE, OBJECT_RENAMED_TABLE, OBJECT_PARENT_TABLE]) {
+          await run(session, `DROP TABLE IF EXISTS ${introspector.qualifiedName(path(), table)}`);
+        }
+      }
+
+      /** A parent and a child with one row each, created through the editor. */
+      async function withTables(use: (session: Session) => Promise<void>): Promise<void> {
+        await withSession(plugin, fixture, async (session) => {
+          await dropAll(session);
+          try {
+            await apply(
+              session,
+              await scriptOf(session, { kind: "createTable", path: path(), design: parentDesign() }),
+            );
+            await apply(session, await scriptOf(session, { kind: "createTable", path: path(), design: childDesign() }));
+            await run(session, `INSERT INTO ${OBJECT_PARENT_TABLE} (id) VALUES (1)`);
+            await run(session, OBJECT_ROW);
+            await use(session);
+          } finally {
+            await dropAll(session);
+          }
+        });
+      }
+
+      /** The child's design as described, with `label` widened, `obsolete` dropped and `note` added. */
+      async function widenedChild(session: Session, extra: Partial<TableDesign> = {}): Promise<TableDesign> {
+        const relation = await relationOf(session, OBJECT_CHILD_TABLE);
+        if (relation === undefined) throw new Error(`${OBJECT_CHILD_TABLE} was not described.`);
+        const described = editorOf().design(relation);
+        return {
+          ...described,
+          columns: [
+            ...described.columns
+              .filter((entry) => entry.name !== "obsolete")
+              .map((entry) => (entry.name === "label" ? { ...entry, type: OBJECT_WIDE_TYPE } : entry)),
+            column("note", OBJECT_NARROW_TYPE),
+          ],
+          ...extra,
+        };
+      }
+
+      it("givenObjectsDeclared_whenCreateTableWithKeyIndexAndForeignKey_thenDescribedAsDesigned", async () => {
+        await withTables(async (session) => {
+          const child = await relationOf(session, OBJECT_CHILD_TABLE);
+
+          expect(child?.columns.map((entry) => entry.name)).toEqual(["id", "parent_id", "label", "obsolete"]);
+          expect(child?.primaryKey?.columns).toEqual(["id"]);
+          expect(child?.indexes.map((index) => index.name)).toContain(OBJECT_INDEX);
+          expect(child?.foreignKeys.map((key) => [key.target.relation, key.target.columns, key.onDelete])).toEqual([
+            [OBJECT_PARENT_TABLE, ["id"], "CASCADE"],
+          ]);
+        });
+      });
+
+      it("givenDescribedDesign_whenScriptedUnchanged_thenNoStatement", async () => {
+        await withTables(async (session) => {
+          const relation = await relationOf(session, OBJECT_CHILD_TABLE);
+          if (relation === undefined) throw new Error(`${OBJECT_CHILD_TABLE} was not described.`);
+
+          const script = await scriptOf(session, {
+            kind: "alterTable",
+            path: path(),
+            relation: OBJECT_CHILD_TABLE,
+            design: editorOf().design(relation),
+          });
+
+          expect(script.statements).toEqual([]);
+        });
+      });
+
+      it("givenTable_whenColumnAddedTypeChangedAndDropped_thenDescribedAfterAndRowsKept", async () => {
+        await withTables(async (session) => {
+          const design = await widenedChild(session);
+
+          await apply(
+            session,
+            await scriptOf(session, { kind: "alterTable", path: path(), relation: OBJECT_CHILD_TABLE, design }),
+          );
+
+          const child = await relationOf(session, OBJECT_CHILD_TABLE);
+          expect(child?.columns.map((entry) => entry.name)).toEqual(["id", "parent_id", "label", "note"]);
+          expect(child?.columns.find((entry) => entry.name === "label")?.type).toMatch(OBJECT_WIDE_LENGTH);
+          expect(child?.foreignKeys).toHaveLength(1);
+          expect(child?.indexes.map((index) => index.name)).toContain(OBJECT_INDEX);
+          expect(await run(session, `SELECT label FROM ${OBJECT_CHILD_TABLE}`)).toEqual([["kept"]]);
+        });
+      });
+
+      it.runIf(plugin.capabilities.includes("transactions"))(
+        "givenTransactionalScript_whenStatementFails_thenNothingApplied",
+        async () => {
+          await withTables(async (session) => {
+            // An index named like a table clashes in every dialect whose index names share the table namespace.
+            const design = await widenedChild(session, {});
+            const clashing: TableDesign = {
+              ...design,
+              indexes: [
+                ...design.indexes,
+                { name: OBJECT_PARENT_TABLE, columns: ["note"], unique: false, original: null },
+              ],
+            };
+            const script = await scriptOf(session, {
+              kind: "alterTable",
+              path: path(),
+              relation: OBJECT_CHILD_TABLE,
+              design: clashing,
+            });
+            if (!script.transactional) return;
+
+            await expect(apply(session, script)).rejects.toThrow();
+
+            const child = await relationOf(session, OBJECT_CHILD_TABLE);
+            expect(child?.columns.map((entry) => entry.name)).toEqual(["id", "parent_id", "label", "obsolete"]);
+            expect(await run(session, `SELECT label FROM ${OBJECT_CHILD_TABLE}`)).toEqual([["kept"]]);
+          });
+        },
+      );
+
+      it("givenTable_whenRenamed_thenDescribedUnderNewName", async () => {
+        await withTables(async (session) => {
+          await apply(
+            session,
+            await scriptOf(session, {
+              kind: "rename",
+              path: path(),
+              object: { kind: "table", name: OBJECT_CHILD_TABLE },
+              name: OBJECT_RENAMED_TABLE,
+            }),
+          );
+
+          expect(await relationOf(session, OBJECT_CHILD_TABLE)).toBeUndefined();
+          expect((await relationOf(session, OBJECT_RENAMED_TABLE))?.columns).toHaveLength(4);
+        });
+      });
+
+      it("givenTableWithRows_whenTruncated_thenEmptyAndStillDescribed", async () => {
+        await withTables(async (session) => {
+          await apply(
+            session,
+            await scriptOf(session, { kind: "truncate", path: path(), relation: OBJECT_CHILD_TABLE, cascade: false }),
+          );
+
+          expect(await run(session, `SELECT id FROM ${OBJECT_CHILD_TABLE}`)).toEqual([]);
+          expect(await relationOf(session, OBJECT_CHILD_TABLE)).toBeDefined();
+        });
+      });
+
+      it("givenTable_whenDropped_thenNotDescribed", async () => {
+        await withTables(async (session) => {
+          await apply(
+            session,
+            await scriptOf(session, {
+              kind: "drop",
+              path: path(),
+              object: { kind: "table", name: OBJECT_CHILD_TABLE },
+              cascade: false,
+            }),
+          );
+
+          expect(await relationOf(session, OBJECT_CHILD_TABLE)).toBeUndefined();
+        });
+      });
+
+      it("givenFeatures_whenRead_thenEveryDroppableKindNamedAndTypesSuggested", () => {
+        const { features } = editorOf();
+
+        expect(features.types.length).toBeGreaterThan(0);
+        expect(features.droppable).toContain("table");
+        expect(features.renamable).toContain("table");
       });
     });
 

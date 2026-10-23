@@ -223,7 +223,7 @@ describe("engine", () => {
 
     expect(resultOf(response)).toMatchObject({
       pluginName: "SQLite",
-      capabilities: ["sql", "schemaTree", "transactions", "ddl", "explain", "bulkInsert"],
+      capabilities: ["sql", "schemaTree", "transactions", "ddl", "explain", "bulkInsert", "objects"],
     });
   });
 

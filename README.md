@@ -431,13 +431,15 @@ The manifest declares what the plugin can do, and the UI offers only what it dec
   dropped connection and reconnects.
 - `bulkInsert`: writes batches of rows from an imported file and proposes and creates a table for
   one; requires `transactions`.
+- `objects`: writes the DDL that creates, modifies, renames, truncates and drops tables and other
+  objects from the database tree; requires `sql` and `schemaTree`.
 
 ```json
 {
   "id": "postgres",
   "name": "PostgreSQL",
   "version": "0.0.0",
-  "apiVersion": "0.16.0",
+  "apiVersion": "0.17.0",
   "entry": "index.js",
   "capabilities": [
     "sql",
@@ -449,7 +451,8 @@ The manifest declares what the plugin can do, and the UI offers only what it dec
     "explainAnalyze",
     "currentNamespace",
     "keepAlive",
-    "bulkInsert"
+    "bulkInsert",
+    "objects"
   ],
   "highlight": "postgresql",
   "connection": {

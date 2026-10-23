@@ -31,6 +31,7 @@ import {
   classifyTokens,
   defaultKeyword,
   defaultValuesInsert,
+  identifierWriter,
   planText,
   quoteIdentifierWith,
   SQL_FUNCTIONS,
@@ -51,6 +52,7 @@ import {
 import { copyLine, POSTGRES_IMPORT_TYPES, postgresDecimal } from "./bulk.js";
 import { EXPLAIN_VERBS, explainStatement, readPlan } from "./explain.js";
 import { postgresIntrospector } from "./introspect.js";
+import { postgresObjects } from "./objects.js";
 
 const PLUGIN_ID = "postgres";
 const CAPABILITIES: readonly Capability[] = [
@@ -64,6 +66,7 @@ const CAPABILITIES: readonly Capability[] = [
   "currentNamespace",
   "keepAlive",
   "bulkInsert",
+  "objects",
 ];
 
 /** Function bodies live in dollar quotes; `BEGIN ATOMIC … END` holds a SQL-standard body. */
@@ -121,6 +124,10 @@ const language: SqlLanguage = {
     keywords: KEYWORDS,
     types: POSTGRES_IMPORT_TYPES,
     decimal: postgresDecimal,
+  }),
+  objects: postgresObjects({
+    name: identifierWriter({ quoteIdentifier, plainIdentifier: PLAIN_IDENTIFIER, keywords: KEYWORDS }),
+    text: (value) => sqlLiteral(value, LITERALS),
   }),
 };
 

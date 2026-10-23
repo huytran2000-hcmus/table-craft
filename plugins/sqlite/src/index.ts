@@ -27,6 +27,7 @@ import {
 import {
   classifyTokens,
   defaultValuesInsert,
+  identifierWriter,
   quoteIdentifierWith,
   SQL_FUNCTIONS,
   SQL_KEYWORDS,
@@ -45,10 +46,19 @@ import {
 } from "@table-craft/plugin-api/sql";
 import { EXPLAIN_VERBS, explainStatement, readPlanRows } from "./explain.js";
 import { sqliteIntrospector } from "./introspect.js";
+import { sqliteObjects } from "./objects.js";
 
 const PLUGIN_ID = "sqlite";
 /** No `cancel`: node:sqlite runs a statement synchronously, so nothing could deliver the request. */
-const CAPABILITIES: readonly Capability[] = ["sql", "schemaTree", "transactions", "ddl", "explain", "bulkInsert"];
+const CAPABILITIES: readonly Capability[] = [
+  "sql",
+  "schemaTree",
+  "transactions",
+  "ddl",
+  "explain",
+  "bulkInsert",
+  "objects",
+];
 
 /** Trigger bodies are `BEGIN … END` and hold semicolons. */
 const DIALECT: SqlDialectOptions = { blockKeywords: ["BEGIN"] };
@@ -101,6 +111,9 @@ const language: SqlLanguage = {
     },
     // NUMERIC keeps text it cannot hold exactly, such as more than 15 significant digits, as text.
     decimal: () => "NUMERIC",
+  }),
+  objects: sqliteObjects({
+    name: identifierWriter({ quoteIdentifier, plainIdentifier: PLAIN_IDENTIFIER, keywords: KEYWORDS }),
   }),
 };
 

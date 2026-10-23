@@ -37,6 +37,7 @@ import {
   sqlExplainable,
   sqlFormatter,
   sqlGenerator,
+  identifierWriter,
   sqlImporter,
   sqlLiteral,
   sqlParameters,
@@ -49,6 +50,7 @@ import {
 import { insertStatement, MYSQL_IMPORT_TYPES, mysqlDecimal } from "./bulk.js";
 import { ANALYZE_VERBS, EXPLAIN_VERBS, explainStatement, planFormat, readJson, readTree } from "./explain.js";
 import { mysqlIntrospector } from "./introspect.js";
+import { mysqlObjects } from "./objects.js";
 import { killStatementFor } from "./server.js";
 
 const PLUGIN_ID = "mysql";
@@ -63,6 +65,7 @@ const CAPABILITIES: readonly Capability[] = [
   "currentNamespace",
   "keepAlive",
   "bulkInsert",
+  "objects",
 ];
 
 /** What the mysql client accepts: `'\''`, `# comments`, `DELIMITER //` and `BEGIN … END` routine bodies. */
@@ -120,6 +123,10 @@ const language: SqlLanguage = {
     keywords: KEYWORDS,
     types: MYSQL_IMPORT_TYPES,
     decimal: mysqlDecimal,
+  }),
+  objects: mysqlObjects({
+    name: identifierWriter({ quoteIdentifier, plainIdentifier: PLAIN_IDENTIFIER, keywords: KEYWORDS }),
+    text: (value) => sqlLiteral(value, LITERALS),
   }),
 };
 
