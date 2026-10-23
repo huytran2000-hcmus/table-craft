@@ -115,6 +115,8 @@ function fakeEngine(options: { reject?: boolean } = {}) {
       case "transaction.setMode":
         mode = params.mode as TransactionMode;
         return Promise.resolve({ mode, transactionOpen: open, namespace: ["shop"] });
+      case "namespace.switchStatement":
+        return Promise.resolve({ sql: "USE archive", transactional: false });
       default:
         return Promise.resolve(null);
     }
@@ -238,6 +240,28 @@ describe("console result edits", () => {
     expect(askPendingEdits).toHaveBeenCalledWith({ changes: 1, verb: "run" });
     expect(executed).toEqual(["SELECT * FROM t"]);
     expect(pending()).toBe(1);
+  });
+
+  it("givenPendingEdits_whenSwitchCancelledAtTheQuestion_thenNothingRuns", async () => {
+    const { store, edit, pending, executed, askPendingEdits } = await ran("SELECT * FROM t", { answer: null });
+    edit(0, 1, "x");
+
+    await store.getState().switchNamespace(ID, ["archive"]);
+
+    expect(askPendingEdits).toHaveBeenCalledWith({ changes: 1, verb: "switch namespace" });
+    expect(executed).toEqual(["SELECT * FROM t"]);
+    expect(pending()).toBe(1);
+  });
+
+  it("givenPendingEdits_whenSwitchDiscarded_thenSwitchesAndKeepsTheResult", async () => {
+    const { store, session, edit, executed } = await ran("SELECT * FROM t", { answer: "discard" });
+    edit(0, 1, "x");
+
+    await store.getState().switchNamespace(ID, ["archive"]);
+
+    expect(executed).toEqual(["SELECT * FROM t", "USE archive"]);
+    expect(pendingResults(session())).toEqual([]);
+    expect(session().results[0]?.title).toBe("Result 1");
   });
 
   it("givenPendingEdits_whenRunAndDiscarded_thenTheRunReplacesTheResult", async () => {

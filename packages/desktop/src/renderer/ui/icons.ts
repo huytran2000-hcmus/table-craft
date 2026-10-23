@@ -115,6 +115,7 @@ export {
   TextT as KeywordIcon,
   FileCode as DdlIcon,
   CheckCircle as SuccessIcon,
+  Check as CurrentIcon,
   XCircle as ErrorIcon,
   Prohibit as CancelledIcon,
   Export as ExportIcon,

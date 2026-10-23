@@ -199,6 +199,11 @@ export interface ConsolesState extends ConsoleEdits {
    * when given, then does it; false when the user cancelled or a submit failed.
    */
   readonly settleEdits: (id: string, verb: string, resultIds?: readonly string[]) => Promise<boolean>;
+  /**
+   * Runs the plugin's switch statement for `path` on the console's session, opening one first,
+   * after settling pending result edits; results stay (decision 060).
+   */
+  readonly switchNamespace: (id: string, path: readonly string[]) => Promise<void>;
   /** Adds a console on `datasourceId`, opening its session unless `connect` is false. */
   readonly open: (id: string, datasourceId: string, options?: OpenOptions) => Promise<void>;
   /** Forgets the console and closes its session, which releases its results. */
@@ -322,6 +327,9 @@ const ANALYSE_STAYS_OPEN = "Its changes stay in the open transaction until you c
 export const EXPLAIN_ONE_STATEMENT = "Explain one statement at a time.";
 const NOTHING_TO_EXPLAIN = "Nothing to explain";
 const DECLINED = "Cancelled; nothing ran.";
+/** The verb the pending-edits question names before a namespace switch. */
+const SWITCH_VERB = "switch namespace";
+const SWITCH_IN_TRANSACTION = "Switched inside the open transaction; a rollback switches back.";
 
 export function analyseConfirmation({ statement, mode }: AnalyseRequest): ModalRequest {
   return {
@@ -679,11 +687,12 @@ export function createConsolesStore(dependencies: ConsolesDependencies) {
       sessionId: string,
       statements: readonly ClassifiedStatement[],
       bound: Bound | null,
+      fromEditor = true,
     ): Promise<RunOutcome> {
       for (const [index, statement] of statements.entries()) {
         const sql = firstLine(statement.sql);
         const parameters = boundAt(bound, index);
-        patch(id, { flash: { from: statement.from, to: statement.to, seq: ++flashes } });
+        if (fromEditor) patch(id, { flash: { from: statement.from, to: statement.to, seq: ++flashes } });
         const ended = started(id, statement.sql, sql, parameters ?? null);
         const startedAt = dependencies.now();
         try {
@@ -1146,6 +1155,37 @@ export function createConsolesStore(dependencies: ConsolesDependencies) {
           selection: { from: span.from, to: span.from },
           jump: { ...span, seq: flashes },
           flash: { ...span, seq: flashes },
+        });
+      },
+
+      async switchNamespace(id, path) {
+        const before = get().consoles[id];
+        if (before === undefined || !canRun(before.status)) return;
+        if (!(await settleEdits(id, SWITCH_VERB))) return;
+        await onSession(id, async (client, sessionId, session) => {
+          const { sql, transactional } = await client.call("namespace.switchStatement", { path });
+          const statement: ClassifiedStatement = {
+            from: 0,
+            to: 0,
+            sql,
+            kind: "other",
+            destructive: null,
+            parameters: [],
+          };
+          const outcome = await execute(id, client, sessionId, [statement], null, false);
+          if (outcome !== "succeeded") return outcome;
+          if (transactional && session.transactionOpen) {
+            log(id, { sql: "", message: SWITCH_IN_TRANSACTION, tone: "info" });
+          }
+          const landed = get().consoles[id]?.namespace ?? null;
+          if (landed !== null && landed.join(".") !== path.join(".")) {
+            log(id, {
+              sql: "",
+              message: `The session is in ${landed.join(".")}, not ${path.join(".")}.`,
+              tone: "warning",
+            });
+          }
+          return outcome;
         });
       },
 

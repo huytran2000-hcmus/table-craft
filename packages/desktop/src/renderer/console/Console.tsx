@@ -4,10 +4,10 @@ import { invoke } from "@table-craft/desktop/renderer/actions/index.js";
 import { LOG_ACTION_IDS } from "@table-craft/desktop/renderer/actions/logActions.js";
 import { ActionButton } from "@table-craft/desktop/renderer/ui/ActionButton.js";
 import { Editor } from "@table-craft/desktop/renderer/console/Editor.js";
+import { NamespaceSwitcher } from "@table-craft/desktop/renderer/console/NamespaceSwitcher.js";
 import { ResultTabs } from "@table-craft/desktop/renderer/console/ResultTabs.js";
 import { TxControls } from "@table-craft/desktop/renderer/console/TxControls.js";
 import { useConsoleDatasource } from "@table-craft/desktop/renderer/console/useConsoleDatasource.js";
-import { namespaceLabel } from "@table-craft/desktop/renderer/model/format.js";
 import { useConsoles } from "@table-craft/desktop/renderer/state/consoles.js";
 import { pluginOf, useDatasources } from "@table-craft/desktop/renderer/state/datasources.js";
 import { cn } from "@table-craft/desktop/renderer/ui/cn.js";
@@ -32,7 +32,6 @@ export function Console({ consoleId }: { readonly consoleId: string }) {
   const { status, error } = session;
   const capabilities = plugin?.capabilities ?? [];
   const color = datasource?.color ?? null;
-  const namespace = namespaceLabel(session.namespace);
 
   return (
     <div data-testid="console" data-color={color ?? undefined} className="flex min-h-0 flex-1 flex-col">
@@ -81,14 +80,12 @@ export function Console({ consoleId }: { readonly consoleId: string }) {
               {datasource.readOnly ? "read-only · " : ""}
               {datasource.name}
             </span>
-            {namespace === null ? null : (
-              <span className="shrink-0">
+            {capabilities.includes("currentNamespace") ? (
+              <span className="flex shrink-0 items-center">
                 {" · "}
-                <span data-testid="console-namespace" className="text-ink" title={namespace.title}>
-                  {namespace.text}
-                </span>
+                <NamespaceSwitcher consoleId={consoleId} session={session} />
               </span>
-            )}
+            ) : null}
             {plugin === undefined ? null : (
               <span className="min-w-0 overflow-hidden text-ellipsis">{` · ${plugin.name}`}</span>
             )}

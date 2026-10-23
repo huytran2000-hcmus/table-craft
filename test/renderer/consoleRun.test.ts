@@ -106,7 +106,7 @@ function fakeEngine() {
         }
         const verb = sql.split(/\s+/)[0]?.toUpperCase();
         const uses = verb === "USE";
-        if (uses) namespace = [sql.split(/\s+/)[1] ?? ""];
+        if (uses) namespace = sql.includes("ELSEWHERE") ? ["shop"] : [sql.split(/\s+/)[1] ?? ""];
         if (verb === "BEGIN") open = true;
         else if (verb === "COMMIT" || verb === "ROLLBACK") open = false;
         else if (mode === "manual") open = true;
@@ -125,6 +125,10 @@ function fakeEngine() {
           ...(sql.includes("RECONNECT") ? { reconnected: { namespace: ["public"], namespaceLost: true } } : {}),
         };
         return Promise.resolve(result);
+      }
+      case "namespace.switchStatement": {
+        const path = params.path as readonly string[];
+        return Promise.resolve({ sql: `USE ${path.join(".")}`, transactional: path.length > 1 });
       }
       case "sql.format":
         return Promise.resolve(String(params.text).replace(/\s+(FROM|WHERE)\b/g, "\n$1"));
@@ -475,6 +479,63 @@ describe("console namespace", () => {
     await store.getState().run("c1", "all");
 
     expect(session().namespace).toEqual(["shop"]);
+  });
+
+  it("givenSwitch_whenRun_thenStatementLoggedNamespacePatchedResultsKept", async () => {
+    const { store, session, executed } = await opened("SELECT 1;");
+    await store.getState().run("c1", "all");
+    const flash = session().flash;
+
+    await store.getState().switchNamespace("c1", ["archive"]);
+
+    expect(executed).toEqual(["SELECT 1", "USE archive"]);
+    expect(session().output.at(-1)).toMatchObject({ sql: "USE archive", tone: "success" });
+    expect(session().namespace).toEqual(["archive"]);
+    expect(session().results.map((result) => result.title)).toEqual(["Result 1"]);
+    expect(session().flash).toEqual(flash);
+    expect(session().status).toBe("ready");
+  });
+
+  it("givenSwitchInOpenTransaction_whenTransactional_thenOutputSaysRollbackUndoes", async () => {
+    const { store, messages } = await opened("BEGIN;");
+    await store.getState().run("c1", "all");
+
+    await store.getState().switchNamespace("c1", ["shop", "archive"]);
+
+    expect(messages().at(-1)).toBe("Switched inside the open transaction; a rollback switches back.");
+  });
+
+  it("givenSwitchLandingElsewhere_whenRun_thenWarns", async () => {
+    const { store, session } = await opened("SELECT 1;");
+
+    await store.getState().switchNamespace("c1", ["ELSEWHERE"]);
+
+    expect(session().output.at(-1)).toMatchObject({
+      message: "The session is in shop, not ELSEWHERE.",
+      tone: "warning",
+    });
+  });
+
+  it("givenNoSession_whenSwitched_thenOpensFirst", async () => {
+    const context = harness();
+    await context.store.getState().open("c1", "pg", { sql: "", connect: false });
+
+    await context.store.getState().switchNamespace("c1", ["archive"]);
+
+    expect(context.call.mock.calls.map(([type]) => type)).toEqual(
+      expect.arrayContaining(["session.open", "namespace.switchStatement", "statement.execute"]),
+    );
+    expect(context.session().namespace).toEqual(["archive"]);
+  });
+
+  it("givenFailingSwitch_whenRun_thenErrorLoggedNamespaceUnchanged", async () => {
+    const { store, session } = await opened("SELECT 1;");
+
+    await store.getState().switchNamespace("c1", ["FAIL"]);
+
+    expect(session().namespace).toEqual(["shop"]);
+    expect(session().error?.message).toBe("syntax error");
+    expect(session().activeResult).toBe(OUTPUT_TAB);
   });
 
   it("givenSchemaPath_whenLabelled_thenSchemaWithFullPathAsTitle", () => {
