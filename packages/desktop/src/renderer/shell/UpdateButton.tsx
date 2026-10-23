@@ -49,7 +49,7 @@ function UpdatePopover({ anchor }: { readonly anchor: PopoverAnchor }) {
         <div className="font-semibold">{view.title}</div>
         <div data-testid="update-versions" className="font-mono text-ink-muted">
           {view.versions}
-          {view.size === null ? null : <span className="ml-gap">{view.size}</span>}
+          {view.size === null ? null : <span> · {view.size}</span>}
         </div>
         {percent === null ? null : (
           <div className="h-1 w-full overflow-hidden rounded bg-panel" role="progressbar" aria-valuenow={percent}>
@@ -57,7 +57,7 @@ function UpdatePopover({ anchor }: { readonly anchor: PopoverAnchor }) {
           </div>
         )}
         {view.message === null ? null : (
-          <p data-testid="update-message" className="max-w-popover whitespace-normal text-ink-muted">
+          <p data-testid="update-message" className="max-w-popover whitespace-normal wrap-anywhere text-ink-muted">
             {view.message}
           </p>
         )}
