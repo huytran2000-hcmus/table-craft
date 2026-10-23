@@ -290,6 +290,23 @@ export async function columnSnapshot(cells: Locator): Promise<string[]> {
   return entries.sort((left, right) => left.row - right.row).map((entry) => entry.text);
 }
 
+export function exportDialog(page: Page) {
+  return page.getByRole("dialog").filter({ has: page.getByTestId("export-file") });
+}
+
+/**
+ * Answers the Export Data dialog (plan 018): picks `format` by its label when given, types `path`
+ * and starts the export. The task then runs in the background; wait on Output or Services.
+ */
+export async function answerExportDialog(page: Page, path: string, format?: string): Promise<void> {
+  const dialog = exportDialog(page);
+  await dialog.waitFor();
+  if (format !== undefined) await dialog.getByRole("radio", { name: format, exact: true }).click();
+  await dialog.getByTestId("export-file").fill(path);
+  await dialog.getByRole("button", { name: "Export", exact: true }).click();
+  await dialog.waitFor({ state: "detached" });
+}
+
 export function consoleAlert(page: Page) {
   return page.getByRole("alert");
 }

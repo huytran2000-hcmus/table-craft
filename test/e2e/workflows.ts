@@ -15,6 +15,7 @@ import {
   answerSecretPrompt,
   columnSnapshot,
   editorTabs,
+  exportDialog,
   LAUNCH_TIMEOUT_MS,
   openConsoleOn,
   paletteInput,
@@ -194,6 +195,10 @@ export async function dailyLoop(page: Page, target: LoopTarget): Promise<readonl
       .click();
     await page.getByRole("columnheader").first().waitFor({ timeout: LAUNCH_TIMEOUT_MS });
     await page.getByRole("toolbar", { name: "Result" }).getByRole("button", { name: "Export Data…" }).click();
+    const dialog = exportDialog(page);
+    await dialog.getByRole("button", { name: "Browse…" }).click();
+    await expect.poll(() => dialog.getByTestId("export-file").inputValue()).toBe(target.exportPath);
+    await dialog.getByRole("button", { name: "Export", exact: true }).click();
     await resultTab(page, "Output").click();
     await expect
       .poll(() => page.getByRole("log", { name: "Output" }).textContent(), { timeout: LAUNCH_TIMEOUT_MS })

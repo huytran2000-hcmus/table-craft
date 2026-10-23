@@ -13,6 +13,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { MYSQL_CONFIG, POSTGRES_CONFIG } from "../support/databases.js";
 import { seededSqliteFile } from "../support/sqliteFixture.js";
 import {
+  answerExportDialog,
   closeApp,
   columnSnapshot,
   DATABASES_ENABLED,
@@ -393,17 +394,15 @@ describe.runIf(DATABASES_ENABLED)("result grid live test", () => {
   it(
     "givenFirstPageShown_whenExported_thenFileHasEveryRow",
     async () => {
-      const { app, page } = await launch(POSTGRES);
+      const { page } = await launch(POSTGRES);
       const folder = mkdtempSync(join(tmpdir(), "table-craft-export-"));
       scratch.push(folder);
       const path = join(folder, "paging.csv");
-      await app.evaluate(({ dialog }, filePath) => {
-        dialog.showSaveDialog = () => Promise.resolve({ canceled: false, filePath });
-      }, path);
       await query(page, POSTGRES_PAGING);
       await expect.poll(() => resultState(page).textContent()).toBe("500+ rows");
 
       await toolbarButton(page, "Export Data…").click();
+      await answerExportDialog(page, path);
 
       await resultTab(page, "Output").click();
       await expect
@@ -421,17 +420,15 @@ describe.runIf(DATABASES_ENABLED)("result grid live test", () => {
   it(
     "givenTsvExtractor_whenExported_thenFileIsTabSeparated",
     async () => {
-      const { app, page } = await launch(sqlite());
+      const { page } = await launch(sqlite());
       const folder = mkdtempSync(join(tmpdir(), "table-craft-export-"));
       scratch.push(folder);
       const path = join(folder, "customers.tsv");
-      await app.evaluate(({ dialog }, filePath) => {
-        dialog.showSaveDialog = () => Promise.resolve({ canceled: false, filePath });
-      }, path);
       await query(page, "SELECT * FROM customers ORDER BY id");
 
       await toolbar(page).getByLabel("Extractor").selectOption({ label: "TSV" });
       await toolbarButton(page, "Export Data…").click();
+      await answerExportDialog(page, path);
 
       await resultTab(page, "Output").click();
       await expect

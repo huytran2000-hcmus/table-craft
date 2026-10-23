@@ -1,12 +1,15 @@
 import { createHash, type Hash } from "node:crypto";
 import { createReadStream } from "node:fs";
 import { appendFile, mkdtemp, readdir, rm, stat } from "node:fs/promises";
+import { execFile } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
 import type { PluginLoadResult } from "@table-craft/core";
 import mysql from "@table-craft/plugin-mysql";
 import postgres from "@table-craft/plugin-postgres";
+import type { ExportTask } from "@table-craft/desktop/engine/protocol.js";
 import { MYSQL_CONFIG, POSTGRES_CONFIG } from "../support/databases.js";
 import { execute, exportHarness, openSession, startExport } from "../support/engineExports.js";
 import { MYSQL_MANIFEST, POSTGRES_MANIFEST } from "../support/manifests.js";
@@ -24,7 +27,13 @@ const ROWS = 6_000_000;
 const PAYLOAD_REPEATS = 16;
 const MIN_BYTES = 3 * 1024 ** 3;
 /** The engine holds one batch, not the file; anything near the file's size means it buffered. */
-const MAX_RSS_GROWTH_BYTES = 512 * 1024 ** 2;
+const MAX_RSS_GROWTH_BYTES = 400 * 1024 ** 2;
+/** 6,000,000 rows over sheets of 1,048,575 data rows each (`XLSX_SHEET_ROWS` less the header). */
+const XLSX_SHEETS = 6;
+const SHEET_ENTRY = /xl\/worksheets\/sheet\d+\.xml/gu;
+const UNZIP_MAX_BUFFER = 64 * 1024 ** 2;
+/** The last sheet inflates to hundreds of megabytes; only its end is read. */
+const SHEET_TAIL_BYTES = 4_096;
 const RSS_SAMPLE_MS = 250;
 const LARGE_TEST_TIMEOUT_MS = 30 * 60_000;
 const HASH_BATCH_LINES = 10_000;
@@ -108,6 +117,23 @@ function sampleRss(): { readonly stop: () => { baseline: number; peak: number } 
 
 const MEBIBYTE = 1024 ** 2;
 
+async function sheetTail(path: string, sheet: number): Promise<string> {
+  const entry = `xl/worksheets/sheet${String(sheet)}.xml`;
+  const { stdout } = await promisify(execFile)("sh", [
+    "-c",
+    `unzip -p "$0" "$1" | tail -c ${String(SHEET_TAIL_BYTES)}`,
+    path,
+    entry,
+  ]);
+  return stdout;
+}
+
+/** The system's Info-ZIP `unzip`, a reader that shares no code with the writer. */
+async function unzip(args: readonly string[]): Promise<string> {
+  const { stdout } = await promisify(execFile)("unzip", [...args], { maxBuffer: UNZIP_MAX_BUFFER });
+  return stdout;
+}
+
 for (const target of TARGETS) {
   describe.runIf(ENABLED)(`large export: ${target.name}`, { timeout: LARGE_TEST_TIMEOUT_MS }, () => {
     const cleanup: (() => Promise<void>)[] = [];
@@ -115,7 +141,14 @@ for (const target of TARGETS) {
       for (const step of cleanup.splice(0).reverse()) await step();
     });
 
-    it("givenMultiGigabyteResult_whenExported_thenFileCompleteAndMemoryFlat", async () => {
+    interface Run {
+      readonly done: ExportTask;
+      readonly path: string;
+      readonly size: number;
+      readonly memory: { readonly baseline: number; readonly peak: number };
+    }
+
+    async function exportLarge(format: "csv" | "xlsx"): Promise<Run> {
       const directory = await mkdtemp(join(tmpdir(), "table-craft-large-"));
       cleanup.push(() => rm(directory, { recursive: true, force: true }));
       const engine = exportHarness(
@@ -125,39 +158,61 @@ for (const target of TARGETS) {
       cleanup.push(() => engine.close());
       const sessionId = await openSession(engine.connection);
       const { handle } = await execute(engine.connection, sessionId, target.rows);
-      const path = join(directory, "large.csv");
+      const path = join(directory, `large.${format}`);
 
       const rss = sampleRss();
       const task = await startExport(engine.connection, {
         source: { kind: "result", handle, columns: [0, 1, 2] },
-        format: "csv",
+        format,
         path,
       });
       const done = await engine.finished(task.taskId);
       const memory = rss.stop();
-      const size = (await stat(path)).size;
-      const [actual, expected] = [await fileHash(path), expectedHash()];
+      expect(await readdir(directory)).toEqual([`large.${format}`]);
+      return { done, path, size: (await stat(path)).size, memory };
+    }
 
-      if (REPORT !== undefined) {
-        await appendFile(
-          REPORT,
-          `${JSON.stringify({
-            database: target.name,
-            rows: done.rows,
-            bytes: size,
-            elapsedMs: done.elapsedMs,
-            sha256: actual,
-            expectedSha256: expected,
-            rssBaselineMiB: Math.round(memory.baseline / MEBIBYTE),
-            rssPeakMiB: Math.round(memory.peak / MEBIBYTE),
-          })}\n`,
-        );
-      }
-      expect(done).toMatchObject({ state: "done", rows: ROWS, origin: "rerun", bytes: size });
-      expect(size).toBeGreaterThanOrEqual(MIN_BYTES);
+    async function report(format: string, run: Run, extra: object): Promise<void> {
+      if (REPORT === undefined) return;
+      await appendFile(
+        REPORT,
+        `${JSON.stringify({
+          database: target.name,
+          format,
+          rows: run.done.rows,
+          bytes: run.size,
+          elapsedMs: run.done.elapsedMs,
+          rssBaselineMiB: Math.round(run.memory.baseline / MEBIBYTE),
+          rssPeakMiB: Math.round(run.memory.peak / MEBIBYTE),
+          ...extra,
+        })}\n`,
+      );
+    }
+
+    it("givenMultiGigabyteResult_whenExportedAsCsv_thenFileCompleteAndMemoryFlat", async () => {
+      const run = await exportLarge("csv");
+      const [actual, expected] = [await fileHash(run.path), expectedHash()];
+      await report("csv", run, { sha256: actual, expectedSha256: expected });
+
+      expect(run.done).toMatchObject({ state: "done", rows: ROWS, origin: "rerun", bytes: run.size });
+      expect(run.size).toBeGreaterThanOrEqual(MIN_BYTES);
       expect(actual).toBe(expected);
-      expect(memory.peak - memory.baseline).toBeLessThan(MAX_RSS_GROWTH_BYTES);
-      expect(await readdir(directory)).toEqual(["large.csv"]);
+      expect(run.memory.peak - run.memory.baseline).toBeLessThan(MAX_RSS_GROWTH_BYTES);
+    });
+
+    it("givenMultiGigabyteResult_whenExportedAsXlsx_thenEverySheetIntactAndMemoryFlat", async () => {
+      const run = await exportLarge("xlsx");
+      const tested = await unzip(["-tq", run.path]);
+      const sheets = (await unzip(["-l", run.path])).match(SHEET_ENTRY) ?? [];
+      const last = await sheetTail(run.path, XLSX_SHEETS);
+      await report("xlsx", run, { sheets: run.done.sheets, unzipTest: tested.trim() });
+
+      expect(run.done).toMatchObject({ state: "done", rows: ROWS, sheets: XLSX_SHEETS, bytes: run.size });
+      expect(tested).toContain("No errors detected");
+      expect(sheets).toHaveLength(XLSX_SHEETS);
+      expect(last).toContain(`<v>${String(ROWS)}</v>`);
+      expect(last.trimEnd().endsWith("</worksheet>")).toBe(true);
+      expect(run.memory.peak - run.memory.baseline).toBeLessThan(MAX_RSS_GROWTH_BYTES);
     });
   });
 }

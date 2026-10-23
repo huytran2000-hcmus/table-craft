@@ -23,6 +23,7 @@ import {
   consoleToolbar,
   dataSourcesDialog,
   EVIDENCE_WINDOW,
+  exportDialog,
   LAUNCH_TIMEOUT_MS,
   launchApp,
   newProfile,
@@ -567,6 +568,10 @@ describe.runIf(README_MEDIA_ENABLED)("README media", () => {
       await pause(page);
       await stubSaveDialog(app, join(EXPORT_DIRECTORY, "order_items.md"));
       await clickVisibly(page, resultToolbarButton(page, "Export Data…"));
+      const dialog = exportDialog(page);
+      await clickVisibly(page, dialog.getByRole("button", { name: "Browse…" }));
+      await pause(page);
+      await clickVisibly(page, dialog.getByRole("button", { name: "Export", exact: true }));
       await clickVisibly(page, resultTab(page, "Output"));
       await expect
         .poll(() => page.getByRole("log", { name: "Output" }).textContent(), { timeout: LAUNCH_TIMEOUT_MS })
