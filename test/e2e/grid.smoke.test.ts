@@ -450,7 +450,7 @@ describe.runIf(DATABASES_ENABLED)("result grid live test", () => {
       await cell(page, 0, 1).click();
       await page.keyboard.press("Shift+Enter");
       const panel = page.getByRole("complementary", { name: "Value" });
-      await expect.poll(() => panel.getByTestId("value-json").textContent()).toContain('"a": 1');
+      await expect.poll(() => panel.getByTestId("value-editor").textContent()).toContain('"a": 1');
       await captureWindow(page, "value-panel");
 
       await cell(page, 0, 3).click();
