@@ -19,6 +19,8 @@ import {
   type ScopeAt,
   type Source,
 } from "./scope.js";
+import { namespaceTarget } from "./namespace.js";
+import { sqlSplitter } from "./splitter.js";
 import type { SqlDialectOptions } from "./tokens.js";
 
 /** How a dialect reads unquoted names: PostgreSQL folds them to lower case, MySQL and SQLite compare them as written. */
@@ -152,6 +154,7 @@ function relationKind(relation: Relation): CompletionKind {
 /** The shared completion and navigation every built-in plugin spreads into its `SqlLanguage` (decision 028). */
 export function sqlCompleter(options: CompleterOptions): Pick<SqlLanguage, "complete" | "resolve"> {
   const reserved = new Set(options.keywords.map((keyword) => keyword.toUpperCase()));
+  const split = sqlSplitter(options.dialect);
 
   function fold(name: string): string {
     switch (options.identifierFolding) {
@@ -220,13 +223,37 @@ export function sqlCompleter(options: CompleterOptions): Pick<SqlLanguage, "comp
   class Lookup {
     readonly #catalog: CompletionCatalog;
     #namespaces: Promise<readonly Namespace[]> | null = null;
+    #current: readonly string[] | null;
 
     constructor(catalog: CompletionCatalog) {
       this.#catalog = catalog;
+      this.#current = catalog.current;
     }
 
     get current(): readonly string[] | null {
-      return this.#catalog.current;
+      return this.#current;
+    }
+
+    /**
+     * Makes the script's own namespace current: the nearest statement before `offset` that moves
+     * the session's namespace, when one of its targets exists (plan 022 decision 7).
+     */
+    async follow(text: string, offset: number): Promise<void> {
+      const preceding = split(text).filter((span) => span.to < offset);
+      for (let at = preceding.length - 1; at >= 0; at -= 1) {
+        const span = preceding[at];
+        const target = span === undefined ? null : namespaceTarget(span.sql, options.dialect);
+        if (target === null) continue;
+        const namespaces = (await this.namespaces()).filter((namespace) => namespace.kind === target.kind);
+        for (const candidate of target.candidates) {
+          const found = namespaces.find((namespace) => denotes(candidate, namespace.path.at(-1) ?? ""));
+          if (found !== undefined) {
+            this.#current = found.path;
+            return;
+          }
+        }
+        return;
+      }
     }
 
     namespaces(): Promise<readonly Namespace[]> {
@@ -500,6 +527,7 @@ export function sqlCompleter(options: CompleterOptions): Pick<SqlLanguage, "comp
     const { text, offset, shift } = wrap(request);
     const scope = scopeAt(text, offset, options.dialect);
     const lookup = new Lookup(catalog);
+    if (request.scope === undefined) await lookup.follow(text, offset);
     const items = await itemsFor(scope, lookup);
     const typedQuote = QUOTES.has(text.charAt(scope.prefixFrom)) && scope.prefixFrom < offset;
     return {
@@ -549,6 +577,7 @@ export function sqlCompleter(options: CompleterOptions): Pick<SqlLanguage, "comp
     const { word, qualifier, query } = scope;
     if (word === null || scope.clause === "none") return null;
     const lookup = new Lookup(catalog);
+    await lookup.follow(request.text, request.offset);
     const cte = visibleCtes(query).find((candidate) => candidate.name.from === word.from);
     if (cte !== undefined) return { kind: "cte", from: cte.name.from, to: cte.name.to };
     const declaring = sourceDeclaring(query, word);

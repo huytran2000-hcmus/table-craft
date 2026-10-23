@@ -14,7 +14,8 @@ export {
 export { FORMAT_DIALECTS, sqlFormatter, type FormatDialect, type FormatterOptions } from "./format.js";
 export { sqlParameters, type NativePlaceholder, type ParameterOptions } from "./parameters.js";
 export { sqlSplitter } from "./splitter.js";
-export { type SqlDialectOptions } from "./tokens.js";
+export { namespaceTarget, type NamespaceTarget } from "./namespace.js";
+export { type NamespaceStatementForm, type SqlDialectOptions } from "./tokens.js";
 export {
   defaultKeyword,
   defaultValuesInsert,

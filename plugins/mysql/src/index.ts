@@ -63,6 +63,7 @@ const DIALECT: SqlDialectOptions = {
   delimiterCommand: true,
   hashComments: true,
   blockKeywords: ["BEGIN"],
+  namespaceStatements: ["use"],
 };
 
 const PARAMETERS: ParameterOptions = { dialect: DIALECT, styles: ["named", "positional"], native: "positional" };

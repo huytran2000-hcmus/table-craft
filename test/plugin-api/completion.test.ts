@@ -1,7 +1,7 @@
 import type { CompletionResult, Relation } from "@table-craft/plugin-api";
 import { quoteIdentifierWith, SQL_FUNCTIONS, SQL_KEYWORDS, sqlCompleter } from "@table-craft/plugin-api/sql";
 import { describe, expect, it } from "vitest";
-import { ARCHIVE, fakeCatalog, PUBLIC, relation } from "../support/completionCatalog.js";
+import { ARCHIVE, fakeCatalog, fixtureRelations, PUBLIC, relation } from "../support/completionCatalog.js";
 
 const postgres = sqlCompleter({
   dialect: { dollarQuotes: true },
@@ -353,5 +353,112 @@ describe("sqlCompleter.resolve", () => {
     expect(await resolve("SELECT * FROM nowh|ere")).toBeNull();
     expect(await resolve("SELECT 'cust|omers'")).toBeNull();
     expect(await resolve("SELECT * FROM orders |")).toBeNull();
+  });
+});
+
+describe("sqlCompleter follows the script's namespace statements", () => {
+  const MYSQL_HOME = ["table_craft"] as const;
+  const MYSQL_ARCHIVE = ["archive"] as const;
+  const followingPostgres = sqlCompleter({
+    dialect: { dollarQuotes: true, namespaceStatements: ["searchPath"] },
+    identifierFolding: "lower",
+    plainIdentifier: /^[a-z_][a-z0-9_$]*$/,
+    quoteIdentifier: quoteIdentifierWith('"'),
+    keywords: SQL_KEYWORDS,
+    functions: SQL_FUNCTIONS,
+  });
+  const followingMysql = sqlCompleter({
+    dialect: { backslashEscapes: true, hashComments: true, namespaceStatements: ["use"] },
+    identifierFolding: "none",
+    plainIdentifier: /^[A-Za-z_][A-Za-z0-9_$]*$/,
+    quoteIdentifier: quoteIdentifierWith("`"),
+    keywords: SQL_KEYWORDS,
+    functions: SQL_FUNCTIONS,
+  });
+
+  function mysqlCatalog() {
+    const relations = fixtureRelations();
+    return fakeCatalog(
+      new Map([
+        [JSON.stringify(MYSQL_HOME), relations.get(JSON.stringify(PUBLIC)) ?? []],
+        [JSON.stringify(MYSQL_ARCHIVE), relations.get(JSON.stringify(ARCHIVE)) ?? []],
+      ]),
+      MYSQL_HOME,
+      "database",
+    );
+  }
+
+  it("givenUseAboveCaret_whenCompletingFrom_thenOffersThatDatabase", async () => {
+    const result = await complete("USE archive;\n\nSELECT * FROM |", followingMysql, mysqlCatalog());
+
+    expect(labels(result, "table")).toEqual(["old_orders"]);
+    expect(labels(result, "namespace")).toEqual(["table_craft"]);
+  });
+
+  it("givenTwoUsesAboveCaret_whenCompletingFrom_thenNearestWins", async () => {
+    const result = await complete("USE table_craft;\nUSE `archive`;\nSELECT * FROM |", followingMysql, mysqlCatalog());
+
+    expect(labels(result, "table")).toEqual(["old_orders"]);
+  });
+
+  it("givenUseBelowCaret_whenCompletingFrom_thenIgnored", async () => {
+    const result = await complete("SELECT * FROM |;\nUSE archive;", followingMysql, mysqlCatalog());
+
+    expect(labels(result, "table")).toEqual(["Line Items", "customers", "orders"]);
+  });
+
+  it("givenUseOfUnknownDatabase_whenCompletingFrom_thenCatalogCurrent", async () => {
+    const result = await complete("USE nowhere;\nSELECT * FROM |", followingMysql, mysqlCatalog());
+
+    expect(labels(result, "table")).toEqual(["Line Items", "customers", "orders"]);
+  });
+
+  it("givenSearchPathAboveCaret_whenCompletingFrom_thenFirstExistingSchemaWins", async () => {
+    const result = await complete("SET search_path TO nowhere, archive, public;\nSELECT * FROM |", followingPostgres);
+
+    expect(labels(result, "table")).toEqual(["old_orders"]);
+  });
+
+  it("givenQuotedSearchPathNotMatchingCase_whenCompletingFrom_thenCatalogCurrent", async () => {
+    const result = await complete('SET search_path TO "ARCHIVE";\nSELECT * FROM |', followingPostgres);
+
+    expect(labels(result, "table")).toEqual(["Line Items", "customers", "orders"]);
+  });
+
+  it("givenSearchPathDefault_whenCompletingFrom_thenCatalogCurrent", async () => {
+    const result = await complete(
+      "SET search_path TO archive;\nSET search_path TO DEFAULT;\nSELECT * FROM |",
+      followingPostgres,
+    );
+
+    expect(labels(result, "table")).toEqual(["Line Items", "customers", "orders"]);
+  });
+
+  it("givenCatalogCurrentOverridden_whenNoScriptStatement_thenCompletesAgainstIt", async () => {
+    const catalog = { ...fakeCatalog(), current: ARCHIVE };
+    const result = await complete("SELECT * FROM |", followingPostgres, catalog);
+
+    expect(labels(result, "table")).toEqual(["old_orders"]);
+  });
+
+  it("givenSearchPathAboveCaret_whenCompletingColumns_thenResolvesUnqualifiedRelationThere", async () => {
+    const result = await complete("SET SCHEMA 'archive';\nSELECT | FROM old_orders", followingPostgres);
+
+    expect(labels(result, "column")).toEqual(["id", "customer_id"]);
+  });
+
+  it("givenUseAboveCaret_whenResolving_thenRelationInThatDatabase", async () => {
+    const declaration = await followingMysql.resolve(at("USE archive;\nSELECT * FROM old_ord|ers"), mysqlCatalog());
+
+    expect(declaration).toEqual({ kind: "relation", path: MYSQL_ARCHIVE, relation: "old_orders" });
+  });
+
+  it("givenScopeRequest_whenTextLooksLikeUse_thenScopeUnaffected", async () => {
+    const result = await followingMysql.complete(
+      { text: "USE archive; ", offset: 13, scope: { path: MYSQL_HOME, relation: "orders" } },
+      mysqlCatalog(),
+    );
+
+    expect(result.items.some((entry) => entry.label === "old_orders")).toBe(false);
   });
 });

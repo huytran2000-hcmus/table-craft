@@ -103,7 +103,9 @@ describe("engine protocol", () => {
   });
 
   it("givenScriptTypes_whenComparedWithPluginApi_thenIdentical", () => {
-    type Classified = StatementSpan & StatementClass & { readonly parameters: readonly SqlParameter[] };
+    // setsNamespace stays in the engine, which answers with the namespace itself (plan 022).
+    type Classified = StatementSpan &
+      Omit<StatementClass, "setsNamespace"> & { readonly parameters: readonly SqlParameter[] };
     expectTypeOf<protocol.ClassifiedStatement>().toExtend<Classified>();
     expectTypeOf<Classified>().toExtend<protocol.ClassifiedStatement>();
     expectTypeOf<keyof protocol.ClassifiedStatement>().toEqualTypeOf<keyof Classified>();

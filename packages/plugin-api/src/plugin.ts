@@ -127,6 +127,11 @@ export interface StatementClass {
   readonly kind: StatementKind;
   /** Why the statement needs confirmation before it runs (decision 011), such as `DELETE without WHERE`; null when it does not. */
   readonly destructive: string | null;
+  /**
+   * The statement may move the session's current namespace, such as `USE db` or
+   * `SET search_path` (plan 022); the host then asks `Session.currentNamespace` again.
+   */
+  readonly setsNamespace?: boolean;
 }
 
 export const KEYWORD_CASES = ["upper", "lower", "preserve"] as const;

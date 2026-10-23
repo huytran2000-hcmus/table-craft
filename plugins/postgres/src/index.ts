@@ -57,7 +57,12 @@ const CAPABILITIES: readonly Capability[] = [
 ];
 
 /** Function bodies live in dollar quotes; `BEGIN ATOMIC … END` holds a SQL-standard body. */
-const DIALECT: SqlDialectOptions = { dollarQuotes: true, nestedBlockComments: true, blockKeywords: ["BEGIN"] };
+const DIALECT: SqlDialectOptions = {
+  dollarQuotes: true,
+  nestedBlockComments: true,
+  blockKeywords: ["BEGIN"],
+  namespaceStatements: ["searchPath"],
+};
 
 const PARAMETERS: ParameterOptions = { dialect: DIALECT, styles: ["named", "numbered"], native: "numbered" };
 

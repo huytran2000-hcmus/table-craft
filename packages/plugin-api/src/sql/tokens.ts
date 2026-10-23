@@ -12,7 +12,15 @@ export interface SqlDialectOptions {
   readonly hashComments?: boolean;
   /** Keywords that open a body holding semicolons, closed by `END`, inside `CREATE TRIGGER`, `FUNCTION` and the like. */
   readonly blockKeywords?: readonly string[];
+  /** The statements that move the session's current namespace in this dialect (plan 022). */
+  readonly namespaceStatements?: readonly NamespaceStatementForm[];
 }
+
+/**
+ * `use` is MySQL's `USE db`; `searchPath` is PostgreSQL's `SET [SESSION | LOCAL] search_path`,
+ * `SET SCHEMA` and `RESET search_path` / `RESET ALL`.
+ */
+export type NamespaceStatementForm = "use" | "searchPath";
 
 export type TokenKind = "word" | "quoted" | "string" | "comment" | "symbol" | "delimiter";
 

@@ -151,7 +151,7 @@ const DIGIT = /^[0-9]/;
 const BLOCK_COMMENT_END = "*/";
 const LINE_COMMENT_STARTS = ["--", "#"];
 
-function unquote(raw: string): string {
+export function unquote(raw: string): string {
   const quote = raw.charAt(0);
   const inner = raw.length >= 2 && raw.endsWith(quote) ? raw.slice(1, -1) : raw.slice(1);
   return inner.replaceAll(quote + quote, quote);

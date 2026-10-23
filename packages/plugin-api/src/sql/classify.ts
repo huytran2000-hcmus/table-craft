@@ -1,4 +1,5 @@
 import type { StatementClass, StatementKind } from "@table-craft/plugin-api";
+import { namespaceTarget } from "./namespace.js";
 import { significantTokens, type SqlDialectOptions } from "./tokens.js";
 import { explainPrefix, mainVerb, words, type Word } from "./words.js";
 
@@ -54,7 +55,8 @@ function destructiveReason(list: readonly Word[], verbAt: number): string | null
  * parses, so it never rejects a statement.
  */
 export function classifyTokens(sql: string, options: SqlDialectOptions = {}): StatementClass {
-  return classifyWords(words(sql, significantTokens(sql, options)));
+  const statementClass = classifyWords(words(sql, significantTokens(sql, options)));
+  return namespaceTarget(sql, options) === null ? statementClass : { ...statementClass, setsNamespace: true };
 }
 
 function classifyWords(list: readonly Word[]): StatementClass {

@@ -338,9 +338,10 @@ export function createEngine(options: EngineOptions, now: () => number = Date.no
 
   function splitScript(text: string): ClassifiedStatement[] {
     const language = sqlLanguage();
-    return language
-      .split(text)
-      .map((span) => ({ ...span, ...language.classify(span.sql), parameters: language.parameters(span.sql) }));
+    return language.split(text).map((span) => {
+      const { kind, destructive } = language.classify(span.sql);
+      return { ...span, kind, destructive, parameters: language.parameters(span.sql) };
+    });
   }
 
   function formatText(text: string, format: FormatOptions): string {
