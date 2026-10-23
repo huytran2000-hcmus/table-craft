@@ -152,7 +152,9 @@ export function zipWriter(options: ZipOptions = {}): ZipWriter {
       open = { name: encoded, offset: written, crc: 0, compressed: 0, uncompressed: 0 };
       const header = new Bytes(LOCAL_HEADER_BYTES + encoded.byteLength)
         .u32(LOCAL_HEADER_SIGNATURE)
-        .u16(VERSION_ZIP64)
+        // Excel rejects a streamed entry whose local header claims ZIP64 while its descriptor is
+        // 32-bit; the central directory says ZIP64 for the entries that need it.
+        .u16(VERSION_DEFLATE)
         .u16(FLAGS)
         .u16(METHOD_DEFLATE)
         .u16(stamp.time)

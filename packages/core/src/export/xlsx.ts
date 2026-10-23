@@ -34,13 +34,33 @@ const MAIN_NS = "http://schemas.openxmlformats.org/spreadsheetml/2006/main";
 const REL_NS = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
 const PACKAGE_REL_NS = "http://schemas.openxmlformats.org/package/2006/relationships";
 
-const CONTENT_TYPES =
-  `${XML_DECLARATION}<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">` +
-  '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>' +
-  '<Default Extension="xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>' +
-  '<Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>' +
-  '<Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>' +
-  "</Types>";
+const CONTENT_TYPE = {
+  rels: "application/vnd.openxmlformats-package.relationships+xml",
+  xml: "application/xml",
+  workbook: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml",
+  worksheet: "application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml",
+  styles: "application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml",
+} as const;
+
+/**
+ * Written last, when the sheet count is known: Excel refuses a package whose `.xml` default is the
+ * worksheet type, and ZIP entry order does not matter to Open Packaging Conventions.
+ */
+function contentTypes(sheets: number): string {
+  const override = (part: string, type: string) => `<Override PartName="${part}" ContentType="${type}"/>`;
+  const worksheets = Array.from({ length: sheets }, (_, index) =>
+    override(`/xl/worksheets/sheet${String(index + 1)}.xml`, CONTENT_TYPE.worksheet),
+  );
+  return (
+    `${XML_DECLARATION}<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">` +
+    `<Default Extension="rels" ContentType="${CONTENT_TYPE.rels}"/>` +
+    `<Default Extension="xml" ContentType="${CONTENT_TYPE.xml}"/>` +
+    override("/xl/workbook.xml", CONTENT_TYPE.workbook) +
+    override("/xl/styles.xml", CONTENT_TYPE.styles) +
+    worksheets.join("") +
+    "</Types>"
+  );
+}
 
 const ROOT_RELS =
   `${XML_DECLARATION}<Relationships xmlns="${PACKAGE_REL_NS}">` +
@@ -224,7 +244,6 @@ export function xlsxEncoder(columns: readonly Column[], options: XlsxOptions = {
       return truncatedCells;
     },
     start() {
-      entry("[Content_Types].xml", CONTENT_TYPES);
       entry("_rels/.rels", ROOT_RELS);
       entry("xl/styles.xml", STYLES);
       openSheet();
@@ -244,6 +263,7 @@ export function xlsxEncoder(columns: readonly Column[], options: XlsxOptions = {
       closeSheet();
       entry("xl/workbook.xml", workbook());
       entry("xl/_rels/workbook.xml.rels", workbookRels());
+      entry("[Content_Types].xml", contentTypes(sheets));
       out.push(zip.close());
       return drain();
     },

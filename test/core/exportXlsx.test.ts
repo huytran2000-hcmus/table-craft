@@ -22,6 +22,8 @@ function workbook(columns: readonly Column[], rows: readonly Row[], sheetRows?: 
   return { encoder, archive, text };
 }
 
+const LOCAL_VERSION_OFFSET = 4;
+
 describe("zip writer", () => {
   it("givenEntries_whenZipped_thenCentralDirectoryAndCrcsMatch", () => {
     const zip = zipWriter();
@@ -37,9 +39,12 @@ describe("zip writer", () => {
       zip.close(),
     ];
 
-    const archive = readZip(bytesOf(parts));
+    const bytes = bytesOf(parts);
+    const archive = readZip(bytes);
 
     expect(archive.entries.map((entry) => entry.name)).toEqual(["a.txt", "dir/b.txt"]);
+    // Version needed 2.0 in the local header: Excel refuses 4.5 beside a 32-bit data descriptor.
+    expect(new DataView(bytes.buffer, bytes.byteOffset).getUint16(LOCAL_VERSION_OFFSET, true)).toBe(20);
     expect(archive.entries[0]?.text()).toBe("hello world");
     expect(archive.entries[1]?.text()).toBe(big);
     expect(archive.entries[1]?.compressed).toBeLessThan(big.length / 10);
@@ -78,13 +83,14 @@ describe("xlsx writer", () => {
     const { archive, text } = workbook(COLUMNS, [[1, "a"]]);
 
     expect(archive.entries.map((entry) => entry.name)).toEqual([
-      "[Content_Types].xml",
       "_rels/.rels",
       "xl/styles.xml",
       "xl/worksheets/sheet1.xml",
       "xl/workbook.xml",
       "xl/_rels/workbook.xml.rels",
+      "[Content_Types].xml",
     ]);
+    expect(text("[Content_Types].xml")).toContain('<Default Extension="xml" ContentType="application/xml"/>');
     const sheet = text("xl/worksheets/sheet1.xml");
     expect(sheet).toContain('<pane ySplit="1" topLeftCell="A2" activePane="bottomLeft" state="frozen"/>');
     expect(sheet).toContain('<c r="A1" s="1" t="inlineStr"><is><t xml:space="preserve">id</t></is></c>');
@@ -105,6 +111,7 @@ describe("xlsx writer", () => {
     expect(text("xl/worksheets/sheet3.xml")).toContain('<row r="2"><c r="A2"><v>7</v></c>');
     expect(text("xl/workbook.xml")).toContain('<sheet name="Sheet3" sheetId="3" r:id="rId3"/>');
     expect(text("xl/_rels/workbook.xml.rels")).toContain('Id="rId4"');
+    expect(text("[Content_Types].xml").match(/PartName="\/xl\/worksheets\/sheet\d\.xml"/g)).toHaveLength(3);
   });
 
   it("givenControlCharactersAndEntities_whenWritten_thenEscaped", () => {
