@@ -718,7 +718,7 @@ streams the rows to disk as a background task (decision 040), so a console stays
 file may be many gigabytes at flat memory:
 
 - Source. A result whose statement reads (`classify` is `read`), on a session with no open
-  transaction and no private database, is re-run on a session of the export's own, read-only, with
+  transaction and no private database, read in the namespace the session started in (decision 048), is re-run on a session of the export's own, read-only, with
   TCP keepalive and `fullBytes` (contract 0.12.0); one statement reads one snapshot. Otherwise a
   complete result is written from memory, and an open cursor is drained (the grid shows
   Exporting… until it ends). A table export runs `SELECT <columns> FROM <table>` on its own

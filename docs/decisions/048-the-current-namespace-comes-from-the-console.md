@@ -52,3 +52,7 @@ changes, so no new catalog state per console is needed.
 - Every namespace-switching statement costs one extra round trip; ordinary statements cost none.
 - A namespace switched by a function, a procedure or a trigger shows up only after the next
   transaction end or switching statement.
+- An export re-runs a read on a fresh session, which starts in the default namespace (decision
+  040). A result read while the console was elsewhere is written from memory or its drained cursor
+  instead; switching back to where the session started re-enables the re-run. A switch the engine
+  could not read counts as elsewhere.

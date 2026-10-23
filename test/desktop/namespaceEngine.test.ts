@@ -1,4 +1,7 @@
-import { describe, expect, it } from "vitest";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
 import { PluginError, type DatasourcePlugin, type SqlLanguage, type StatementClass } from "@table-craft/plugin-api";
 import type { PluginLoadResult } from "@table-craft/core";
 import sqlite from "@table-craft/plugin-sqlite";
@@ -10,12 +13,14 @@ import type {
   TransactionState,
 } from "@table-craft/desktop/engine/protocol.js";
 import { RESULT_FETCH_ALL_CAP, RESULT_PAGE_ROWS } from "@table-craft/desktop/engine/protocol.js";
+import { exportHarness, startExport, type ExportHarness } from "../support/engineExports.js";
 import { fakeManifest } from "../support/manifests.js";
 
 const PLUGIN_ID = "switching";
 const PAGING = { pageRows: RESULT_PAGE_ROWS, fetchAllCap: RESULT_FETCH_ALL_CAP };
 const USE = /^USE\s+(\w+)$/i;
 const KNOWN = new Set(["main", "archive"]);
+const DATASOURCE = { id: "s", pluginId: PLUGIN_ID, config: { path: ":memory:" }, readOnly: false };
 
 /**
  * SQLite with a pretend `USE`: the switch is held in the fake, which counts how often the engine
@@ -68,11 +73,8 @@ function switchingPlugin(options: { failRead?: boolean } = {}) {
     }),
     plugin,
   };
-  const connection = createEngine({
-    datasource: { id: "s", pluginId: PLUGIN_ID, config: { path: ":memory:" }, readOnly: false },
-    plugins: [loaded],
-  }).connect();
-  return { connection, reads: () => reads };
+  const connection = createEngine({ datasource: DATASOURCE, plugins: [loaded] }).connect();
+  return { connection, loaded, reads: () => reads };
 }
 
 function resultOf<T>(response: EngineResponse): T {
@@ -164,5 +166,45 @@ describe("engine current namespace", () => {
     const committed = resultOf<ExecutedStatement>(await execute(connection, sessionId, "COMMIT"));
 
     expect(committed.namespace).toEqual(["main"]);
+  });
+
+  describe("exports", () => {
+    const harnesses: ExportHarness[] = [];
+    afterEach(async () => {
+      for (const harness of harnesses.splice(0)) await harness.close();
+    });
+
+    async function exportAfter(statements: readonly string[], failRead = false): Promise<string> {
+      const harness = exportHarness(DATASOURCE, [switchingPlugin({ failRead }).loaded]);
+      harnesses.push(harness);
+      const { sessionId } = await open(harness.connection);
+      for (const sql of statements) await execute(harness.connection, sessionId, sql);
+      const { handle } = resultOf<ExecutedStatement>(await execute(harness.connection, sessionId, "SELECT 1 AS a"));
+      const path = join(await mkdtemp(join(tmpdir(), "table-craft-namespace-")), "a.csv");
+      const task = await startExport(harness.connection, {
+        source: { kind: "result", handle, columns: [0] },
+        format: "csv",
+        path,
+      });
+      await harness.finished(task.taskId);
+      await rm(dirname(path), { recursive: true, force: true });
+      return task.origin;
+    }
+
+    it("givenOpeningNamespace_whenReadExported_thenRerun", async () => {
+      expect(await exportAfter([])).toBe("rerun");
+    });
+
+    it("givenUseRun_whenReadExported_thenHeldRowsNotARerunElsewhere", async () => {
+      expect(await exportAfter(["USE archive"])).toBe("memory");
+    });
+
+    it("givenUseBackToOpening_whenReadExported_thenRerun", async () => {
+      expect(await exportAfter(["USE archive", "USE main"])).toBe("rerun");
+    });
+
+    it("givenUseWhoseReadFails_whenReadExported_thenHeldRows", async () => {
+      expect(await exportAfter(["USE archive"], true)).toBe("memory");
+    });
   });
 });

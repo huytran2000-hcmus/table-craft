@@ -201,6 +201,18 @@ interface OpenSession {
   readonly capabilities: readonly Capability[];
   /** Statements in flight: `statement.execute` calls that have not answered yet. */
   running: number;
+  /** Where the session started, as `currentNamespace` read it; undefined when it could not say. */
+  readonly opening: CurrentNamespace | undefined;
+  /**
+   * Whether a statement may have moved the session off `opening` (decision 048). Its reads then
+   * resolve names a fresh session would resolve elsewhere, so an export must not re-run them.
+   */
+  moved: boolean;
+}
+
+function samePath(a: readonly string[] | null, b: readonly string[] | null): boolean {
+  if (a === null || b === null) return a === b;
+  return a.length === b.length && a.every((part, index) => part === b[index]);
 }
 
 function connectDatasource(options: EngineOptions): Promise<Session> {
@@ -739,17 +751,19 @@ export function createEngine(options: EngineOptions, now: () => number = Date.no
      * What the session reports as its namespace now (decision 048), or undefined when the plugin
      * cannot say or the read fails: the console then keeps what it had.
      */
-    async function namespaceOf(open: OpenSession): Promise<CurrentNamespace | undefined> {
+    async function namespaceOf(
+      open: Pick<OpenSession, "session" | "capabilities">,
+    ): Promise<CurrentNamespace | undefined> {
       if (!open.capabilities.includes("currentNamespace") || open.session.currentNamespace === undefined) {
         return undefined;
       }
       return open.session.currentNamespace().catch(() => undefined);
     }
 
-    /** A statement that switches namespaces, or ends a transaction that may have, is followed by a read. */
-    function movesNamespace(sql: string): boolean {
-      const statement = sqlLanguage().classify(sql);
-      return statement.setsNamespace === true || statement.kind === "transaction";
+    /** Notes whether `open` is off its opening namespace; a switch it could not read counts as one. */
+    function noteNamespace(open: OpenSession, namespace: CurrentNamespace | undefined, switched: boolean): void {
+      if (namespace !== undefined && open.opening !== undefined) open.moved = !samePath(namespace, open.opening);
+      else if (switched) open.moved = true;
     }
 
     function ownedHandle(handle: string): string {
@@ -792,10 +806,15 @@ export function createEngine(options: EngineOptions, now: () => number = Date.no
           sessionFor(sessionId);
         }
         handles.set(summary.handle, sessionId);
-        statements.set(summary.handle, sql);
+        if (!open.moved) statements.set(summary.handle, sql);
         if (summary.cursorOpen) cursors.set(sessionId, summary.handle);
         // An open cursor keeps the session busy, and no statement that switches returns rows.
-        const namespace = !summary.cursorOpen && movesNamespace(bound.sql) ? await namespaceOf(open) : undefined;
+        // A statement that switches namespaces, or ends a transaction that may have, is followed by a read.
+        const statement = sqlLanguage().classify(bound.sql);
+        const switches = statement.setsNamespace === true;
+        const moves = !summary.cursorOpen && (switches || statement.kind === "transaction");
+        const namespace = moves ? await namespaceOf(open) : undefined;
+        if (moves) noteNamespace(open, namespace, switches);
         return {
           ...summary,
           firstWindow: results.window(summary.handle, 0),
@@ -937,6 +956,7 @@ export function createEngine(options: EngineOptions, now: () => number = Date.no
         throw new EngineFailure({ code: "statementFailed", message: messageOf(cause), hint }, cause);
       }
       const namespace = await namespaceOf(open);
+      noteNamespace(open, namespace, false);
       return {
         mode: transactions.mode,
         transactionOpen: transactions.open,
@@ -949,8 +969,9 @@ export function createEngine(options: EngineOptions, now: () => number = Date.no
         const session = await connectDatasource(options);
         const { manifest, plugin } = loadedPlugin(options.plugins, options.datasource.pluginId);
         const sessionId = `${SESSION_PREFIX}${nextSession++}`;
-        const open: OpenSession = { session, capabilities: plugin.capabilities, running: 0 };
-        const namespace = (await namespaceOf(open)) ?? null;
+        const opening = await namespaceOf({ session, capabilities: plugin.capabilities });
+        const open: OpenSession = { session, capabilities: plugin.capabilities, running: 0, opening, moved: false };
+        const namespace = opening ?? null;
         sessions.set(sessionId, open);
         return {
           sessionId,
