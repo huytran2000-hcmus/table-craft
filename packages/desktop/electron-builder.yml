@@ -29,7 +29,11 @@ artifactName: ${productName}-${version}-${arch}.${ext}
 
 mac:
   category: public.app-category.developer-tools
-  target: dmg
+  # The DMG is for people; the zip is what the in-app update downloads and unpacks with ditto
+  # (decision 044).
+  target:
+    - dmg
+    - zip
   # For a Developer ID build (CSC_LINK or CSC_NAME set) and notarisation. Without one,
   # scripts/package.ts signs ad hoc and turns the hardened runtime off: its library validation
   # refuses an ad-hoc-signed Electron Framework, which has no Team ID (plan 014 deviation).

@@ -1,5 +1,6 @@
 # Plan 014, decisions 15 and 16: verify on Linux, package and smoke-test the packaged app on every
-# target, and on a `v*` tag collect the installers into a draft release.
+# target, and on a `v*` tag collect the installers into a draft release with the signed update
+# manifest the installed apps read (decision 044).
 name: CI
 
 on:
@@ -44,11 +45,15 @@ jobs:
           - name: macOS arm64
             runner: macos-15
             blocking: true
-            installer: packages/desktop/release/*.dmg
+            installer: |
+              packages/desktop/release/*.dmg
+              packages/desktop/release/*.zip
           - name: macOS x64
             runner: macos-15-intel
             blocking: true
-            installer: packages/desktop/release/*.dmg
+            installer: |
+              packages/desktop/release/*.dmg
+              packages/desktop/release/*.zip
           - name: Windows x64
             runner: windows-latest
             blocking: false
@@ -84,14 +89,26 @@ jobs:
     if: startsWith(github.ref, 'refs/tags/v')
     needs: [verify, package]
     runs-on: ubuntu-latest
+    # Decision 044: the signing key is the root of every installed app's trust. Keep it in this
+    # environment's secrets and give the environment required reviewers.
+    environment: release
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@v7
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: .bun-version
+      - run: bun install --frozen-lockfile
       - uses: actions/download-artifact@v8
         with:
           pattern: installer-*
           path: installers
           merge-multiple: true
+      - name: Sign the update manifest
+        env:
+          TABLE_CRAFT_UPDATE_SIGNING_KEY: ${{ secrets.TABLE_CRAFT_UPDATE_SIGNING_KEY }}
+        run: bun packages/desktop/scripts/update-manifest.ts --tag "$GITHUB_REF_NAME" --assets installers --out installers
       - name: Draft the release
         env:
           GH_TOKEN: ${{ github.token }}
