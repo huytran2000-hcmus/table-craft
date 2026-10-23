@@ -62,6 +62,8 @@ export interface UpdaterOptions {
   /** Where the swap script writes; main appends it to the log on the next launch. */
   readonly swapLogPath: string;
   readonly pid: number;
+  /** The arguments this run started with, which the relaunched app gets too, as `app.relaunch` does. */
+  readonly relaunchArgs: readonly string[];
   readonly fetch: Fetch;
   /** Runs a command to completion: `ditto` on macOS. */
   readonly run: (command: string, args: readonly string[]) => Promise<RunResult>;
@@ -470,6 +472,7 @@ export function createUpdater(options: UpdaterOptions): Updater {
             stagingPath: file.directory,
             executable: join(MAC_EXECUTABLE_DIRECTORY, basename(options.facts.executablePath)),
             logPath: options.swapLogPath,
+            args: options.relaunchArgs,
           }),
           { mode: EXECUTABLE_MODE },
         );

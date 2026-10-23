@@ -220,6 +220,7 @@ async function harness(
     tempDirectory: temp,
     swapLogPath: join(root, "update-swap.log"),
     pid: 4242,
+    relaunchArgs: [],
     fetch: fakeFetch(routes),
     run: unzipBundle,
     spawnDetached: (command, args) => spawned.push({ command, args }),
@@ -781,7 +782,7 @@ const RELAUNCH_WAIT = { timeout: 10_000 };
 const SHELL_AVAILABLE = process.platform !== "win32" && existsSync("/bin/sh");
 
 describe.runIf(SHELL_AVAILABLE)("swap script", () => {
-  async function swapFixture(options: { executableInNew: boolean } = { executableInNew: true }) {
+  async function swapFixture(options: { executableInNew?: boolean; args?: readonly string[] } = {}) {
     const applications = join(root, "Apps with 'quotes' and spaces");
     const bundle = join(applications, "TableCraft.app");
     const staging = join(applications, ".table-craft-update-x");
@@ -793,9 +794,9 @@ describe.runIf(SHELL_AVAILABLE)("swap script", () => {
     ] as const) {
       await mkdir(join(app, "Contents", "MacOS"), { recursive: true });
       await writeFile(join(app, "Contents", "version"), label);
-      if (label === "old" || options.executableInNew) {
+      if (label === "old" || options.executableInNew !== false) {
         const executable = join(app, "Contents", "MacOS", "TableCraft");
-        await writeFile(executable, `#!/bin/sh\necho ${label} > ${shellQuote(relaunched)}\n`);
+        await writeFile(executable, `#!/bin/sh\necho ${label} "$@" > ${shellQuote(relaunched)}\n`);
         await chmod(executable, 0o755);
       }
     }
@@ -809,6 +810,7 @@ describe.runIf(SHELL_AVAILABLE)("swap script", () => {
       stagingPath: staging,
       executable: "Contents/MacOS/TableCraft",
       logPath,
+      args: options.args ?? [],
     });
     return { bundle, staging, applications, relaunched, logPath, run: () => spawnSync("/bin/sh", ["-c", script]) };
   }
@@ -823,6 +825,17 @@ describe.runIf(SHELL_AVAILABLE)("swap script", () => {
     expect(await readdir(fixture.applications)).toEqual(["TableCraft.app"]);
     await vi.waitFor(async () => expect(await readFile(fixture.relaunched, "utf8")).toBe("new\n"), RELAUNCH_WAIT);
     expect(await readFile(fixture.logPath, "utf8")).toMatch(/replaced; relaunching/);
+  });
+
+  it("givenARunStartedWithFlags_whenTheScriptRelaunches_thenTheNewAppGetsThemToo", async () => {
+    const fixture = await swapFixture({ args: ["--use-mock-keychain", "it's $HOME"] });
+
+    expect(fixture.run().status).toBe(0);
+
+    await vi.waitFor(
+      async () => expect(await readFile(fixture.relaunched, "utf8")).toBe("new --use-mock-keychain it's $HOME\n"),
+      RELAUNCH_WAIT,
+    );
   });
 
   it("givenNewBundleWithoutExecutable_whenTheScriptRuns_thenTheOldOneIsRestoredAndRelaunched", async () => {
@@ -845,6 +858,7 @@ describe.runIf(SHELL_AVAILABLE)("swap script", () => {
       stagingPath: "/nonexistent/staging",
       executable: "Contents/MacOS/TableCraft",
       logPath: "/dev/null",
+      args: [],
     });
 
     expect(script).toMatch(/did not quit; nothing was replaced/);

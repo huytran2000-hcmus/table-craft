@@ -20,6 +20,8 @@ export interface SwapPlan {
   readonly executable: string;
   /** Where the script's lines go; main appends them to the app log on the next launch. */
   readonly logPath: string;
+  /** Passed to the relaunched executable, so a run started with flags comes back with them. */
+  readonly args: readonly string[];
 }
 
 /** Long enough for the close guard's commit-or-roll-back to finish, short enough to give up visibly. */
@@ -43,7 +45,7 @@ BACKUP=${shellQuote(backup)}
 EXECUTABLE=${shellQuote(plan.executable)}
 exec >>${shellQuote(plan.logPath)} 2>&1
 say() { echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) $*"; }
-relaunch() { nohup "$TARGET/$EXECUTABLE" >/dev/null 2>&1 & }
+relaunch() { nohup "$TARGET/$EXECUTABLE"${plan.args.map((arg) => ` ${shellQuote(arg)}`).join("")} >/dev/null 2>&1 & }
 give_up() { say "$1"; rm -rf "$STAGING"; relaunch; exit 1; }
 say "waiting for TableCraft (pid $PID) to quit"
 waited=0

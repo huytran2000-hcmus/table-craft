@@ -534,6 +534,7 @@ async function startUpdater(directory: string, settings: SettingsService): Promi
     tempDirectory: app.getPath("temp"),
     swapLogPath: join(directory, SWAP_LOG_FILE),
     pid: process.pid,
+    relaunchArgs: process.argv.slice(1),
     fetch: (url, init) => net.fetch(url, { signal: init.signal }),
     run: runToCompletion,
     spawnDetached(command, args) {
