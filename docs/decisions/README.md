@@ -67,3 +67,4 @@ started, not when it is merged.
 | 056 | [A console result is editable when it provably reads one table](056-a-console-result-is-editable-when-it-provably-reads-one-table.md)                                  |
 | 057 | [Submit preempts Run in a grid with pending edits](057-submit-preempts-run-in-a-grid-with-pending-edits.md)                                                            |
 | 058 | [A closing result holds the session](058-a-closing-result-holds-the-session.md)                                                                                        |
+| 059 | [Tab replaces and Enter inserts a completion](059-tab-replaces-and-enter-inserts-a-completion.md)                                                                      |

@@ -1183,7 +1183,8 @@ after `COMPLETION_TYPING_DELAY_MS = 80`; an answer overtaken by a later request 
 console whose datasource is not connected offers `lang-sql`'s keywords and starts no engine. The
 table editor's WHERE and ORDER BY bars complete with `scope: { path, relation }`: the bar's text is
 read as the body of a WHERE on that relation. While the popup is open Enter accepts and Esc closes
-it.
+it; Tab accepts too and also overwrites the rest of the identifier right of the caret, in one undo
+step (decision 059). With no popup, Tab indents in the console and moves focus in a bar.
 
 ### Current namespace
 
