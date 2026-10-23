@@ -77,6 +77,7 @@ export {
   type ViewState,
 } from "./results/view.js";
 export { loadedPlugin, openSession } from "./sessions/open.js";
+export { applyDdl, type AppliedScript } from "./objects/apply.js";
 export {
   EXTRACTOR_KINDS,
   SQL_INSERT_TABLE,

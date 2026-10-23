@@ -20,6 +20,7 @@ import {
   RowsRefused,
   rowWriter,
   submitEdits,
+  applyDdl,
   tableCount,
   tableSelect,
   type EditTable,
@@ -38,17 +39,22 @@ import {
   type ConnectOptions,
   type CompletionRequest,
   type CompletionResult,
+  type DdlScript,
   type Declaration,
   type InsertTarget,
+  type ObjectChange,
+  type ObjectEditor,
   type Relation,
   type ResolveRequest,
   type Row,
   type Session,
   type SqlLanguage,
+  type TableDesign,
   type Transactions,
   type WireValue,
 } from "@table-craft/plugin-api";
 import type {
+  AppliedChange,
   ClassifiedStatement,
   ConditionColumn,
   CurrentNamespace,
@@ -427,6 +433,15 @@ const READ_ONLY_IMPORT_HINT = "Clear Read-only in the data source's properties t
 const PRIVATE_IMPORT =
   "An in-memory database cannot be imported into: the import's own connection would see another database.";
 const PRIVATE_IMPORT_HINT = "Save the database to a file, or insert the rows from a console.";
+const READ_ONLY_OBJECTS = "This data source is read-only, so its objects cannot be changed.";
+const READ_ONLY_OBJECTS_HINT = "Clear Read-only in the data source's properties to change its objects.";
+const PRIVATE_OBJECTS =
+  "An in-memory database's objects cannot be changed from the tree: the change's own connection would see another database.";
+const PRIVATE_OBJECTS_HINT = "Save the database to a file, or run the statement from a console.";
+const DESIGN_HINT = "Fix the design and preview it again.";
+const OBJECT_BUSY_HINT = "Wait for it to finish or cancel it in the Services tool window, then try again.";
+const STALE_PREVIEW = "The object changed since the preview, so the statements to run differ from what was shown.";
+const STALE_PREVIEW_HINT = "Review the new preview, then apply again.";
 
 /** Reads a result to its end, so a statement run for its effect has finished. */
 async function drained(result: { readonly rows: AsyncIterable<Row> }): Promise<void> {
@@ -928,6 +943,127 @@ export function createEngine(options: EngineOptions, now: () => number = Date.no
       open: () => importSession(insert),
     };
     return imports.start(job, params.stallSeconds * MS_PER_SECOND);
+  }
+
+  /** The qualified table each table export reads, by task, so Drop and Truncate can refuse while it runs. */
+  const exportTables = new Map<string, string>();
+
+  function objectEditor(): ObjectEditor {
+    const { plugin } = loadedPlugin(options.plugins, options.datasource.pluginId);
+    const editor = plugin.language?.objects;
+    if (!plugin.capabilities.includes("objects") || editor === undefined) {
+      throw new EngineFailure({
+        code: "invalidRequest",
+        message: "This datasource's plugin does not declare the objects capability.",
+        hint: BUG_HINT,
+      });
+    }
+    return editor;
+  }
+
+  /** Read afresh: a design or a diff from a stale cache would undo what another session changed. */
+  async function freshRelation(path: readonly string[], name: string): Promise<Relation> {
+    const described = await introspect(({ cache }) => cache.describe(path, true));
+    const relation = described.catalog.relations.find((entry) => entry.name === name);
+    if (relation === undefined) {
+      throw new EngineFailure({
+        code: "invalidRequest",
+        message: `There is no table ${name} in ${path.join(".")}.`,
+        hint: SYNCHRONIZE_HINT,
+      });
+    }
+    return relation;
+  }
+
+  /** A design the plugin cannot write comes back as a PluginError; it is the user's to fix. */
+  function designed<T>(write: () => T): T {
+    try {
+      return write();
+    } catch (cause) {
+      if (!isPluginError(cause)) throw cause;
+      throw new EngineFailure({ code: "statementFailed", message: cause.message, hint: DESIGN_HINT }, cause);
+    }
+  }
+
+  async function objectDesign(path: readonly string[], name: string): Promise<TableDesign> {
+    const editor = objectEditor();
+    const relation = await freshRelation(path, name);
+    return designed(() => editor.design(relation));
+  }
+
+  async function objectScript(change: ObjectChange): Promise<DdlScript> {
+    const editor = objectEditor();
+    const introspector = await introspect(({ session }) => session.introspector);
+    const altered = change.kind === "alterTable" ? await freshRelation(change.path, change.relation) : null;
+    const current = altered === null ? null : designed(() => editor.design(altered));
+    const qualifiedName = (path: readonly string[], name: string): string =>
+      introspector?.qualifiedName(path, name) ?? name;
+    return designed(() => editor.script(change, { qualifiedName, current }));
+  }
+
+  async function qualifiedOf(path: readonly string[], name: string): Promise<string> {
+    return introspect(({ session }) => session.introspector?.qualifiedName(path, name) ?? name);
+  }
+
+  /** The table a change empties or removes, which a running import or export must not be reading or filling. */
+  function busyTable(change: ObjectChange): { path: readonly string[]; name: string } | null {
+    if (change.kind === "truncate" || change.kind === "alterTable") return { path: change.path, name: change.relation };
+    if ((change.kind === "drop" || change.kind === "rename") && change.object.kind === "table") {
+      return { path: change.path, name: change.object.name };
+    }
+    return null;
+  }
+
+  async function refuseWhileBusy(change: ObjectChange): Promise<void> {
+    const table = busyTable(change);
+    if (table === null) return;
+    const qualified = await qualifiedOf(table.path, table.name);
+    const importing = imports.list().find((task) => task.state === "running" && task.table === qualified);
+    const exporting = tasks
+      .list()
+      .find((task) => task.state === "running" && exportTables.get(task.taskId) === qualified);
+    const running = importing === undefined ? (exporting === undefined ? null : "An export") : "An import";
+    if (running === null) return;
+    throw new EngineFailure({
+      code: "objectBusy",
+      message: `${running} is using ${table.name}, so it cannot be changed now.`,
+      hint: OBJECT_BUSY_HINT,
+    });
+  }
+
+  function sameStatements(left: readonly string[], right: readonly string[]): boolean {
+    return left.length === right.length && left.every((statement, index) => statement === right[index]);
+  }
+
+  async function applyObjectChange(change: ObjectChange, previewed: readonly string[]): Promise<AppliedChange> {
+    const started = now();
+    if (options.datasource.readOnly) {
+      throw new EngineFailure({ code: "invalidRequest", message: READ_ONLY_OBJECTS, hint: READ_ONLY_OBJECTS_HINT });
+    }
+    const privateDatabase = await introspect(({ session }) => session.privateDatabase === true);
+    if (privateDatabase) {
+      throw new EngineFailure({ code: "invalidRequest", message: PRIVATE_OBJECTS, hint: PRIVATE_OBJECTS_HINT });
+    }
+    await refuseWhileBusy(change);
+    const script = await objectScript(change);
+    if (!sameStatements(script.statements, previewed)) {
+      throw new EngineFailure({ code: "invalidRequest", message: STALE_PREVIEW, hint: STALE_PREVIEW_HINT });
+    }
+    if (script.statements.length > 0) {
+      const session = await connectDatasource(options);
+      try {
+        await applyDdl(session, script);
+      } catch (cause) {
+        throw cause instanceof CoreError ? cause : statementFailed(cause, false);
+      } finally {
+        await session.close().catch(() => undefined);
+      }
+    }
+    await introspect(async ({ cache }) => {
+      if (change.kind === "createNamespace") await cache.namespaces(true);
+      else await cache.describe(change.path, true);
+    }).catch(() => undefined);
+    return { statements: script.statements.length, elapsedMs: now() - started };
   }
 
   function importTaskOf(taskId: string): ImportTask {
@@ -1690,7 +1826,12 @@ export function createEngine(options: EngineOptions, now: () => number = Date.no
       "export.start": async ({ source, format, path, stallSeconds }) => {
         absolutePath(path);
         const stallMs = stallSeconds * MS_PER_SECOND;
-        if (source.kind === "table") return tasks.start(await tableJob(source, format, path), stallMs);
+        if (source.kind === "table") {
+          const job = await tableJob(source, format, path);
+          const task = tasks.start(job, stallMs);
+          exportTables.set(task.taskId, await qualifiedOf(source.path, source.relation));
+          return task;
+        }
         return tasks.start(resultJob(source, format, path), stallMs);
       },
       "export.cancel": ({ taskId }) => {
@@ -1706,7 +1847,10 @@ export function createEngine(options: EngineOptions, now: () => number = Date.no
             hint: "Run the statement again, then export its result.",
           });
         }
-        return Promise.resolve(tasks.retry(taskId, stallSeconds * MS_PER_SECOND));
+        const task = tasks.retry(taskId, stallSeconds * MS_PER_SECOND);
+        const table = exportTables.get(taskId);
+        if (table !== undefined) exportTables.set(task.taskId, table);
+        return Promise.resolve(task);
       },
       "export.list": () => Promise.resolve(tasks.list()),
       "import.preview": ({ file, format }) => previewImport(file, format),
@@ -1728,6 +1872,10 @@ export function createEngine(options: EngineOptions, now: () => number = Date.no
         return Promise.resolve(imports.resume(taskId, stallSeconds * MS_PER_SECOND));
       },
       "import.list": () => Promise.resolve(imports.list()),
+      "objects.features": () => Promise.resolve(objectEditor().features),
+      "objects.design": ({ path, relation }) => objectDesign(path, relation),
+      "objects.script": ({ change }) => objectScript(change),
+      "objects.apply": ({ change, statements: previewed }) => applyObjectChange(change, previewed),
       "catalog.namespaces": ({ refresh }) => introspect(({ cache }) => cache.namespaces(refresh)),
       "catalog.describe": ({ path, refresh }) => introspect(({ cache }) => cache.describe(path, refresh)),
       "catalog.qualifiedName": ({ path, name }) =>

@@ -41,6 +41,13 @@ import {
   COMPLETION_KINDS,
   IMPORT_KINDS,
   MANIFEST_FILE,
+  OBJECT_KINDS,
+  type CatalogObject,
+  type DdlScript,
+  type ObjectChange,
+  type ObjectFeatures,
+  type ObjectKind,
+  type TableDesign,
   type ImportKind,
   type Capability,
   type Column,
@@ -181,6 +188,16 @@ describe("engine protocol", () => {
     expectTypeOf<protocol.PlanProperty>().toEqualTypeOf<PlanProperty>();
     expectTypeOf<protocol.PlanNode>().toEqualTypeOf<PlanNode>();
     expectTypeOf<protocol.ExplainedPlan>().toEqualTypeOf<ExplainedPlan>();
+  });
+
+  it("givenObjectTypes_whenComparedWithPluginApi_thenIdentical", () => {
+    expectTypeOf<protocol.ObjectKind>().toEqualTypeOf<ObjectKind>();
+    expectTypeOf<protocol.CatalogObject>().toEqualTypeOf<CatalogObject>();
+    expectTypeOf<protocol.TableDesign>().toEqualTypeOf<TableDesign>();
+    expectTypeOf<protocol.ObjectChange>().toEqualTypeOf<ObjectChange>();
+    expectTypeOf<protocol.DdlScript>().toEqualTypeOf<DdlScript>();
+    expectTypeOf<protocol.ObjectFeatures>().toEqualTypeOf<ObjectFeatures>();
+    expect(protocol.OBJECT_KINDS).toEqual(OBJECT_KINDS);
   });
 
   it("givenCoreErrorCodes_whenComparedWithEngineErrorCodes_thenEveryOneIsCovered", () => {

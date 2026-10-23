@@ -56,11 +56,26 @@ const SCOPES: Readonly<Record<string, string>> = {
   "import.cancel": "import",
   "import.resume": "import",
   "edits.submit": "edits",
+  "objects.apply": "objects",
 };
 const DEFAULT_SCOPE = "request";
 
 function record(value: unknown): Readonly<Record<string, unknown>> {
   return typeof value === "object" && value !== null ? (value as Record<string, unknown>) : {};
+}
+
+/** What a change touched, by kind and name only (plan 024): never a design's columns, defaults or comments. */
+function changedObject(change: unknown): LogFields {
+  const value = record(change);
+  const object = record(value.object);
+  const design = record(value.design);
+  const kind = value.kind;
+  if (kind === "rename" || kind === "drop")
+    return { change: kind, objectKind: object.kind, object: object.name, to: value.name };
+  if (kind === "truncate" || kind === "alterTable")
+    return { change: kind, objectKind: "table", object: value.relation };
+  if (kind === "createTable") return { change: kind, objectKind: "table", object: design.name };
+  return { change: kind, objectKind: "namespace", object: value.name };
 }
 
 function summary(request: LoggedRequest, result: unknown, context: RequestContext): [string, LogFields] | null {
@@ -135,6 +150,8 @@ function summary(request: LoggedRequest, result: unknown, context: RequestContex
           rowsAffected: value.rowsAffected,
         },
       ];
+    case "objects.apply":
+      return ["object changed", { ...base, ...changedObject(request.change), statements: value.statements }];
     default:
       return null;
   }
@@ -148,6 +165,7 @@ const FAILURE_MESSAGES: Readonly<Record<string, string>> = {
   "import.start": "import refused",
   "import.resume": "import refused",
   "edits.submit": "edits rejected",
+  "objects.apply": "object change failed",
 };
 
 export type RequestOutcome =
@@ -177,6 +195,7 @@ export function logResponse(request: LoggedRequest, outcome: RequestOutcome, con
     error: outcome.error.message,
     ...(context.statementKind === null ? {} : { kind: context.statementKind }),
     ...(request.type === "session.open" ? context.target : {}),
+    ...(request.type === "objects.apply" ? changedObject(request.change) : {}),
     err: outcome.cause,
   };
   const message = FAILURE_MESSAGES[request.type] ?? "request failed";

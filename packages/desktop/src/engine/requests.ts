@@ -1,5 +1,5 @@
 import { EXPORT_FORMATS, EXTRACTOR_KINDS, IMPORT_ENCODINGS, IMPORT_ESCAPES } from "@table-craft/core";
-import { GENERATED_STATEMENTS, KEYWORD_CASES, TRANSACTION_MODES, z } from "@table-craft/plugin-api";
+import { GENERATED_STATEMENTS, KEYWORD_CASES, OBJECT_KINDS, TRANSACTION_MODES, z } from "@table-craft/plugin-api";
 import type { EngineRequest } from "@table-craft/desktop/engine/protocol.js";
 import {
   EXPORT_STALL_SECONDS_RANGE,
@@ -70,6 +70,47 @@ const importTarget = z.discriminatedUnion("kind", [
     mapping: z.array(z.strictObject({ column: z.string().min(1), field: index })).min(1),
   }),
   z.strictObject({ kind: z.literal("new"), path: namespacePath, relation, columns: newImportColumns }),
+]);
+const name = z.string();
+const names = z.array(z.string().min(1));
+const original = z.string().min(1).nullable();
+const tableDesign = z.strictObject({
+  name,
+  comment: z.string().nullable(),
+  columns: z.array(
+    z.strictObject({
+      name,
+      type: z.string(),
+      nullable: z.boolean(),
+      default: z.string().nullable(),
+      autoIncrement: z.boolean(),
+      comment: z.string().nullable(),
+      original,
+    }),
+  ),
+  primaryKey: names,
+  primaryKeyName: z.string().nullable(),
+  indexes: z.array(z.strictObject({ name, columns: names, unique: z.boolean(), original })),
+  foreignKeys: z.array(
+    z.strictObject({
+      name,
+      columns: names,
+      target: z.strictObject({ path: namespacePath, relation: z.string(), columns: names }),
+      onDelete: z.string().nullable(),
+      onUpdate: z.string().nullable(),
+      original,
+    }),
+  ),
+  checks: z.array(z.strictObject({ name, expression: z.string(), original })),
+});
+const catalogObject = z.strictObject({ kind: z.enum(OBJECT_KINDS), name: relation });
+const objectChange = z.discriminatedUnion("kind", [
+  z.strictObject({ kind: z.literal("createTable"), path: namespacePath, design: tableDesign }),
+  z.strictObject({ kind: z.literal("alterTable"), path: namespacePath, relation, design: tableDesign }),
+  z.strictObject({ kind: z.literal("rename"), path: namespacePath, object: catalogObject, name }),
+  z.strictObject({ kind: z.literal("drop"), path: namespacePath, object: catalogObject, cascade: z.boolean() }),
+  z.strictObject({ kind: z.literal("truncate"), path: namespacePath, relation, cascade: z.boolean() }),
+  z.strictObject({ kind: z.literal("createNamespace"), path: z.array(z.string()), name }),
 ]);
 const importTransaction = z.discriminatedUnion("mode", [
   z.strictObject({ mode: z.literal("all") }),
@@ -248,6 +289,15 @@ export const engineRequestSchema = z.discriminatedUnion("type", [
     orderBy: z.string(),
     ...paging,
     timeoutSeconds,
+  }),
+  z.strictObject({ id: requestId, type: z.literal("objects.features") }),
+  z.strictObject({ id: requestId, type: z.literal("objects.design"), path: namespacePath, relation }),
+  z.strictObject({ id: requestId, type: z.literal("objects.script"), change: objectChange }),
+  z.strictObject({
+    id: requestId,
+    type: z.literal("objects.apply"),
+    change: objectChange,
+    statements: z.array(z.string()),
   }),
   z.strictObject({ id: requestId, type: z.literal("table.count"), path: namespacePath, relation, where: z.string() }),
   z.strictObject({

@@ -76,6 +76,29 @@ describe("engine request log", () => {
     expect(JSON.stringify(failed)).not.toContain('nonsense"');
   });
 
+  it("givenObjectChange_whenRefused_thenLoggedWithKindAndNameOnly", async () => {
+    const { connection, records } = await loggedSession();
+    const change = {
+      kind: "drop",
+      path: ["main"],
+      object: { kind: "table", name: "orders" },
+      cascade: false,
+    } as const;
+
+    await connection.handle({ id: 11, type: "objects.apply", change, statements: [SECRET_TEXT] });
+
+    const failed = records.find((record) => record.msg === "object change failed");
+    expect(failed).toMatchObject({
+      level: "warn",
+      scope: "objects",
+      requestId: 11,
+      change: "drop",
+      objectKind: "table",
+      object: "orders",
+    });
+    expect(JSON.stringify(records)).not.toContain("row value");
+  });
+
   it("givenExport_whenItEnds_thenStartAndFinishLoggedWithoutPathOrRows", async () => {
     const folder = await mkdtemp(join(tmpdir(), "table-craft-export-log-"));
     let ended = (): void => undefined;
