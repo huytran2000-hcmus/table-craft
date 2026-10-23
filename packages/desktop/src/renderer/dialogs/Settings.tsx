@@ -9,6 +9,7 @@ import {
 import { currentPlatform, formatChord } from "@table-craft/desktop/renderer/actions/chords.js";
 import { ACTION_IDS } from "@table-craft/desktop/renderer/actions/appActions.js";
 import { registry } from "@table-craft/desktop/renderer/actions/index.js";
+import { LOG_ACTION_IDS } from "@table-craft/desktop/renderer/actions/logActions.js";
 import { SETTINGS_ACTION_IDS } from "@table-craft/desktop/renderer/actions/settingsActions.js";
 import { WINDOW_ACTION_IDS } from "@table-craft/desktop/renderer/actions/windowActions.js";
 import {
@@ -57,6 +58,7 @@ const PAGE_TITLES: Readonly<Record<SettingsPage, string>> = {
   appearance: "Appearance",
   editor: "Editor",
   dataEditor: "Data Editor",
+  advanced: "Advanced",
 };
 
 const DENSITY_LABELS: Readonly<Record<DensityId, string>> = {
@@ -111,6 +113,7 @@ const RESTORE: Readonly<Record<SettingsPage, (current: Settings) => Settings>> =
     ...withFont(current, "grid", DEFAULT_SETTINGS.appearance.fonts.grid),
     data: DEFAULT_SETTINGS.data,
   }),
+  advanced: (current) => ({ ...current, log: DEFAULT_SETTINGS.log }),
 };
 
 function SectionTitle({ children }: { readonly children: string }) {
@@ -633,10 +636,42 @@ function DataEditorPage() {
   );
 }
 
+function AdvancedPage() {
+  const level = useSettings((state) => state.settings.log.level);
+  const debugId = useId();
+  return (
+    <>
+      <SectionTitle>Log</SectionTitle>
+      <FieldRow label="Log level" htmlFor={debugId}>
+        <label className="flex items-center gap-cell">
+          <input
+            id={debugId}
+            type="checkbox"
+            checked={level === "debug"}
+            onChange={(event) =>
+              update((current) => ({ ...current, log: { level: event.target.checked ? "debug" : "info" } }))
+            }
+          />
+          Debug logging
+        </label>
+      </FieldRow>
+      <p className="col-start-2 text-ink-muted">
+        Also logs every engine request with its timing. Takes effect at once; turn it off when done, the log grows
+        faster.
+      </p>
+      <FieldRow label="Log file">
+        <ActionButton actionId={LOG_ACTION_IDS.reveal} />
+        <ActionButton actionId={LOG_ACTION_IDS.exportDiagnostics} />
+      </FieldRow>
+    </>
+  );
+}
+
 const PAGES: Readonly<Record<SettingsPage, () => ReactNode>> = {
   appearance: AppearancePage,
   editor: EditorPage,
   dataEditor: DataEditorPage,
+  advanced: AdvancedPage,
 };
 
 function SettingsEditor({ page }: { readonly page: SettingsPage }) {

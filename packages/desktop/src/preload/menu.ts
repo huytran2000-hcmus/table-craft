@@ -106,6 +106,7 @@ export const APPLICATION_MENU: readonly MenuEntry[] = [
         items: [
           { kind: "action", label: "Database", actionId: "toolWindow.database.toggle", accelerator: "CmdOrCtrl+1" },
           { kind: "action", label: "Services", actionId: "toolWindow.services.toggle", accelerator: "CmdOrCtrl+8" },
+          { kind: "action", label: "Log", actionId: "toolWindow.log.toggle" },
         ],
       },
       {
@@ -133,6 +134,10 @@ export const APPLICATION_MENU: readonly MenuEntry[] = [
     label: "Help",
     items: [
       { kind: "action", label: "Find Action…", actionId: "palette.findAction" },
+      SEPARATOR,
+      { kind: "action", label: "Show Log", actionId: "log.show" },
+      { kind: "action", label: "Reveal Log File", actionId: "log.reveal" },
+      { kind: "action", label: "Export Diagnostics…", actionId: "diagnostics.export" },
       { kind: "separator", only: "notMac" },
       { kind: "action", label: "About TableCraft", actionId: "app.about", only: "notMac" },
     ],

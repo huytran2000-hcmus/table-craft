@@ -37,6 +37,7 @@ export const ACTION_IDS = {
   previousTab: "tab.previous",
   toggleDatabase: "toolWindow.database.toggle",
   toggleServices: "toolWindow.services.toggle",
+  toggleLog: "toolWindow.log.toggle",
   hideAllToolWindows: "toolWindow.hideAll",
   focusEditor: "focus.editor",
   findAction: "palette.findAction",
@@ -76,6 +77,8 @@ function toggleToolWindow(id: ToolWindowId, context: ActionContext): void {
   if (wasFocused) focusRegion("editor");
 }
 
+const inToolWindow = (context: ActionContext) =>
+  context.focus === "database" || context.focus === "services" || context.focus === "log";
 const hasTabs = (context: ActionContext) => context.tabs.length > 0;
 const hasDatasource = (context: ActionContext) => context.datasource !== null;
 const isSaved = (context: ActionContext) => context.datasource !== null && !context.datasource.view.ephemeral;
@@ -276,12 +279,19 @@ export const APP_ACTIONS: readonly AnyAction[] = [
     run: (context) => toggleToolWindow("services", context),
   }),
   defineAction({
+    id: ACTION_IDS.toggleLog,
+    title: "Log",
+    category: "Tool Windows",
+    icon: "log",
+    run: (context) => toggleToolWindow("log", context),
+  }),
+  defineAction({
     id: ACTION_IDS.hideAllToolWindows,
     title: "Hide All Tool Windows",
     category: "Tool Windows",
     shortcut: "Mod+Shift+F12",
     run: (context) => {
-      const wasInToolWindow = context.focus === "database" || context.focus === "services";
+      const wasInToolWindow = inToolWindow(context);
       useLayout.getState().hideAll();
       if (wasInToolWindow) focusRegion("editor");
     },
@@ -291,8 +301,8 @@ export const APP_ACTIONS: readonly AnyAction[] = [
     title: "Back to Editor",
     category: "Navigation",
     shortcut: "Escape",
-    shortcutRegion: ["database", "services"],
-    when: (context) => (context.focus === "database" || context.focus === "services") && !context.speedSearching,
+    shortcutRegion: ["database", "services", "log"],
+    when: (context) => inToolWindow(context) && !context.speedSearching,
     run: () => focusRegion("editor"),
   }),
   defineAction({

@@ -7,12 +7,12 @@ import { EXTRACTOR_KINDS, type ExtractorKind } from "@table-craft/desktop/engine
  */
 export const LAYOUT_STORAGE_KEY = "table-craft.layout.v1";
 
-export const TOOL_WINDOWS = ["database", "services"] as const;
+export const TOOL_WINDOWS = ["database", "services", "log"] as const;
 export type ToolWindowId = (typeof TOOL_WINDOWS)[number];
 
 export interface Layout {
   readonly visible: Readonly<Record<ToolWindowId, boolean>>;
-  /** Percent of the window: the Database window's width, the Services window's height. */
+  /** Percent of the window: the Database and Log windows' widths, the Services window's height. */
   readonly sizes: Readonly<Record<ToolWindowId, number>>;
   /** What `hideAll` closed, so pressing it again brings them back; `null` when nothing is hidden by it. */
   readonly hidden: Readonly<Record<ToolWindowId, boolean>> | null;
@@ -44,8 +44,8 @@ export interface OpenTable {
 }
 
 export const DEFAULT_LAYOUT: Layout = {
-  visible: { database: true, services: true },
-  sizes: { database: 22, services: 28 },
+  visible: { database: true, services: true, log: false },
+  sizes: { database: 22, services: 28, log: 30 },
   hidden: null,
   showSystemSchemas: false,
   openConsoles: [],
@@ -59,10 +59,24 @@ const MAX_SIZE_PERCENT = 80;
 
 export type LayoutStorage = Pick<Storage, "getItem" | "setItem">;
 
-function isRecordOf<T>(value: unknown, check: (entry: unknown) => entry is T): value is Record<ToolWindowId, T> {
-  if (typeof value !== "object" || value === null) return false;
+/**
+ * The saved record with a tool window it does not mention taken from `fallback`, so a layout saved
+ * before a window existed keeps everything else (plan 017); null when any entry is invalid.
+ */
+function recordOf<T>(
+  value: unknown,
+  check: (entry: unknown) => entry is T,
+  fallback: Readonly<Record<ToolWindowId, T>>,
+): Record<ToolWindowId, T> | null {
+  if (typeof value !== "object" || value === null) return null;
   const record = value as Record<string, unknown>;
-  return TOOL_WINDOWS.every((id) => check(record[id]));
+  const read = {} as Record<ToolWindowId, T>;
+  for (const id of TOOL_WINDOWS) {
+    const entry = record[id] ?? fallback[id];
+    if (!check(entry)) return null;
+    read[id] = entry;
+  }
+  return read;
 }
 
 const isBoolean = (value: unknown): value is boolean => typeof value === "boolean";
@@ -107,11 +121,13 @@ export function loadLayout(storage: Pick<Storage, "getItem">): Layout {
   if (typeof saved !== "object" || saved === null) return DEFAULT_LAYOUT;
   const { visible, sizes, hidden, showSystemSchemas, openConsoles, openTables, extractor, valuePanel } =
     saved as Record<string, unknown>;
-  if (!isRecordOf(visible, isBoolean) || !isRecordOf(sizes, isSize)) return DEFAULT_LAYOUT;
+  const visibleRead = recordOf(visible, isBoolean, DEFAULT_LAYOUT.visible);
+  const sizesRead = recordOf(sizes, isSize, DEFAULT_LAYOUT.sizes);
+  if (visibleRead === null || sizesRead === null) return DEFAULT_LAYOUT;
   return {
-    visible,
-    sizes,
-    hidden: isRecordOf(hidden, isBoolean) ? hidden : null,
+    visible: visibleRead,
+    sizes: sizesRead,
+    hidden: recordOf(hidden, isBoolean, DEFAULT_LAYOUT.visible),
     showSystemSchemas: showSystemSchemas === true,
     openConsoles: openConsolesOf(openConsoles),
     openTables: Array.isArray(openTables) ? openTables.filter(isOpenTable) : [],
@@ -131,9 +147,14 @@ export function toggled(layout: Layout, id: ToolWindowId): Layout {
 /** DataGrip's Hide All Tool Windows: hides what is open, or restores what it last hid. */
 export function hiddenAll(layout: Layout): Layout {
   const anyVisible = TOOL_WINDOWS.some((id) => layout.visible[id]);
-  if (anyVisible) return { ...layout, visible: { database: false, services: false }, hidden: layout.visible };
+  if (anyVisible)
+    return { ...layout, visible: { database: false, services: false, log: false }, hidden: layout.visible };
   if (layout.hidden !== null) return { ...layout, visible: layout.hidden, hidden: null };
   return layout;
+}
+
+export function shown(layout: Layout, id: ToolWindowId): Layout {
+  return layout.visible[id] ? layout : { ...layout, visible: { ...layout.visible, [id]: true }, hidden: null };
 }
 
 export function resized(layout: Layout, id: ToolWindowId, percent: number): Layout {
@@ -145,6 +166,7 @@ export function resized(layout: Layout, id: ToolWindowId, percent: number): Layo
 export interface LayoutState {
   readonly layout: Layout;
   readonly toggle: (id: ToolWindowId) => void;
+  readonly show: (id: ToolWindowId) => void;
   readonly hideAll: () => void;
   readonly resize: (id: ToolWindowId, percent: number) => void;
   readonly toggleSystemSchemas: () => void;
@@ -165,6 +187,7 @@ export function createLayoutStore(storage: LayoutStorage) {
     return {
       layout: loadLayout(storage),
       toggle: (id) => update(toggled(get().layout, id)),
+      show: (id) => update(shown(get().layout, id)),
       hideAll: () => update(hiddenAll(get().layout)),
       resize: (id, percent) => update(resized(get().layout, id, percent)),
       toggleSystemSchemas: () => update({ ...get().layout, showSystemSchemas: !get().layout.showSystemSchemas }),

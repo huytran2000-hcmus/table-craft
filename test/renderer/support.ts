@@ -14,7 +14,7 @@ export const IDLE_CONTEXT: ActionContext = {
   capabilities: ["sql"],
   focus: "editor",
   inDatabasePane: false,
-  toolWindows: { database: true, services: true },
+  toolWindows: { database: true, services: true, log: false },
   paletteOpen: false,
   speedSearching: false,
   customTitleBar: true,

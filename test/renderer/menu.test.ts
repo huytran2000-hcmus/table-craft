@@ -49,8 +49,15 @@ describe("application menu", () => {
     const help = menuFor(false).find((entry) => entry.kind === "submenu" && entry.label === "Help");
     const macHelp = menuFor(true).find((entry) => entry.kind === "submenu" && entry.label === "Help");
 
-    expect(help?.kind === "submenu" ? labelsOf(help.items) : []).toEqual(["Find Action…", "-", "About TableCraft"]);
-    expect(macHelp?.kind === "submenu" ? labelsOf(macHelp.items) : []).toEqual(["Find Action…"]);
+    const diagnostics = ["Show Log", "Reveal Log File", "Export Diagnostics…"];
+    expect(help?.kind === "submenu" ? labelsOf(help.items) : []).toEqual([
+      "Find Action…",
+      "-",
+      ...diagnostics,
+      "-",
+      "About TableCraft",
+    ]);
+    expect(macHelp?.kind === "submenu" ? labelsOf(macHelp.items) : []).toEqual(["Find Action…", "-", ...diagnostics]);
   });
 
   it("givenMenuDeclaration_whenComparedWithRegistry_thenEveryActionIdExists", () => {

@@ -1,5 +1,7 @@
 import * as Dialog from "@radix-ui/react-dialog";
 import { useState } from "react";
+import { invoke } from "@table-craft/desktop/renderer/actions/index.js";
+import { LOG_ACTION_IDS } from "@table-craft/desktop/renderer/actions/logActions.js";
 import { Button, CONTENT_CLASS, OVERLAY_CLASS, TextInput } from "@table-craft/desktop/renderer/dialogs/parts.js";
 import { useModal, type ModalItem, type ModalRequest } from "@table-craft/desktop/renderer/state/modal.js";
 import { OpenClosedConsole } from "@table-craft/desktop/renderer/dialogs/OpenClosedConsole.js";
@@ -31,7 +33,9 @@ function Items({ items }: { readonly items: readonly ModalItem[] }) {
           <code className="truncate font-editor text-editor" title={item.label}>
             {item.label}
           </code>
-          {item.detail === "" ? null : <span className="text-danger">{item.detail}</span>}
+          {item.detail === "" ? null : (
+            <span className={item.tone === "info" ? "text-ink-muted" : "text-danger"}>{item.detail}</span>
+          )}
         </li>
       ))}
     </ul>
@@ -74,7 +78,20 @@ function Body({ request }: { readonly request: Exclude<ModalRequest, { kind: Pic
       ) : null}
       {request.kind === "statements" ? <PreviewStatements statements={request.statements} /> : null}
       <div className="flex justify-end gap-gap">
-        {request.kind === "notice" ? null : <Button onClick={() => answer(null)}>Cancel</Button>}
+        {request.kind === "notice" ? (
+          request.tone === "info" ? null : (
+            <Button
+              onClick={() => {
+                answer(null);
+                void invoke(LOG_ACTION_IDS.showFor, { requestId: request.requestId ?? null, message: request.message });
+              }}
+            >
+              Show in Log
+            </Button>
+          )
+        ) : (
+          <Button onClick={() => answer(null)}>Cancel</Button>
+        )}
         {request.kind === "choice" ? (
           request.choices.map((choice, index) => (
             <Button

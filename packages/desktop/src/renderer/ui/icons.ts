@@ -1,4 +1,6 @@
 import {
+  FileZip,
+  Scroll,
   GearSix,
   List,
   At,
@@ -170,4 +172,6 @@ export const ACTION_ICONS: Readonly<Record<ActionIcon, Icon>> = {
   reopen: FolderOpen,
   settings: GearSix,
   menu: List,
+  log: Scroll,
+  diagnostics: FileZip,
 };

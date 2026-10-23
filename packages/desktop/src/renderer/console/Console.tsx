@@ -1,5 +1,7 @@
 import { ACTION_IDS } from "@table-craft/desktop/renderer/actions/appActions.js";
 import { EXPLAIN_ACTION_IDS } from "@table-craft/desktop/renderer/actions/explainActions.js";
+import { invoke } from "@table-craft/desktop/renderer/actions/index.js";
+import { LOG_ACTION_IDS } from "@table-craft/desktop/renderer/actions/logActions.js";
 import { ActionButton } from "@table-craft/desktop/renderer/ui/ActionButton.js";
 import { Editor } from "@table-craft/desktop/renderer/console/Editor.js";
 import { ResultTabs } from "@table-craft/desktop/renderer/console/ResultTabs.js";
@@ -50,6 +52,15 @@ export function Console({ consoleId }: { readonly consoleId: string }) {
           <span role="alert" className="min-w-0 truncate text-danger" title={`${error.message} ${error.hint}`}>
             {error.message} <span className="text-ink-muted">{error.hint}</span>
           </span>
+        )}
+        {error === null ? null : (
+          <button
+            type="button"
+            className="shrink-0 text-accent hover:underline"
+            onClick={() => void invoke(LOG_ACTION_IDS.showFor, { requestId: null, message: error.message })}
+          >
+            Show in Log
+          </button>
         )}
         {datasource === undefined ? null : (
           <span data-testid="console-datasource" className="ml-auto flex min-w-0 items-center gap-1 text-ink-muted">

@@ -16,7 +16,7 @@ describe("layout", () => {
 
     const restored = createLayoutStore(storage).getState().layout;
 
-    expect(restored.visible).toEqual({ database: true, services: false });
+    expect(restored.visible).toEqual({ database: true, services: false, log: false });
     expect(restored.sizes.database).toBe(35);
   });
 
@@ -39,9 +39,9 @@ describe("layout", () => {
     store.getState().toggle("services");
 
     store.getState().hideAll();
-    expect(store.getState().layout.visible).toEqual({ database: false, services: false });
+    expect(store.getState().layout.visible).toEqual({ database: false, services: false, log: false });
     store.getState().hideAll();
-    expect(store.getState().layout.visible).toEqual({ database: true, services: false });
+    expect(store.getState().layout.visible).toEqual({ database: true, services: false, log: false });
   });
 
   it("givenExtremeSize_whenResized_thenClamped", () => {
@@ -66,5 +66,33 @@ describe("layout", () => {
     storage.setItem(LAYOUT_STORAGE_KEY, JSON.stringify(old));
 
     expect(loadLayout(storage).showSystemSchemas).toBe(false);
+  });
+
+  it("givenSavedLayoutWithoutLog_whenLoaded_thenKeptWithLogHidden", () => {
+    const storage = memoryStorage();
+    storage.setItem(
+      LAYOUT_STORAGE_KEY,
+      JSON.stringify({
+        ...DEFAULT_LAYOUT,
+        visible: { database: false, services: true },
+        sizes: { database: 30, services: 20 },
+      }),
+    );
+
+    const layout = loadLayout(storage);
+
+    expect(layout.visible).toEqual({ database: false, services: true, log: false });
+    expect(layout.sizes).toEqual({ database: 30, services: 20, log: DEFAULT_LAYOUT.sizes.log });
+  });
+
+  it("givenHiddenLog_whenShown_thenVisibleAndShownAgainIsANoOp", () => {
+    const store = createLayoutStore(memoryStorage());
+
+    store.getState().show("log");
+    const once = store.getState().layout;
+    store.getState().show("log");
+
+    expect(once.visible.log).toBe(true);
+    expect(store.getState().layout).toBe(once);
   });
 });

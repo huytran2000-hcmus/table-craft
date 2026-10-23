@@ -28,9 +28,9 @@ import { useTables, type TableSession } from "@table-craft/desktop/renderer/stat
 import { useWindowState } from "@table-craft/desktop/renderer/state/windowState.js";
 
 /** The regions focus can be in; each is a `data-region` attribute on its container. */
-export type FocusRegion = "editor" | "tableEditor" | "grid" | "valuePanel" | "database" | "services" | "other";
+export type FocusRegion = "editor" | "tableEditor" | "grid" | "valuePanel" | "database" | "services" | "log" | "other";
 
-const REGIONS: readonly FocusRegion[] = ["editor", "tableEditor", "grid", "valuePanel", "database", "services"];
+const REGIONS: readonly FocusRegion[] = ["editor", "tableEditor", "grid", "valuePanel", "database", "services", "log"];
 
 export const REGION_ATTRIBUTE = "data-region";
 

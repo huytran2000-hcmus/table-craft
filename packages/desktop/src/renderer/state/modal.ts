@@ -5,6 +5,8 @@ import type { HistoryStatement } from "@table-craft/desktop/preload/bridge.js";
 export interface ModalItem {
   readonly label: string;
   readonly detail: string;
+  /** A detail reports a problem unless it says it is `info`, as a list of what an export holds. */
+  readonly tone?: "info";
 }
 
 /** A button of a `choice`; its `id` is the answer. */
@@ -39,6 +41,8 @@ export type ModalRequest =
       readonly hint: string;
       /** A notice reports a failure unless it says it is `info`, like About. */
       readonly tone?: "info";
+      /** The engine request that failed, for the failure's Show in Log (plan 017 decision 12). */
+      readonly requestId?: number | null;
     }
   | {
       /** SQL shown whole, one statement a block, before it runs: the table editor's Preview. */
