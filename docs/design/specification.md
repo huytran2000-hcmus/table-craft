@@ -19,7 +19,7 @@ its own MessagePort (decision 002).
 
 A plugin is a directory with `table-craft-plugin.json` and an ESM entry exporting a
 `DatasourcePlugin` (decisions 005 to 008). The contract lives in `@table-craft/plugin-api`.
-`API_VERSION` is `0.12.0`; while it is `0.x` the contract is unstable and every minor is a break.
+`API_VERSION` is `0.13.0`; while it is `0.x` the contract is unstable and every minor is a break.
 
 ### Discovery
 
@@ -67,15 +67,16 @@ dialog lists every plugin, an unavailable one with its reason. A connection fiel
 
 ### Capabilities
 
-| Capability       | Promises                                                                                                               | Contract cases                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
-| ---------------- | ---------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `sql`            | `Session.execute` runs one statement; the plugin exports `language`                                                    | select literals, statement without rows, rows affected, invalid SQL rejects `statementFailed`, session usable after a failure, `type_probe` cells, unshifted timestamps, early return; `language` splits the shared and fixture scripts into the expected statements, each of which executes, and classifies kinds and the destructive cases; an awkward identifier quotes and reads back, and each `type_probe` row written as `INSERT` literals into `type_probe_copy` reads back equal |
-| `transactions`   | `Session.transactions` switches auto and manual commit, commits, rolls back                                            | manual insert then rollback leaves no row and `open` false, manual insert then commit is visible to a second session only after the commit, auto mode tracks an explicit `BEGIN`, switching to auto while open rejects `statementFailed` and stays open, commit and rollback with nothing open are no-ops                                                                                                                                                                                 |
-| `cancel`         | `Session.cancel` stops the running statement from another call                                                         | idle cancel is a no-op, a sleeping statement rejects `cancelled` well before it ends, the session runs the next statement                                                                                                                                                                                                                                                                                                                                                                 |
-| `schemaTree`     | `Session.introspector` lists namespaces, describes one, quotes a qualified name                                        | the current namespace is marked, the fixture's tables and `customer_totals` view are described, `orders` has its foreign key and `orders_placed_at_idx`, `customers` has its primary and unique keys, an unknown namespace rejects `introspectionFailed`, `qualifiedName` quotes an awkward identifier, the session runs statements after introspecting                                                                                                                                   |
-| `ddl`            | `Introspector.definition` reads a relation's definition; requires `schemaTree`                                         | `definition` exists exactly when `ddl` is declared; `orders` has its columns, primary key, `orders_total_nonnegative` check and the foreign key naming `customers`; `customer_totals` has its query; `customers` carries its comment where the dialect has one; an unknown relation rejects `definitionNotFound` naming the path and relation                                                                                                                                             |
-| `explain`        | `Session.explain` returns a plan without running the statement; `SqlLanguage.explainable` checks first; requires `sql` | `explainable` and `explain` exist exactly when `explain` is declared; a join explains to a tree with an operation; explaining `DELETE FROM orders` leaves its three rows; DDL, two statements and an `EXPLAIN …` are refused with a reason and `explain` rejects `explainUnsupported`; only a write `writes`; without `explainAnalyze`, Analyse is refused                                                                                                                                |
-| `explainAnalyze` | `Session.explain(sql, { analyze: true })` runs the statement and returns actual rows and times; requires `explain`     | a read analyses with actual rows on its nodes; where the dialect analyses a write and has `transactions`, an `UPDATE` analysed in manual mode then rolled back leaves `orders` unchanged                                                                                                                                                                                                                                                                                                  |
+| Capability         | Promises                                                                                                                                | Contract cases                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| ------------------ | --------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `sql`              | `Session.execute` runs one statement; the plugin exports `language`                                                                     | select literals, statement without rows, rows affected, invalid SQL rejects `statementFailed`, session usable after a failure, `type_probe` cells, unshifted timestamps, early return; `language` splits the shared and fixture scripts into the expected statements, each of which executes, and classifies kinds and the destructive cases; an awkward identifier quotes and reads back, and each `type_probe` row written as `INSERT` literals into `type_probe_copy` reads back equal |
+| `transactions`     | `Session.transactions` switches auto and manual commit, commits, rolls back                                                             | manual insert then rollback leaves no row and `open` false, manual insert then commit is visible to a second session only after the commit, auto mode tracks an explicit `BEGIN`, switching to auto while open rejects `statementFailed` and stays open, commit and rollback with nothing open are no-ops                                                                                                                                                                                 |
+| `cancel`           | `Session.cancel` stops the running statement from another call                                                                          | idle cancel is a no-op, a sleeping statement rejects `cancelled` well before it ends, the session runs the next statement                                                                                                                                                                                                                                                                                                                                                                 |
+| `schemaTree`       | `Session.introspector` lists namespaces, describes one, quotes a qualified name                                                         | the current namespace is marked, the fixture's tables and `customer_totals` view are described, `orders` has its foreign key and `orders_placed_at_idx`, `customers` has its primary and unique keys, an unknown namespace rejects `introspectionFailed`, `qualifiedName` quotes an awkward identifier, the session runs statements after introspecting                                                                                                                                   |
+| `ddl`              | `Introspector.definition` reads a relation's definition; requires `schemaTree`                                                          | `definition` exists exactly when `ddl` is declared; `orders` has its columns, primary key, `orders_total_nonnegative` check and the foreign key naming `customers`; `customer_totals` has its query; `customers` carries its comment where the dialect has one; an unknown relation rejects `definitionNotFound` naming the path and relation                                                                                                                                             |
+| `explain`          | `Session.explain` returns a plan without running the statement; `SqlLanguage.explainable` checks first; requires `sql`                  | `explainable` and `explain` exist exactly when `explain` is declared; a join explains to a tree with an operation; explaining `DELETE FROM orders` leaves its three rows; DDL, two statements and an `EXPLAIN …` are refused with a reason and `explain` rejects `explainUnsupported`; only a write `writes`; without `explainAnalyze`, Analyse is refused                                                                                                                                |
+| `explainAnalyze`   | `Session.explain(sql, { analyze: true })` runs the statement and returns actual rows and times; requires `explain`                      | a read analyses with actual rows on its nodes; where the dialect analyses a write and has `transactions`, an `UPDATE` analysed in manual mode then rolled back leaves `orders` unchanged                                                                                                                                                                                                                                                                                                  |
+| `currentNamespace` | `Session.currentNamespace` reads the database or schema the session is in; `SqlLanguage.classify` marks `setsNamespace`; requires `sql` | `currentNamespace` exists exactly when declared; a fresh session reads the fixture's namespace; the fixture's switch statement is classified `setsNamespace` and moves the read to its target; a switch to a missing target rejects and leaves it                                                                                                                                                                                                                                         |
 
 Every plugin, whatever it declares, is checked for a valid schema; for its manifest's connection
 fields agreeing with `connectionSchema` (each field a key the schema accepts, every required key
@@ -111,7 +112,7 @@ interface DatasourcePlugin {
 
 interface SqlLanguage {
   split(text: string): readonly StatementSpan[]; // { from, to, sql }, UTF-16 offsets, empties dropped
-  classify(sql: string): StatementClass; // { kind, destructive: reason | null }
+  classify(sql: string): StatementClass; // { kind, destructive: reason | null, setsNamespace? }
   quoteIdentifier(name: string): string; // "x" or `x`, the quote doubled inside
   literal(value: WireValue, columnType: string | null): string; // reads back as the same value
   emptyInsert(qualifiedTable: string): string; // a row of defaults: DEFAULT VALUES or () VALUES ()
@@ -148,6 +149,7 @@ interface Session {
   readonly introspector?: Introspector; // present exactly when `schemaTree` is declared
   readonly transactions?: Transactions; // present exactly when `transactions` is declared
   explain?(sql: string, options: ExplainOptions): Promise<ExplainedPlan>; // present exactly when `explain` is declared
+  currentNamespace?(): Promise<readonly string[] | null>; // present exactly when `currentNamespace` is declared; never opens a transaction
   close(): Promise<void>; // settles in bounded time even on a dead network
 }
 
@@ -328,42 +330,42 @@ A request is `{ id, type, ...params }`; the engine answers `{ id, type, result }
 `id` and `type`, or `engine.error`. Requests are parsed before routing. Sessions and result
 handles belong to the port that created them and are released when it closes.
 
-| Request                 | Params                                                                         | Result                                                                                                         |
-| ----------------------- | ------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------- |
-| `session.open`          | none                                                                           | `{ sessionId, pluginName, capabilities, serverVersion }`                                                       |
-| `script.split`          | `text`                                                                         | `ClassifiedStatement[]`: `{ from, to, sql, kind, destructive, parameters }`                                    |
-| `sql.format`            | `text`, `options: FormatOptions`                                               | the formatted text, or `formatFailed`                                                                          |
-| `statement.execute`     | `sessionId`, `sql`, `parameters?`, `pageRows`, `fetchAllCap`                   | `{ handle, columns, typeClasses, rowCount, complete, cursorOpen, rowsAffected, firstWindow, transactionOpen }` |
-| `sql.explainable`       | `sql`, `analyze`                                                               | `Explainability`: `{ ok: true, writes }` or `{ ok: false, reason }`; no session; needs `explain`               |
-| `statement.explain`     | `sessionId`, `sql`, `analyze`                                                  | `{ plan: ExplainedPlan, transactionOpen }`; needs `explain`, or `explainAnalyze` to analyse; see Explain       |
-| `transaction.setMode`   | `sessionId`, `mode`                                                            | `{ mode, transactionOpen }`                                                                                    |
-| `transaction.commit`    | `sessionId`                                                                    | `{ mode, transactionOpen }`; a no-op when nothing is open                                                      |
-| `transaction.rollback`  | `sessionId`                                                                    | `{ mode, transactionOpen }`; a no-op when nothing is open                                                      |
-| `statement.cancel`      | `sessionId`                                                                    | `null`; stops the running statement, a no-op when idle                                                         |
-| `result.window`         | `handle`, `offset`, `limit`                                                    | `{ offset, rows }`, at most `RESULT_WINDOW_ROWS` rows                                                          |
-| `result.release`        | `handle`                                                                       | `null`; releasing twice is not an error                                                                        |
-| `result.fetchMore`      | `handle`, `all`, `pageRows`, `fetchAllCap`                                     | `ResultState { rowCount, complete, cursorOpen }`; one page, or up to `fetchAllCap`                             |
-| `result.stopFetch`      | `handle`                                                                       | `ResultState`; stops a running fetch, the cursor stays open                                                    |
-| `result.sort`           | `handle`, `keys: { column, direction }[]`                                      | `ResultState`; windows read through the new order, `[]` restores it                                            |
-| `result.extract`        | `handle`, `extractor`, `rows: { from, to }[]`, `columns`                       | the text, rows in sorted order                                                                                 |
-| `export.start`          | `source`, `format`, `path`, `stallSeconds`                                     | `ExportTask`; starts a background export (decision 040); `path` must be absolute                               |
-| `export.cancel`         | `taskId`                                                                       | `null`; the task ends `cancelled` and its `.part` file is removed                                              |
-| `export.retry`          | `taskId`, `stallSeconds`                                                       | a new `ExportTask` from row 0; only a re-run or table export is retryable                                      |
-| `export.list`           | none                                                                           | `ExportTask[]`, every task of the engine                                                                       |
-| `session.close`         | `sessionId`                                                                    | `null`; releases the session's handles, then closes it                                                         |
-| `catalog.namespaces`    | `refresh?`                                                                     | `Namespace[]`                                                                                                  |
-| `catalog.describe`      | `path`, `refresh?`                                                             | `{ catalog, introspectedAt, elapsedMs }`                                                                       |
-| `catalog.qualifiedName` | `path`, `name`                                                                 | the plugin's quoting, e.g. `"public"."orders"`                                                                 |
-| `catalog.definition`    | `path`, `name`                                                                 | the relation's DDL text, read anew each time; needs `ddl`; see DDL and SQL generation                          |
-| `sql.generate`          | `path`, `name`, `statement`                                                    | `create`, `drop`, `select`, `insert` or `update` text for the relation; `create` is `catalog.definition`       |
-| `table.query`           | `sessionId`, `path`, `relation`, `where`, `orderBy`, `pageRows`, `fetchAllCap` | `TableQuery { statement, sql, editable, columns, foreignKeys, referencing }`; see Table data editor            |
-| `table.count`           | `path`, `relation`, `where`                                                    | the row count, read on a short-lived session of its own                                                        |
-| `table.orderBy`         | `terms: { name, direction }[]`                                                 | the ORDER BY text in the plugin's quoting, e.g. `"qty" DESC, "label"`                                          |
-| `table.condition`       | `handle`, `rows`, `columns: { column, name }[]`                                | a WHERE condition matching those rows' values, written against `name`                                          |
-| `completion.complete`   | `text`, `offset`, `scope?: { path, relation }`                                 | `{ from, to, items, validFor }`; see Completion and navigation                                                 |
-| `navigation.resolve`    | `text`, `offset`                                                               | `Declaration` or `null`; see Completion and navigation                                                         |
-| `edits.preview`         | `handle`, `edits: RowEdit[]`                                                   | the statements Submit would run                                                                                |
-| `edits.submit`          | `sessionId`, `handle`, `edits: RowEdit[]`                                      | `{ statements, rowsAffected }`, or `editRejected` after a rollback                                             |
+| Request                 | Params                                                                         | Result                                                                                                                     |
+| ----------------------- | ------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------- |
+| `session.open`          | none                                                                           | `{ sessionId, pluginName, capabilities, serverVersion, namespace }`; `namespace` needs `currentNamespace`                  |
+| `script.split`          | `text`                                                                         | `ClassifiedStatement[]`: `{ from, to, sql, kind, destructive, parameters }`                                                |
+| `sql.format`            | `text`, `options: FormatOptions`                                               | the formatted text, or `formatFailed`                                                                                      |
+| `statement.execute`     | `sessionId`, `sql`, `parameters?`, `pageRows`, `fetchAllCap`                   | `{ handle, columns, typeClasses, rowCount, complete, cursorOpen, rowsAffected, firstWindow, transactionOpen, namespace? }` |
+| `sql.explainable`       | `sql`, `analyze`                                                               | `Explainability`: `{ ok: true, writes }` or `{ ok: false, reason }`; no session; needs `explain`                           |
+| `statement.explain`     | `sessionId`, `sql`, `analyze`                                                  | `{ plan: ExplainedPlan, transactionOpen }`; needs `explain`, or `explainAnalyze` to analyse; see Explain                   |
+| `transaction.setMode`   | `sessionId`, `mode`                                                            | `{ mode, transactionOpen, namespace? }`                                                                                    |
+| `transaction.commit`    | `sessionId`                                                                    | `{ mode, transactionOpen, namespace? }`; a no-op when nothing is open                                                      |
+| `transaction.rollback`  | `sessionId`                                                                    | `{ mode, transactionOpen, namespace? }`; a no-op when nothing is open                                                      |
+| `statement.cancel`      | `sessionId`                                                                    | `null`; stops the running statement, a no-op when idle                                                                     |
+| `result.window`         | `handle`, `offset`, `limit`                                                    | `{ offset, rows }`, at most `RESULT_WINDOW_ROWS` rows                                                                      |
+| `result.release`        | `handle`                                                                       | `null`; releasing twice is not an error                                                                                    |
+| `result.fetchMore`      | `handle`, `all`, `pageRows`, `fetchAllCap`                                     | `ResultState { rowCount, complete, cursorOpen }`; one page, or up to `fetchAllCap`                                         |
+| `result.stopFetch`      | `handle`                                                                       | `ResultState`; stops a running fetch, the cursor stays open                                                                |
+| `result.sort`           | `handle`, `keys: { column, direction }[]`                                      | `ResultState`; windows read through the new order, `[]` restores it                                                        |
+| `result.extract`        | `handle`, `extractor`, `rows: { from, to }[]`, `columns`                       | the text, rows in sorted order                                                                                             |
+| `export.start`          | `source`, `format`, `path`, `stallSeconds`                                     | `ExportTask`; starts a background export (decision 040); `path` must be absolute                                           |
+| `export.cancel`         | `taskId`                                                                       | `null`; the task ends `cancelled` and its `.part` file is removed                                                          |
+| `export.retry`          | `taskId`, `stallSeconds`                                                       | a new `ExportTask` from row 0; only a re-run or table export is retryable                                                  |
+| `export.list`           | none                                                                           | `ExportTask[]`, every task of the engine                                                                                   |
+| `session.close`         | `sessionId`                                                                    | `null`; releases the session's handles, then closes it                                                                     |
+| `catalog.namespaces`    | `refresh?`                                                                     | `Namespace[]`                                                                                                              |
+| `catalog.describe`      | `path`, `refresh?`                                                             | `{ catalog, introspectedAt, elapsedMs }`                                                                                   |
+| `catalog.qualifiedName` | `path`, `name`                                                                 | the plugin's quoting, e.g. `"public"."orders"`                                                                             |
+| `catalog.definition`    | `path`, `name`                                                                 | the relation's DDL text, read anew each time; needs `ddl`; see DDL and SQL generation                                      |
+| `sql.generate`          | `path`, `name`, `statement`                                                    | `create`, `drop`, `select`, `insert` or `update` text for the relation; `create` is `catalog.definition`                   |
+| `table.query`           | `sessionId`, `path`, `relation`, `where`, `orderBy`, `pageRows`, `fetchAllCap` | `TableQuery { statement, sql, editable, columns, foreignKeys, referencing }`; see Table data editor                        |
+| `table.count`           | `path`, `relation`, `where`                                                    | the row count, read on a short-lived session of its own                                                                    |
+| `table.orderBy`         | `terms: { name, direction }[]`                                                 | the ORDER BY text in the plugin's quoting, e.g. `"qty" DESC, "label"`                                                      |
+| `table.condition`       | `handle`, `rows`, `columns: { column, name }[]`                                | a WHERE condition matching those rows' values, written against `name`                                                      |
+| `completion.complete`   | `text`, `offset`, `scope?: { path, relation }`, `current?`                     | `{ from, to, items, validFor }`; see Completion and navigation                                                             |
+| `navigation.resolve`    | `text`, `offset`, `current?`                                                   | `Declaration` or `null`; see Completion and navigation                                                                     |
+| `edits.preview`         | `handle`, `edits: RowEdit[]`                                                   | the statements Submit would run                                                                                            |
+| `edits.submit`          | `sessionId`, `handle`, `edits: RowEdit[]`                                      | `{ statements, rowsAffected }`, or `editRejected` after a rollback                                                         |
 
 A statement reads its first page and keeps the cursor open; the session's next statement, a
 commit, rollback or mode switch, `result.release`, `session.close` and the engine's exit close it
@@ -937,7 +939,7 @@ cache; the renderer sends text and a caret and never parses SQL. `SqlLanguage` h
 the caret is in, any `x.` qualifier before it, and the sources in scope: FROM and JOIN relations with
 their aliases, comma joins, CTEs (columns from their column list, else their select list), derived
 tables with an alias, `UPDATE t`, `INSERT INTO t (…)` and `DELETE FROM t`. A source that cannot be
-resolved is ignored. Unqualified names resolve against the namespace flagged `current`.
+resolved is ignored. Unqualified names resolve against the current namespace (see Current namespace).
 
 | Caret                                                   | Offers                                                                              |
 | ------------------------------------------------------- | ----------------------------------------------------------------------------------- |
@@ -968,6 +970,33 @@ console whose datasource is not connected offers `lang-sql`'s keywords and start
 table editor's WHERE and ORDER BY bars complete with `scope: { path, relation }`: the bar's text is
 read as the body of a WHERE on that relation. While the popup is open Enter accepts and Esc closes
 it.
+
+### Current namespace
+
+Plan 022, decision 048. Unqualified names complete and resolve against the first of:
+
+1. The script: the nearest statement before the caret's statement that switches namespace, run or
+   not; its first target naming an existing database or schema of that kind. A target naming none,
+   `DEFAULT` and `RESET` fall through. The WHERE and ORDER BY bars skip this step.
+2. The console: `current` on `completion.complete` and `navigation.resolve`, the namespace the
+   console's session last reported.
+3. The catalog: the namespace the introspection session flags `current`.
+
+| Plugin     | Switching statements (`namespaceStatements`)                                                   | `Session.currentNamespace()`                  |
+| ---------- | ---------------------------------------------------------------------------------------------- | --------------------------------------------- |
+| PostgreSQL | `SET [SESSION \| LOCAL] search_path {TO \| =} …`, `SET SCHEMA 'x'`, `RESET search_path \| ALL` | `[current_database(), current_schema()]`      |
+| MySQL      | `USE db`                                                                                       | `[DATABASE()]`, null before a database is set |
+| SQLite     | none                                                                                           | not declared                                  |
+
+`classify` marks a switching statement `setsNamespace`. With `currentNamespace` declared, the engine
+reads the session's namespace when it opens, after a statement that sets the namespace or a
+transaction statement succeeds, and after `transaction.setMode`, `commit` and `rollback`; the reply
+carries `namespace`, absent when nothing was read or the read failed. A failed statement changes
+nothing; a reconnect starts from the new session's read. `null` (a `search_path` naming no
+existing schema) is unknown and falls through to the catalog.
+
+The console toolbar shows the namespace after the datasource's name, the database or schema itself
+with the full dotted path as its tooltip, hidden while unknown.
 
 `navigation.resolve` answers what the name under the caret declares: `{ kind: "alias" | "cte",
 from, to }` (the `orders o` span, or the CTE's name), `{ kind: "relation", path, relation }`,

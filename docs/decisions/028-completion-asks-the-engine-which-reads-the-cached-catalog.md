@@ -1,6 +1,6 @@
 # 028: Completion asks the engine, which reads the cached catalog
 
-Status: Accepted
+Status: Accepted. Amended by 048.
 
 ## Decision
 
@@ -32,4 +32,5 @@ one identifier.
 - Completion is only as fresh as the cache: a table created in another tool appears after
   Synchronize, as in DataGrip. DDL run in the console already re-describes (plan 006).
 - `SET search_path` or `USE` inside a console does not change what unqualified names resolve
-  against; per-console schema selection belongs to plan 011.
+  against; per-console schema selection belongs to plan 011. (Superseded by decision 048: the
+  console's namespace, and a preceding switch in its script, now decide.)
