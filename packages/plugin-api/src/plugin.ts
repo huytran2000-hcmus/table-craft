@@ -40,6 +40,21 @@ export interface Column {
   readonly name: string;
   /** The type the database reports, verbatim; null when it reports none. */
   readonly type: string | null;
+  /**
+   * The base-table column the driver says the value is read from (plan 026): null for an
+   * expression, absent when the driver does not say. A console result is editable only where the
+   * plugin's `selectSource` and this agree.
+   */
+  readonly origin?: ColumnOrigin | null;
+}
+
+/**
+ * Where the driver says a result column comes from, in its own terms: a table id or qualified
+ * name, and a column number or name. Stable within one result; compared, never shown or parsed.
+ */
+export interface ColumnOrigin {
+  readonly table: string;
+  readonly column: string;
 }
 
 export type Row = readonly WireValue[];
@@ -221,6 +236,28 @@ export interface BoundStatement {
   readonly params: readonly ParameterValue[];
 }
 
+/**
+ * What a console `SELECT` reads, for editing its result in place (plan 026, decision 056): the
+ * one base table, and per select-list column the table column it is (`*` expanded from the
+ * catalog), or null for anything else. `readOnly` says, for the toolbar, why the statement is not
+ * that simple.
+ */
+export type SelectSource =
+  | {
+      readonly kind: "table";
+      readonly path: readonly string[];
+      readonly relation: string;
+      readonly columns: readonly (string | null)[];
+    }
+  | { readonly kind: "readOnly"; readonly reason: string };
+
+/** The statements that set, roll back to and release a savepoint called `name` (plan 026). */
+export interface SavepointStatements {
+  readonly set: string;
+  readonly rollback: string;
+  readonly release: string;
+}
+
 /** What the console asks the plugin about its dialect (decision 008); the host never parses SQL. */
 export interface SqlLanguage {
   /** Every non-empty statement in `text`, in order. Comments and blanks between statements belong to none. */
@@ -286,6 +323,18 @@ export interface SqlLanguage {
   createTable?(qualifiedName: string, columns: readonly NewColumn[]): string;
   /** Present exactly when the plugin declares `objects`: the DDL for creating, altering, renaming and dropping (decision 052). */
   readonly objects?: ObjectEditor;
+  /**
+   * The base table `sql`, one statement without its delimiter, reads, when it is a single-table
+   * `SELECT` with no join, grouping, aggregate, window, set operation, `DISTINCT` or `WITH`
+   * (plan 026). Never rejects: what it cannot read is `readOnly`. Absent: console results stay
+   * read-only. `sqlCompleter` in `@table-craft/plugin-api/sql` implements it.
+   */
+  selectSource?(sql: string, catalog: CompletionCatalog): Promise<SelectSource>;
+  /**
+   * Present with `selectSource`: the savepoint statements that let edits joining an open
+   * transaction undo only themselves when one is refused. `sqlSavepoints` implements it.
+   */
+  savepoint?(name: string): SavepointStatements;
 }
 
 export const TRANSACTION_MODES = ["auto", "manual"] as const;

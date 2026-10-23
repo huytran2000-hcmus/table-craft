@@ -1,4 +1,4 @@
-import type { WireValue } from "@table-craft/plugin-api";
+import type { SavepointStatements, WireValue } from "@table-craft/plugin-api";
 
 /** How a dialect spells what the shared literal writer cannot decide for it. */
 export interface SqlLiteralOptions {
@@ -11,6 +11,18 @@ export interface SqlLiteralOptions {
 /** Quotes an identifier with `quote`, doubling any `quote` inside it, as SQL and MySQL both read it. */
 export function quoteIdentifierWith(quote: '"' | "`"): (name: string) => string {
   return (name) => `${quote}${name.replaceAll(quote, quote + quote)}${quote}`;
+}
+
+/** The standard savepoint statements, which PostgreSQL, MySQL and SQLite all accept (plan 026). */
+export function sqlSavepoints(quoteIdentifier: (name: string) => string): (name: string) => SavepointStatements {
+  return (name) => {
+    const quoted = quoteIdentifier(name);
+    return {
+      set: `SAVEPOINT ${quoted}`,
+      rollback: `ROLLBACK TO SAVEPOINT ${quoted}`,
+      release: `RELEASE SAVEPOINT ${quoted}`,
+    };
+  };
 }
 
 /** The standard insert of a row made only of defaults, which PostgreSQL and SQLite accept. */

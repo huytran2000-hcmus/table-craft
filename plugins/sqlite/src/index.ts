@@ -1,4 +1,4 @@
-import { DatabaseSync } from "node:sqlite";
+import { DatabaseSync, type StatementColumnMetadata } from "node:sqlite";
 import {
   PluginError,
   toWireInteger,
@@ -6,6 +6,7 @@ import {
   z,
   type Capability,
   type Column,
+  type ColumnOrigin,
   type ConnectOptions,
   type DatasourcePlugin,
   type ExecuteOptions,
@@ -29,6 +30,7 @@ import {
   defaultValuesInsert,
   identifierWriter,
   quoteIdentifierWith,
+  sqlSavepoints,
   SQL_FUNCTIONS,
   SQL_KEYWORDS,
   sqlCompleter,
@@ -84,6 +86,7 @@ const language: SqlLanguage = {
   literal: (value) => sqlLiteral(value, LITERALS),
   emptyInsert: defaultValuesInsert,
   updateDefault,
+  savepoint: sqlSavepoints(quoteIdentifier),
   ...sqlCompleter({
     dialect: DIALECT,
     identifierFolding: "none",
@@ -265,7 +268,11 @@ class SqliteSession implements Session {
       }
       const statement = database.prepare(sql);
       statement.setReadBigInts(true);
-      const columns: Column[] = statement.columns().map((column) => ({ name: column.name, type: column.type }));
+      const columns: Column[] = statement.columns().map((column) => ({
+        name: column.name,
+        type: column.type,
+        origin: originOf(column),
+      }));
       if (columns.length === 0) {
         const { changes } = statement.run(...params);
         return { columns, rows: readRows([].values(), []), rowsAffected: Number(changes) };
@@ -342,3 +349,9 @@ const plugin: DatasourcePlugin = {
 };
 
 export default plugin;
+
+/** The table column better-sqlite3 reads a result column from, or null for an expression (plan 026). */
+function originOf(column: StatementColumnMetadata): ColumnOrigin | null {
+  if (column.table === null || column.column === null) return null;
+  return { table: `${column.database ?? ""}.${column.table}`, column: column.column };
+}

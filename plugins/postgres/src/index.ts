@@ -10,6 +10,7 @@ import {
   z,
   type Capability,
   type Column,
+  type ColumnOrigin,
   type ConnectOptions,
   type DatasourcePlugin,
   type ExecuteOptions,
@@ -34,6 +35,7 @@ import {
   identifierWriter,
   planText,
   quoteIdentifierWith,
+  sqlSavepoints,
   SQL_FUNCTIONS,
   SQL_KEYWORDS,
   sqlCompleter,
@@ -101,6 +103,7 @@ const language: SqlLanguage = {
   literal: (value) => sqlLiteral(value, LITERALS),
   emptyInsert: defaultValuesInsert,
   updateDefault: defaultKeyword,
+  savepoint: sqlSavepoints(quoteIdentifier),
   ...sqlCompleter({
     dialect: DIALECT,
     identifierFolding: "lower",
@@ -434,6 +437,7 @@ class PostgresSession implements Session {
       const columns: Column[] = fields.map((field) => ({
         name: field.name,
         type: this.#typeNames.get(field.dataTypeID) ?? null,
+        origin: originOf(field),
       }));
       const cellMap = options.fullBytes === true ? FULL_BYTES_CELLS : CELLS;
       const cells = fields.map((field) => cellMap.get(field.dataTypeID) ?? asText);
@@ -628,3 +632,9 @@ const plugin: DatasourcePlugin = {
 };
 
 export default plugin;
+
+/** The table OID and attribute number PostgreSQL reports, or null for an expression (plan 026). */
+function originOf(field: pg.FieldDef): ColumnOrigin | null {
+  if (field.tableID === 0 || field.columnID === 0) return null;
+  return { table: String(field.tableID), column: String(field.columnID) };
+}

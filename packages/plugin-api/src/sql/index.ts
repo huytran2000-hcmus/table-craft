@@ -14,12 +14,14 @@ export {
 export { FORMAT_DIALECTS, sqlFormatter, type FormatDialect, type FormatterOptions } from "./format.js";
 export { sqlParameters, type NativePlaceholder, type ParameterOptions } from "./parameters.js";
 export { sqlSplitter } from "./splitter.js";
+export { parseSimpleSelect, SELECT_READ_ONLY_REASONS, type SimpleSelect, type SimpleSelectItem } from "./select.js";
 export { namespaceTarget, type NamespaceTarget } from "./namespace.js";
 export { type NamespaceStatementForm, type SqlDialectOptions } from "./tokens.js";
 export {
   defaultKeyword,
   defaultValuesInsert,
   quoteIdentifierWith,
+  sqlSavepoints,
   sqlLiteral,
   type SqlLiteralOptions,
 } from "./literals.js";

@@ -8,8 +8,10 @@ import type {
   Namespace,
   Relation,
   ResolveRequest,
+  SelectSource,
   SqlLanguage,
 } from "@table-craft/plugin-api";
+import { parseSimpleSelect, SELECT_READ_ONLY_REASONS, type SimpleSelect } from "./select.js";
 import {
   scopeAt,
   type Cte,
@@ -161,7 +163,9 @@ function relationKind(relation: Relation): CompletionKind {
 }
 
 /** The shared completion and navigation every built-in plugin spreads into its `SqlLanguage` (decision 028). */
-export function sqlCompleter(options: CompleterOptions): Pick<SqlLanguage, "complete" | "resolve"> {
+export function sqlCompleter(
+  options: CompleterOptions,
+): Pick<SqlLanguage, "complete" | "resolve"> & Required<Pick<SqlLanguage, "selectSource">> {
   const reserved = new Set(options.keywords.map((keyword) => keyword.toUpperCase()));
   const split = sqlSplitter(options.dialect);
 
@@ -629,5 +633,44 @@ export function sqlCompleter(options: CompleterOptions): Pick<SqlLanguage, "comp
       : { kind: "column", path: found.path, relation: found.relation.name, column: meta.name };
   }
 
-  return { complete, resolve };
+  /** Whether a qualifier written before a column or `*` names the one table the SELECT reads. */
+  function namesTable(qualifier: readonly Identifier[], select: SimpleSelect): boolean {
+    const last = qualifier.at(-1);
+    if (last === undefined) return true;
+    if (select.alias !== null) return qualifier.length === 1 && sameIdentifier(last, select.alias);
+    const written = [...select.qualifier, select.name];
+    const tail = written.slice(-qualifier.length);
+    return (
+      tail.length === qualifier.length &&
+      qualifier.every((part, at) => {
+        const other = tail[at];
+        return other !== undefined && sameIdentifier(part, other);
+      })
+    );
+  }
+
+  async function selectSource(sql: string, catalog: CompletionCatalog): Promise<SelectSource> {
+    const select = parseSimpleSelect(sql, options.dialect);
+    if ("readOnly" in select) return { kind: "readOnly", reason: select.readOnly };
+    const found = await new Lookup(catalog).relation(select.qualifier, select.name);
+    if (found === null) return { kind: "readOnly", reason: `the catalog does not know ${select.name.name}` };
+    const tableColumns = found.relation.columns.map((column) => column.name);
+    const columns: (string | null)[] = [];
+    for (const item of select.items) {
+      if (item.kind === "expression") {
+        columns.push(null);
+        continue;
+      }
+      const qualifier = item.kind === "star" ? (item.qualifier === null ? [] : [item.qualifier]) : item.qualifier;
+      if (!namesTable(qualifier, select)) return { kind: "readOnly", reason: SELECT_READ_ONLY_REASONS.notSelect };
+      if (item.kind === "star") {
+        columns.push(...tableColumns);
+        continue;
+      }
+      columns.push(tableColumns.find((name) => denotes(item.name, name)) ?? null);
+    }
+    return { kind: "table", path: found.path, relation: found.relation.name, columns };
+  }
+
+  return { complete, resolve, selectSource };
 }

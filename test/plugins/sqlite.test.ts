@@ -55,8 +55,8 @@ describe("sqlite plugin", () => {
       const result = await session.execute("SELECT 1 AS one, 'two' AS two");
 
       expect(result.columns).toEqual([
-        { name: "one", type: null },
-        { name: "two", type: null },
+        { name: "one", type: null, origin: null },
+        { name: "two", type: null, origin: null },
       ]);
       expect(await collect(result.rows)).toEqual([[1, "two"]]);
     } finally {

@@ -7,6 +7,7 @@ import {
   z,
   type Capability,
   type Column,
+  type ColumnOrigin,
   type ConnectOptions,
   type DatasourcePlugin,
   type ExecuteOptions,
@@ -31,6 +32,7 @@ import {
   explainedVerb,
   planText,
   quoteIdentifierWith,
+  sqlSavepoints,
   SQL_FUNCTIONS,
   SQL_KEYWORDS,
   sqlCompleter,
@@ -100,6 +102,7 @@ const language: SqlLanguage = {
   literal: (value) => sqlLiteral(value, LITERALS),
   emptyInsert: (table) => `INSERT INTO ${table} () VALUES ()`,
   updateDefault: defaultKeyword,
+  savepoint: sqlSavepoints(quoteIdentifier),
   ...sqlCompleter({
     dialect: DIALECT,
     identifierFolding: "none",
@@ -523,7 +526,11 @@ class MysqlSession implements Session {
         this.#running = null;
         return { columns: [], rows: NO_ROWS, rowsAffected: header.affectedRows };
       }
-      const columns: Column[] = fields.map((field) => ({ name: field.name, type: typeName(field) }));
+      const columns: Column[] = fields.map((field) => ({
+        name: field.name,
+        type: typeName(field),
+        origin: originOf(field),
+      }));
       return { columns, rows: this.#rows(inFlight, running, first), rowsAffected: null };
     } catch (cause) {
       this.#running = null;
@@ -772,3 +779,9 @@ const plugin: DatasourcePlugin = {
 };
 
 export default plugin;
+
+/** The table column MySQL reports a result column comes from, or null for an expression (plan 026). */
+function originOf(field: mysql.FieldPacket): ColumnOrigin | null {
+  if (field.orgTable === "" || field.orgName === "") return null;
+  return { table: `${field.db ?? field.schema ?? ""}.${field.orgTable}`, column: field.orgName };
+}

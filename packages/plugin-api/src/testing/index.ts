@@ -795,6 +795,58 @@ export function runPluginContract(plugin: DatasourcePlugin, fixture: ContractFix
         expect(language().classify("INSERT INTO t VALUES (1)").kind).toBe("write");
         expect(language().classify("COMMIT").kind).toBe("transaction");
       });
+
+      it("givenColumnAndExpression_whenSelected_thenOriginsTellThemApart", async () => {
+        await withSession(plugin, fixture, async (session) => {
+          const result = await session.execute(`SELECT id, id + 1 AS next FROM ${TYPE_PROBE_TABLE}`);
+          await collect(result.rows);
+          const [column, expression] = result.columns;
+          if (column?.origin === undefined) return;
+          expect(column.origin).not.toBeNull();
+          expect(expression?.origin).toBeNull();
+        });
+      });
+
+      it.runIf(plugin.capabilities.includes("schemaTree"))(
+        "givenSingleTableSelect_whenSourceRead_thenNamesTheTableAndItsColumns",
+        async () => {
+          await withSession(plugin, fixture, async (session) => {
+            const introspector = session.introspector;
+            const lang = language();
+            const selectSource = lang.selectSource?.bind(lang);
+            if (introspector === undefined || selectSource === undefined) return;
+            const catalog = await liveCompletionCatalog(introspector);
+            const source = await selectSource(`SELECT id, id + 1 AS next FROM ${TYPE_PROBE_TABLE}`, catalog);
+            expect(source).toEqual({
+              kind: "table",
+              path: catalogPathOf(fixture),
+              relation: TYPE_PROBE_TABLE,
+              columns: ["id", null],
+            });
+          });
+        },
+      );
+
+      it("givenSavepoint_whenRolledBackToAndReleased_thenTheTransactionStaysOpen", async () => {
+        const lang = language();
+        const savepoint = lang.savepoint?.bind(lang);
+        if (savepoint === undefined) return;
+        await withSession(plugin, fixture, async (session) => {
+          const transactions = session.transactions;
+          if (transactions === undefined) return;
+          const statements = savepoint("table_craft_contract");
+          await transactions.setMode("manual");
+          try {
+            await collect((await session.execute(statements.set)).rows);
+            await collect((await session.execute(statements.rollback)).rows);
+            await collect((await session.execute(statements.release)).rows);
+            expect(transactions.open).toBe(true);
+          } finally {
+            await transactions.rollback();
+            await transactions.setMode("auto");
+          }
+        });
+      });
     });
 
     describe.runIf(plugin.capabilities.includes("bulkInsert"))("bulkInsert", () => {
