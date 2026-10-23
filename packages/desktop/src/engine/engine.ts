@@ -231,6 +231,21 @@ const TRANSACTION_HINT = "Check the connection, then try again; the transaction 
 /** TCP keepalive on an export's own connection, so a dead peer is noticed by the OS too (decision 040). */
 const EXPORT_KEEPALIVE_MS = 10_000;
 const MS_PER_SECOND = 1_000;
+/**
+ * Closing a cursor waits for the server to answer, which a dead or silent link never does; past this
+ * the sessions close anyway, and their bounded close tears the sockets down (decision 040).
+ */
+const RELEASE_GRACE_MS = 3_000;
+
+function settledWithin(work: Promise<unknown>, ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    const timer = setTimeout(resolve, ms);
+    void work.finally(() => {
+      clearTimeout(timer);
+      resolve();
+    });
+  });
+}
 
 async function* heldThenRest(held: readonly Row[], rest: AsyncIterable<Row>): AsyncGenerator<Row> {
   yield* held;
@@ -1059,7 +1074,7 @@ export function createEngine(options: EngineOptions, now: () => number = Date.no
         statements.clear();
         tables.clear();
         cursors.clear();
-        await Promise.all(held.map((handle) => results.release(handle)));
+        await settledWithin(Promise.allSettled(held.map((handle) => results.release(handle))), RELEASE_GRACE_MS);
         const open = [...sessions.values()];
         sessions.clear();
         await Promise.allSettled(open.map((entry) => entry.session.close()));

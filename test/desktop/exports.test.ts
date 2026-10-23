@@ -4,14 +4,16 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import type { PluginLoadResult } from "@table-craft/core";
 import sqlite from "@table-craft/plugin-sqlite";
-import { createEngine, type EngineConnection } from "@table-craft/desktop/engine/engine.js";
-import type {
-  EngineEvent,
-  EngineResponse,
-  ExecutedStatement,
-  ExportTask,
-} from "@table-craft/desktop/engine/protocol.js";
-import { RESULT_FETCH_ALL_CAP, RESULT_PAGE_ROWS } from "@table-craft/desktop/engine/protocol.js";
+import type { ExportTask } from "@table-craft/desktop/engine/protocol.js";
+import {
+  execute,
+  exportHarness,
+  openSession,
+  resultOf,
+  startExport as start,
+  STALL_SECONDS,
+  type ExportHarness,
+} from "../support/engineExports.js";
 import { SQLITE_MANIFEST } from "../support/manifests.js";
 import { seededSqliteFile } from "../support/sqliteFixture.js";
 
@@ -21,58 +23,11 @@ const LOADED_SQLITE: PluginLoadResult = {
   manifest: SQLITE_MANIFEST,
   plugin: sqlite,
 };
-const PAGING = { pageRows: RESULT_PAGE_ROWS, fetchAllCap: RESULT_FETCH_ALL_CAP };
-const STALL_SECONDS = 120;
 const ROWS_1200 = "WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 1200) SELECT i FROM n";
 const ENDLESS = "WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n) SELECT i, hex(randomblob(64)) FROM n";
-const FINAL_EVENTS = new Set(["export.done", "export.failed", "export.cancelled"]);
 
-interface Harness {
-  readonly connection: EngineConnection;
-  readonly events: EngineEvent[];
-  readonly finished: (taskId: string) => Promise<ExportTask>;
-  readonly close: () => Promise<void>;
-}
-
-function harness(path: string): Harness {
-  const engine = createEngine({
-    datasource: { id: "export", pluginId: "sqlite", config: { path }, readOnly: false },
-    plugins: [LOADED_SQLITE],
-  });
-  const events: EngineEvent[] = [];
-  const waiting = new Map<string, (task: ExportTask) => void>();
-  const connection = engine.connect((event) => {
-    events.push(event);
-    if (FINAL_EVENTS.has(event.type)) waiting.get(event.task.taskId)?.(event.task);
-  });
-  return {
-    connection,
-    events,
-    finished(taskId) {
-      const done = events.find((event) => event.task.taskId === taskId && FINAL_EVENTS.has(event.type));
-      if (done !== undefined) return Promise.resolve(done.task);
-      return new Promise((resolve) => waiting.set(taskId, resolve));
-    },
-    async close() {
-      await connection.close();
-      await engine.close();
-    },
-  };
-}
-
-function resultOf<T>(response: EngineResponse): T {
-  if (response.type === "engine.error") throw new Error(`unexpected engine error: ${response.error.message}`);
-  return response.result as T;
-}
-
-async function openSession(connection: EngineConnection): Promise<string> {
-  return resultOf<{ sessionId: string }>(await connection.handle({ id: 1, type: "session.open" })).sessionId;
-}
-
-async function execute(connection: EngineConnection, sessionId: string, sql: string): Promise<ExecutedStatement> {
-  return resultOf<ExecutedStatement>(
-    await connection.handle({ id: 2, type: "statement.execute", ...PAGING, sessionId, sql }),
-  );
+function harness(path: string): ExportHarness {
+  return exportHarness({ id: "export", pluginId: "sqlite", config: { path }, readOnly: false }, [LOADED_SQLITE]);
 }
 
 describe("engine exports", () => {
@@ -87,16 +42,10 @@ describe("engine exports", () => {
     return directory;
   }
 
-  function open(path: string): Harness {
+  function open(path: string): ExportHarness {
     const opened = harness(path);
     cleanup.push(() => opened.close());
     return opened;
-  }
-
-  async function start(connection: EngineConnection, request: Record<string, unknown>): Promise<ExportTask> {
-    return resultOf<ExportTask>(
-      await connection.handle({ id: 3, type: "export.start", stallSeconds: STALL_SECONDS, ...request }),
-    );
   }
 
   it("givenReadResult_whenExportStarted_thenRerunOnOwnSessionAndConsoleFree", async () => {

@@ -350,13 +350,21 @@ function start(
   const query = prepared ? connection.execute({ ...options, values: [...params] }) : connection.query(options);
   // The stream reports the error; this listener stops the query's own emit from throwing.
   query.on("error", () => undefined);
-  const ended = new Promise<void>((resolve) =>
+  const stream = query.stream({ highWaterMark: FETCH_ROWS });
+  // mysql2 reports a lost connection (a reset, a killed server) to the connection alone when the
+  // query has no callback, so the stream would wait for rows forever.
+  const ended = new Promise<void>((resolve) => {
+    const lost = (error: Error) => {
+      stream.destroy(error);
+      resolve();
+    };
+    connection.once("error", lost);
     query.once("end", () => {
+      connection.off("error", lost);
       if (prepared) connection.unprepare(sql);
       resolve();
-    }),
-  );
-  const stream = query.stream({ highWaterMark: FETCH_ROWS });
+    });
+  });
   const fields = new Promise<mysql.FieldPacket[] | undefined>((resolve, reject) => {
     stream.once("fields", resolve);
     stream.once("error", reject);
