@@ -206,6 +206,14 @@ export function relationKey(datasourceId: string, path: readonly string[], relat
   return catalogKey(datasourceId, "relation", path, relation);
 }
 
+export function routineKey(datasourceId: string, path: readonly string[], routine: string): string {
+  return catalogKey(datasourceId, "routine", path, routine);
+}
+
+export function sequenceKey(datasourceId: string, path: readonly string[], sequence: string): string {
+  return catalogKey(datasourceId, "sequence", path, sequence);
+}
+
 /** The keys to expand so `relation` shows, ending with the relation's own key. */
 export function revealKeys(
   datasourceId: string,
@@ -371,7 +379,7 @@ function catalogRows(builder: Builder, datasourceId: string, described: Describe
       count: routines.length,
       rows: () => {
         for (const routine of routines) {
-          const key = catalogKey(datasourceId, "routine", path, routine.name);
+          const key = routineKey(datasourceId, path, routine.name);
           push(builder, { ...base, kind: "routine", routine }, depth + 1, key, routine.name, false);
         }
       },
@@ -381,7 +389,7 @@ function catalogRows(builder: Builder, datasourceId: string, described: Describe
       count: sequences.length,
       rows: () => {
         for (const sequence of sequences) {
-          const key = catalogKey(datasourceId, "sequence", path, sequence.name);
+          const key = sequenceKey(datasourceId, path, sequence.name);
           push(builder, { ...base, kind: "sequence", sequence }, depth + 1, key, sequence.name, false);
         }
       },

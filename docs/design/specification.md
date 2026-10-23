@@ -593,6 +593,13 @@ run either.
 | `explorer.export`                        | Export Data…                          |          |                        |
 | `explorer.importIntoTable`               | Import Data from File…                |          |                        |
 | `explorer.importNewTable`                | Import Data into New Table…           |          |                        |
+| `explorer.newTable`                      | New Table…                            |          |                        |
+| `explorer.newSchema`                     | New Schema…                           |          |                        |
+| `explorer.newDatabase`                   | New Database…                         |          |                        |
+| `explorer.modifyTable`                   | Modify Table…                         | `⌘F6`    | `Ctrl+F6`              |
+| `explorer.renameObject`                  | Rename…                               | `⇧F6`    | `Shift+F6`             |
+| `explorer.truncateTable`                 | Truncate…                             |          |                        |
+| `explorer.dropObject`                    | Drop…                                 | `⌘⌫`     | `Ctrl+Backspace`       |
 | `history.show`                           | Query History…                        | `⌥⌘E`    | `Ctrl+Alt+E`           |
 | `history.clear`                          | Clear Query History…                  |          |                        |
 | `console.reopen`                         | Open Closed Console…                  |          |                        |
@@ -1248,6 +1255,10 @@ preview, and Open in Console or Copy. Every switch sends `sql.generate`.
 Go to DDL and the generator's CREATE need `ddl` (decision 007). The context menu of a relation in
 the Database tool window reads Open Data, Go to DDL, Quick Documentation, SQL Generator…, New
 Console, then Synchronize and Copy Qualified Name; a column's starts with Quick Documentation.
+A writable datasource whose plugin declares `objects` adds Modify Table…, Rename…, Truncate… and
+Drop… to a relation's menu, New Table… (and New Schema… or New Database…) to a schema's, and
+Rename… and Drop… to a routine's or sequence's, each only where the plugin's object features say
+it can (plan 024, decision 052).
 
 ## Query history and Services
 

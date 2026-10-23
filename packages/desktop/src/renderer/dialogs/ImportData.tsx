@@ -1,12 +1,12 @@
 import * as Dialog from "@radix-ui/react-dialog";
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useState } from "react";
 import {
   IMPORT_ENCODINGS,
   type ImportFormat,
   type ImportPreview,
   type NewImportColumn,
 } from "@table-craft/desktop/engine/protocol.js";
-import { Button, FieldRow, INPUT_CLASS, TextInput } from "@table-craft/desktop/renderer/dialogs/parts.js";
+import { Button, Check, FieldRow, Section, Select, TextInput } from "@table-craft/desktop/renderer/dialogs/parts.js";
 import {
   CSV_PRESET,
   DEFAULT_COMMIT_ROWS,
@@ -78,62 +78,6 @@ function useLoaded<T>(key: string | null, load: () => Promise<T>): Loaded<T> | n
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [key]);
   return key !== null && loaded?.key === key ? loaded : null;
-}
-
-function Select({
-  label,
-  value,
-  options,
-  onChange,
-  testId,
-}: {
-  readonly label: string;
-  readonly value: string;
-  readonly options: readonly { readonly label: string; readonly value: string }[];
-  readonly onChange: (value: string) => void;
-  readonly testId?: string;
-}) {
-  return (
-    <select
-      aria-label={label}
-      data-testid={testId}
-      className={INPUT_CLASS}
-      value={value}
-      onChange={(event) => onChange(event.target.value)}
-    >
-      {options.map((option) => (
-        <option key={option.value} value={option.value}>
-          {option.label}
-        </option>
-      ))}
-    </select>
-  );
-}
-
-function Check({
-  label,
-  checked,
-  onChange,
-}: {
-  readonly label: string;
-  readonly checked: boolean;
-  readonly onChange: (checked: boolean) => void;
-}) {
-  return (
-    <label className="flex h-row items-center gap-cell">
-      <input type="checkbox" checked={checked} onChange={(event) => onChange(event.target.checked)} />
-      {label}
-    </label>
-  );
-}
-
-function Section({ title, children }: { readonly title: string; readonly children: ReactNode }) {
-  return (
-    <section className="flex flex-col gap-cell">
-      <h3 className="font-semibold text-ink-muted">{title}</h3>
-      {children}
-    </section>
-  );
 }
 
 function PreviewTable({ preview }: { readonly preview: ImportPreview }) {

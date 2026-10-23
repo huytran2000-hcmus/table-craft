@@ -13,6 +13,7 @@ import { useExecutions, type ExecutionsStore } from "@table-craft/desktop/render
 import { useExports, type ExportsStore } from "@table-craft/desktop/renderer/state/exports.js";
 import { useImports, type ImportsStore } from "@table-craft/desktop/renderer/state/imports.js";
 import { IMPORT_EVENT_TYPES, type EngineEvent, type ImportEvent } from "@table-craft/desktop/engine/protocol.js";
+import { followObjectFeatures, useObjects, type ObjectsStore } from "@table-craft/desktop/renderer/state/objects.js";
 import { themeOf, useSettings, type SettingsStore } from "@table-craft/desktop/renderer/state/settings.js";
 import { tablesOf, useTables, type TablesStore } from "@table-craft/desktop/renderer/state/tables.js";
 import { useTabs, type TabsStore } from "@table-craft/desktop/renderer/state/tabs.js";
@@ -27,6 +28,7 @@ export interface WiredStores {
   readonly executions?: ExecutionsStore;
   readonly exports?: ExportsStore;
   readonly imports?: ImportsStore;
+  readonly objects?: ObjectsStore;
 }
 
 function isImportEvent(event: EngineEvent): event is ImportEvent {
@@ -49,6 +51,7 @@ export function wireStores({
   executions,
   exports,
   imports,
+  objects,
 }: WiredStores): () => void {
   const offEvents = datasources.onEngineEvent((id, event) => {
     if (isImportEvent(event)) imports?.getState().received(id, event);
@@ -80,7 +83,9 @@ export function wireStores({
   const offAttached = catalog === undefined ? () => undefined : followAttaches(datasources, catalog);
   const offRedescribes = catalog === undefined || ddl === undefined ? () => undefined : followRedescribes(ddl, catalog);
   const offClosed = executions === undefined ? () => undefined : dropClosedExecutions(tabs, executions);
+  const offFeatures = objects === undefined ? () => undefined : followObjectFeatures(datasources, objects);
   return () => {
+    offFeatures();
     offEvents();
     offDetached();
     offRemoved();
@@ -128,6 +133,7 @@ export function installDatasourceSync(onFirstList: () => void): () => void {
     executions: useExecutions,
     exports: useExports,
     imports: useImports,
+    objects: useObjects,
   });
   const offChanged = bridge().onDatasourcesChanged((list) => useDatasources.getState().applyList(list));
   const offExited = bridge().onEngineExited((exited) => useDatasources.getState().engineExited(exited));

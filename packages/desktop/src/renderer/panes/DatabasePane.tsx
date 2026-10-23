@@ -1,13 +1,14 @@
 import * as ContextMenu from "@radix-ui/react-context-menu";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { useEffect, useMemo, useRef, type KeyboardEvent } from "react";
+import { useEffect, useMemo, useRef, useSyncExternalStore, type KeyboardEvent } from "react";
 import { ACTION_IDS } from "@table-craft/desktop/renderer/actions/appActions.js";
 import { currentPlatform, formatChord } from "@table-craft/desktop/renderer/actions/chords.js";
 import { DDL_ACTION_IDS } from "@table-craft/desktop/renderer/actions/ddlActions.js";
 import { EXPORT_ACTION_IDS } from "@table-craft/desktop/renderer/actions/exportActions.js";
 import { IMPORT_ACTION_IDS } from "@table-craft/desktop/renderer/actions/importActions.js";
+import { OBJECT_ACTION_IDS } from "@table-craft/desktop/renderer/actions/objectActions.js";
 import { HISTORY_ACTION_IDS } from "@table-craft/desktop/renderer/actions/historyActions.js";
-import { invoke, registry, useActionEnabled } from "@table-craft/desktop/renderer/actions/index.js";
+import { invoke, registry, subscribeToActions, useActionEnabled } from "@table-craft/desktop/renderer/actions/index.js";
 import { SETTINGS_ACTION_IDS } from "@table-craft/desktop/renderer/actions/settingsActions.js";
 import { TABLE_ACTION_IDS } from "@table-craft/desktop/renderer/actions/tableActions.js";
 import type { OpenTableArgs } from "@table-craft/desktop/renderer/actions/tableCommands.js";
@@ -77,6 +78,7 @@ const DATASOURCE_MENU = [
   ACTION_IDS.connect,
   ACTION_IDS.disconnect,
   ACTION_IDS.synchronize,
+  OBJECT_ACTION_IDS.newDatabase,
   null,
   ACTION_IDS.datasourceProperties,
   ACTION_IDS.duplicateDatasource,
@@ -90,6 +92,9 @@ const CATALOG_MENU = [
   TABLE_ACTION_IDS.openData,
   ACTION_IDS.newConsole,
   null,
+  OBJECT_ACTION_IDS.rename,
+  OBJECT_ACTION_IDS.drop,
+  null,
   ACTION_IDS.synchronize,
   ACTION_IDS.copyName,
   null,
@@ -99,6 +104,10 @@ const NAMESPACE_MENU = [
   TABLE_ACTION_IDS.openData,
   ACTION_IDS.newConsole,
   IMPORT_ACTION_IDS.importNewTable,
+  null,
+  OBJECT_ACTION_IDS.newTable,
+  OBJECT_ACTION_IDS.newSchema,
+  OBJECT_ACTION_IDS.newDatabase,
   null,
   ACTION_IDS.synchronize,
   ACTION_IDS.copyName,
@@ -113,6 +122,11 @@ const RELATION_MENU = [
   DDL_ACTION_IDS.quickDoc,
   DDL_ACTION_IDS.generator,
   ACTION_IDS.newConsole,
+  null,
+  OBJECT_ACTION_IDS.modifyTable,
+  OBJECT_ACTION_IDS.rename,
+  OBJECT_ACTION_IDS.truncate,
+  OBJECT_ACTION_IDS.drop,
   null,
   ACTION_IDS.synchronize,
   ACTION_IDS.copyName,
@@ -163,6 +177,16 @@ function ToolbarButton({ actionId }: { readonly actionId: string }) {
   );
 }
 
+/** Items that only some plugins offer, left out rather than greyed where they do not apply. */
+const HIDDEN_WHEN_DISABLED: ReadonlySet<string> = new Set([
+  OBJECT_ACTION_IDS.newSchema,
+  OBJECT_ACTION_IDS.newDatabase,
+  OBJECT_ACTION_IDS.modifyTable,
+  OBJECT_ACTION_IDS.rename,
+  OBJECT_ACTION_IDS.truncate,
+  OBJECT_ACTION_IDS.drop,
+]);
+
 function MenuItem({ actionId }: { readonly actionId: string }) {
   const enabled = useActionEnabled(actionId);
   const action = registry.get(actionId);
@@ -180,17 +204,35 @@ function MenuItem({ actionId }: { readonly actionId: string }) {
   );
 }
 
+/** The items to show: plugin-specific ones that do not apply left out, and no separator doubled or at an end. */
+function shownItems(items: readonly (string | null)[]): readonly (string | null)[] {
+  const shown: (string | null)[] = [];
+  for (const item of items) {
+    if (item !== null && HIDDEN_WHEN_DISABLED.has(item) && !registry.isEnabled(item)) continue;
+    if (item === null && (shown.length === 0 || shown[shown.length - 1] === null)) continue;
+    shown.push(item);
+  }
+  if (shown[shown.length - 1] === null) shown.pop();
+  return shown;
+}
+
+/** Mounted when the menu opens, so the items left out are those that do not apply to this selection. */
+function MenuItems({ items }: { readonly items: readonly (string | null)[] }) {
+  useSyncExternalStore(subscribeToActions, () => shownItems(items).join("\n"));
+  return shownItems(items).map((actionId, index) =>
+    actionId === null ? (
+      <ContextMenu.Separator key={`separator-${String(index)}`} className="my-1 h-px bg-line" />
+    ) : (
+      <MenuItem key={actionId} actionId={actionId} />
+    ),
+  );
+}
+
 function Menu({ items }: { readonly items: readonly (string | null)[] }) {
   return (
     <ContextMenu.Portal>
       <ContextMenu.Content className="z-50 min-w-56 rounded border border-line bg-raised p-1 text-ui text-ink shadow-lg">
-        {items.map((actionId, index) =>
-          actionId === null ? (
-            <ContextMenu.Separator key={`separator-${String(index)}`} className="my-1 h-px bg-line" />
-          ) : (
-            <MenuItem key={actionId} actionId={actionId} />
-          ),
-        )}
+        <MenuItems items={items} />
       </ContextMenu.Content>
     </ContextMenu.Portal>
   );

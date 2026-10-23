@@ -1,11 +1,14 @@
 import { create } from "zustand";
 import type {
+  DdlScript,
   ImportErrorPolicy,
   ImportFormat,
   ImportMapping,
   ImportPreview,
   ImportTransaction,
   NewImportColumn,
+  ObjectFeatures,
+  TableDesign,
 } from "@table-craft/desktop/engine/protocol.js";
 import type { HistoryStatement } from "@table-craft/desktop/preload/bridge.js";
 
@@ -153,7 +156,47 @@ export type ModalRequest =
       readonly initial: Readonly<Record<string, string | null>>;
       /** The statements, each with the spans its placeholders occupy. */
       readonly statements: readonly MarkedStatement[];
+    }
+  | {
+      /**
+       * New Table and Modify Table (plan 024): the design edited in tabs, previewed as the plugin
+       * scripts it; resolves `objectAnswer`.
+       */
+      readonly kind: "tableDesign";
+      readonly title: string;
+      /** Where the table is, said under the title. */
+      readonly note: string;
+      readonly initial: TableDesign;
+      readonly features: ObjectFeatures;
+      /** The namespace a foreign key's target is looked up in. */
+      readonly path: readonly string[];
+      /** The tables a foreign key can reference, with their columns. */
+      readonly targets: readonly DesignTarget[];
+      readonly preview: (design: TableDesign) => Promise<DdlScript>;
+      readonly highlight: string | null | undefined;
+    }
+  | {
+      /**
+       * Rename, Truncate, Drop and New Schema (plan 024): what changes, the script that does it
+       * and, where the plugin supports it, Cascade; resolves `objectAnswer`.
+       */
+      readonly kind: "objectChange";
+      readonly title: string;
+      readonly message: string;
+      readonly items?: readonly ModalItem[];
+      readonly confirm: string;
+      readonly destructive: boolean;
+      /** Cascade's initial state; null when the change has no such choice. */
+      readonly cascade: boolean | null;
+      readonly preview: (cascade: boolean) => Promise<DdlScript>;
+      readonly highlight: string | null | undefined;
     };
+
+/** A table a foreign key can reference. */
+export interface DesignTarget {
+  readonly name: string;
+  readonly columns: readonly string[];
+}
 
 export interface MarkedStatement {
   readonly sql: string;
@@ -218,6 +261,27 @@ export function importAnswer(answer: ImportAnswer): string {
 
 export function parseImportAnswer(answer: string): ImportAnswer {
   return JSON.parse(answer) as ImportAnswer;
+}
+
+export const OBJECT_CHOICES = { apply: "apply", console: "console" } as const;
+
+/**
+ * What the table design and object change dialogs answer: Apply or Open in Console, and the script
+ * shown when it was chosen, which Apply hands back to the engine to check against its own.
+ */
+export interface ObjectAnswer {
+  readonly choice: (typeof OBJECT_CHOICES)[keyof typeof OBJECT_CHOICES];
+  readonly script: DdlScript;
+  readonly design: TableDesign | null;
+  readonly cascade: boolean;
+}
+
+export function objectAnswer(answer: ObjectAnswer): string {
+  return JSON.stringify(answer);
+}
+
+export function parseObjectAnswer(answer: string): ObjectAnswer {
+  return JSON.parse(answer) as ObjectAnswer;
 }
 
 /** The radio group's arrow keys, as WAI-ARIA's radio group pattern moves them. */

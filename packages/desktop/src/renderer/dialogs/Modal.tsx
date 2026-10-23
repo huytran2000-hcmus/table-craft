@@ -6,10 +6,12 @@ import { Button, CONTENT_CLASS, OVERLAY_CLASS, TextInput } from "@table-craft/de
 import { useModal, type ModalItem, type ModalRequest } from "@table-craft/desktop/renderer/state/modal.js";
 import { ExportData } from "@table-craft/desktop/renderer/dialogs/ExportData.js";
 import { ImportData } from "@table-craft/desktop/renderer/dialogs/ImportData.js";
+import { ObjectChange } from "@table-craft/desktop/renderer/dialogs/ObjectChange.js";
 import { OpenClosedConsole } from "@table-craft/desktop/renderer/dialogs/OpenClosedConsole.js";
 import { ParametersDialog } from "@table-craft/desktop/renderer/dialogs/ParametersDialog.js";
 import { QueryHistory } from "@table-craft/desktop/renderer/dialogs/QueryHistory.js";
 import { SqlGenerator } from "@table-craft/desktop/renderer/dialogs/SqlGenerator.js";
+import { TableDesigner } from "@table-craft/desktop/renderer/dialogs/TableDesigner.js";
 import { PreviewStatements } from "@table-craft/desktop/renderer/table/PreviewDialog.js";
 import { cn } from "@table-craft/desktop/renderer/ui/cn.js";
 
@@ -25,9 +27,12 @@ const MODAL_WIDTHS: Readonly<Record<ModalRequest["kind"], string>> = {
   parameters: "w-[40rem]",
   export: "w-generator",
   import: "w-dialog",
+  tableDesign: "w-dialog",
+  objectChange: "w-[40rem]",
 };
 
-type PickerKind = "generator" | "history" | "closedConsoles" | "parameters" | "export" | "import";
+type PickerKind =
+  "generator" | "history" | "closedConsoles" | "parameters" | "export" | "import" | "tableDesign" | "objectChange";
 
 function Items({ items }: { readonly items: readonly ModalItem[] }) {
   return (
@@ -150,6 +155,10 @@ export function Modal() {
             <ExportData request={pending.request} />
           ) : pending.request.kind === "import" ? (
             <ImportData request={pending.request} />
+          ) : pending.request.kind === "tableDesign" ? (
+            <TableDesigner request={pending.request} />
+          ) : pending.request.kind === "objectChange" ? (
+            <ObjectChange request={pending.request} />
           ) : (
             <Body request={pending.request} />
           )}

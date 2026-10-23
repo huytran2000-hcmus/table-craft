@@ -176,6 +176,14 @@ their columns, keys, foreign keys and indexes. Expanding a disconnected data sou
 Typing in the tree starts speed search, `F1` shows Quick Documentation for the selected object, and
 `⌘B` opens its DDL. **Synchronize** (`⌥⌘Y`) reloads the tree from the database.
 
+The tree's context menu also changes the database: **New Table…** on a schema, **Modify Table…**
+(`⌘F6`) on a table, **Rename…** (`⇧F6`), **Truncate…** and **Drop…** (`⌘⌫`). Every change shows
+the DDL it will run first, and **Open in Console** takes it to a console instead. On PostgreSQL and
+SQLite it runs in one transaction, so a failing statement leaves nothing changed; MySQL commits each
+DDL statement, and its preview says so. Drop and Truncate name the object and its row count, and
+Cascade is a checkbox where the database has it. SQLite rebuilds a table for a change its `ALTER
+TABLE` cannot make.
+
 ![Database explorer](docs/media/explorer.gif)
 
 See [Database explorer](docs/design/specification.md#database-explorer).
@@ -347,6 +355,9 @@ See [App log and diagnostics](docs/design/specification.md#app-log-and-diagnosti
 | Data Source Properties…   | `⌘;`    | `Ctrl+;`               |
 | Disconnect                | `⌘F2`   | `Ctrl+F2`              |
 | Synchronize               | `⌥⌘Y`   | `Ctrl+Alt+Y`           |
+| Modify Table…             | `⌘F6`   | `Ctrl+F6`              |
+| Rename…                   | `⇧F6`   | `Shift+F6`             |
+| Drop…                     | `⌘⌫`    | `Ctrl+Backspace`       |
 | Go to DDL                 | `⌘B`    | `Ctrl+B`               |
 | Go to Declaration         | `⌘B`    | `Ctrl+B`               |
 | Quick Documentation       | `F1`    | `F1`                   |
