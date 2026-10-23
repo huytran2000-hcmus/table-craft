@@ -123,6 +123,11 @@ export interface LaunchOptions {
   readonly executable?: string;
   /** Variables added to the launch environment, such as plan 020's update overrides. */
   readonly env?: Readonly<Record<string, string>>;
+  /**
+   * Use the login keychain instead of the mock one; only plan 020's live test sets it, to see what
+   * an update does to stored passwords, and only with a build whose keychain item is its own.
+   */
+  readonly systemKeychain?: boolean;
 }
 
 export interface GridText {
@@ -151,7 +156,8 @@ export async function launchApp(
   Object.assign(env, options.env);
   const executable = options.executable ?? APP_EXECUTABLE;
   const entry = executable === undefined ? [MAIN_ENTRY] : [];
-  const args = process.platform === "darwin" ? [MOCK_KEYCHAIN_FLAG, ...entry] : entry;
+  const mockKeychain = process.platform === "darwin" && options.systemKeychain !== true;
+  const args = mockKeychain ? [MOCK_KEYCHAIN_FLAG, ...entry] : entry;
   const app = await _electron.launch({ executablePath: executable ?? electronBinary(), args, env });
   const page = await app.firstWindow();
   return { app, page, userDataDir };
