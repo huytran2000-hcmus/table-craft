@@ -11,9 +11,12 @@ import {
 } from "./vite.shared.js";
 
 const OUT_FILE = "main.js";
+/** The live test's build (plan 020); `src/main/update/build.ts` reads it, the release workflow refuses it. */
+const UPDATE_TEST_BUILD = process.env.TABLE_CRAFT_UPDATE_TEST_BUILD === "1";
 
 export default defineConfig({
   resolve: { alias: ALIASES, mainFields: NODE_MAIN_FIELDS, conditions: NODE_CONDITIONS },
+  define: { __TABLE_CRAFT_UPDATE_TEST_BUILD__: JSON.stringify(UPDATE_TEST_BUILD) },
   build: {
     target: BUILD_TARGET,
     outDir: resolve(DIST_ROOT, "main"),
