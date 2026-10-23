@@ -37,6 +37,8 @@ import {
 } from "./harness.js";
 
 const captureWindow = evidenceFor("009");
+/** Plan 028: Tab accepts the selected completion. */
+const captureTab = evidenceFor("028");
 
 const POSTGRES: Datasource = { id: "pg", pluginId: "postgres", config: POSTGRES_CONFIG };
 const MYSQL: Datasource = { id: "mysql", pluginId: "mysql", config: MYSQL_CONFIG };
@@ -169,11 +171,25 @@ async function completeAt(page: Page, sql: string, caret = sql.length): Promise<
   await options(page).first().waitFor({ timeout: LAUNCH_TIMEOUT_MS });
 }
 
-/** Presses Enter on `label` once CodeMirror would take it, instead of after a fixed sleep. */
-async function acceptCompletion(page: Page, label: string): Promise<void> {
+/**
+ * Moves the popup's selection down to `label`, as a person would with the arrow keys. CodeMirror
+ * also ignores arrows inside `interactionDelay`, and an ignored ArrowDown moves the caret and
+ * closes the popup, so each press waits until the selected option would be taken.
+ */
+async function selectOption(page: Page, label: string): Promise<void> {
+  await option(page, label).waitFor({ timeout: LAUNCH_TIMEOUT_MS });
+  const labels = await optionLabels(page);
+  for (const step of labels.slice(0, labels.indexOf(label))) {
+    await expect.poll(() => page.evaluate<boolean>(acceptable(step)), { timeout: LAUNCH_TIMEOUT_MS }).toBe(true);
+    await page.keyboard.press("ArrowDown");
+  }
+}
+
+/** Presses `key` on `label` once CodeMirror would take it, instead of after a fixed sleep. */
+async function acceptCompletion(page: Page, label: string, key: "Enter" | "Tab" = "Enter"): Promise<void> {
   // Polled with `evaluate`: `waitForFunction` re-evaluates the string, which the window's CSP refuses.
   await expect.poll(() => page.evaluate<boolean>(acceptable(label)), { timeout: LAUNCH_TIMEOUT_MS }).toBe(true);
-  await page.keyboard.press("Enter");
+  await page.keyboard.press(key);
 }
 
 function explorer(page: Page) {
@@ -343,6 +359,109 @@ describe.runIf(DATABASES_ENABLED)("completion and navigation live test", () => {
       await captureWindow(page, "where-bar");
       await acceptCompletion(page, "customer_id");
       await expect.poll(() => where.textContent(), { timeout: LAUNCH_TIMEOUT_MS }).toBe("customer_id");
+    },
+    SCENARIO_TIMEOUT_MS,
+  );
+
+  it(
+    "givenPostgresPopupOpenOnCust_whenTab_thenCustomersIsAcceptedAndNothingIndents",
+    async () => {
+      const page = await launch(POSTGRES);
+      await typeAt(page, "SELECT * FROM ");
+
+      await page.keyboard.type("cust");
+      await selectOption(page, "customers");
+      await captureTab(page, "tab-popup-open");
+      await acceptCompletion(page, "customers", "Tab");
+
+      await expect.poll(() => editorText(page), { timeout: LAUNCH_TIMEOUT_MS }).toBe("SELECT * FROM customers");
+      await expect.poll(() => popup(page).count(), { timeout: LAUNCH_TIMEOUT_MS }).toBe(0);
+      expect(await page.evaluate<number>(CARET_OFFSET)).toBe("SELECT * FROM customers".length);
+      await captureTab(page, "tab-accepted");
+    },
+    SCENARIO_TIMEOUT_MS,
+  );
+
+  it(
+    "givenCaretInsideCustomerOld_whenTabOnCustomers_thenTheWholeIdentifierIsReplacedInOneUndo",
+    async () => {
+      const page = await launch(POSTGRES);
+      const sql = "SELECT * FROM customer_old";
+
+      await completeAt(page, sql, "SELECT * FROM cu".length);
+      await selectOption(page, "customers");
+      await captureTab(page, "tab-inside-identifier");
+      await acceptCompletion(page, "customers", "Tab");
+
+      await expect.poll(() => editorText(page), { timeout: LAUNCH_TIMEOUT_MS }).toBe("SELECT * FROM customers");
+      expect(await page.evaluate<number>(CARET_OFFSET)).toBe("SELECT * FROM customers".length);
+      await captureTab(page, "tab-replaces-identifier");
+      await pressChord(page, "Z");
+      await expect.poll(() => editorText(page)).toBe(sql);
+    },
+    SCENARIO_TIMEOUT_MS,
+  );
+
+  it(
+    "givenCaretInsideCustomerOld_whenEnterOnCustomers_thenItInsertsAndKeepsTheRest",
+    async () => {
+      const page = await launch(POSTGRES);
+
+      await completeAt(page, "SELECT * FROM customer_old", "SELECT * FROM cu".length);
+      await selectOption(page, "customers");
+      await acceptCompletion(page, "customers");
+
+      await expect
+        .poll(() => editorText(page), { timeout: LAUNCH_TIMEOUT_MS })
+        .toBe("SELECT * FROM customersstomer_old");
+      expect(await page.evaluate<number>(CARET_OFFSET)).toBe("SELECT * FROM customers".length);
+      await captureTab(page, "enter-inserts");
+    },
+    SCENARIO_TIMEOUT_MS,
+  );
+
+  it(
+    "givenNoPopup_whenTabThenShiftTab_thenTheLineIndentsAndOutdents",
+    async () => {
+      const page = await launch(POSTGRES);
+      const sql = "SELECT 1";
+      await typeAt(page, sql);
+      await page.keyboard.press("Home");
+      expect(await popup(page).count()).toBe(0);
+
+      await page.keyboard.press("Tab");
+
+      await expect.poll(() => editorText(page)).toMatch(/^\s+SELECT 1$/);
+      await captureTab(page, "tab-indents");
+      await page.keyboard.press("Shift+Tab");
+      await expect.poll(() => editorText(page)).toBe(sql);
+    },
+    SCENARIO_TIMEOUT_MS,
+  );
+
+  it(
+    "givenSqliteOrdersWhereBar_whenTabOnCustomerId_thenItIsAccepted",
+    async () => {
+      const page = await launch(sqlite());
+      const group = treeRow(page, TABLES_GROUP);
+      await group.click();
+      if ((await group.getAttribute("aria-expanded")) !== "true") await page.keyboard.press("ArrowRight");
+      await treeRow(page, "orders").click();
+      await page.keyboard.press("F4");
+      await expect.poll(() => activeEditorTab(page).textContent()).toBe("orders [lite]");
+      const where = page.getByTestId("table-editor").getByTestId("filter-where").locator(".cm-content");
+
+      await where.click();
+      await page.keyboard.type("cust");
+      await option(page, "customer_id").waitFor({ timeout: LAUNCH_TIMEOUT_MS });
+      await acceptCompletion(page, "customer_id", "Tab");
+
+      await expect.poll(() => where.textContent(), { timeout: LAUNCH_TIMEOUT_MS }).toBe("customer_id");
+      await expect.poll(() => popup(page).count(), { timeout: LAUNCH_TIMEOUT_MS }).toBe(0);
+      await expect
+        .poll(() => page.evaluate("document.activeElement?.closest('[data-testid=\"filter-where\"]') != null"))
+        .toBe(true);
+      await captureTab(page, "where-bar-tab");
     },
     SCENARIO_TIMEOUT_MS,
   );
