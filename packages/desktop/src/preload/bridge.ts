@@ -174,6 +174,8 @@ export interface HistoryEntry {
   /** The error's message for a failure. */
   readonly message: string | null;
   readonly source: HistorySource;
+  /** The values it was bound with, by parameter name; absent or null when none. */
+  readonly parameters?: Readonly<Record<string, string | null>> | null;
 }
 
 /** Mirrors core's `HistoryStatement`: every run of one exact text, described by its newest. */
@@ -184,6 +186,7 @@ export interface HistoryStatement {
   readonly lastOutcome: HistoryOutcome;
   readonly lastRowCount: number | null;
   readonly lastMessage: string | null;
+  readonly lastParameters: Readonly<Record<string, string | null>> | null;
   readonly runs: number;
 }
 

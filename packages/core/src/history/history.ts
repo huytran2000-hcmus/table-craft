@@ -24,7 +24,11 @@ export interface HistoryEntry {
   /** The error's message for a failure. */
   readonly message: string | null;
   readonly source: HistorySource;
+  /** The values it was bound with, by parameter name (plan 019 decision 9); absent or null when none. */
+  readonly parameters?: HistoryParameters | null;
 }
+
+export type HistoryParameters = Readonly<Record<string, string | null>>;
 
 /** Every run of one exact statement text, described by its newest run. */
 export interface HistoryStatement {
@@ -34,6 +38,8 @@ export interface HistoryStatement {
   readonly lastOutcome: HistoryOutcome;
   readonly lastRowCount: number | null;
   readonly lastMessage: string | null;
+  /** The values the newest run was bound with; null when it had none. */
+  readonly lastParameters: HistoryParameters | null;
   readonly runs: number;
 }
 
@@ -52,7 +58,7 @@ export interface QueryHistoryOptions {
   readonly now?: () => number;
 }
 
-const SCHEMA_VERSION = 1;
+const SCHEMA_VERSION = 2;
 const MEMORY_PATH = ":memory:";
 const CORRUPT_SUFFIX = ".corrupt-";
 /** SQLite keeps these beside a WAL database; they move with it so they never pair with a fresh file. */
@@ -67,7 +73,12 @@ const COLUMNS = [
   "row_count",
   "message",
   "source",
+  "parameters",
 ] as const;
+/** Version 1 lacked `parameters`; it is added in place, keeping every row. */
+const MIGRATIONS: Readonly<Record<number, string>> = {
+  1: `ALTER TABLE entries ADD COLUMN parameters TEXT NULL; PRAGMA user_version = 2;`,
+};
 
 const CREATE_SCHEMA = `
 CREATE TABLE entries (
@@ -79,14 +90,15 @@ CREATE TABLE entries (
   outcome TEXT NOT NULL,
   row_count INTEGER NULL,
   message TEXT NULL,
-  source TEXT NOT NULL
+  source TEXT NOT NULL,
+  parameters TEXT NULL
 );
 CREATE INDEX entries_datasource_started ON entries (datasource_id, started_at);
 PRAGMA user_version = ${String(SCHEMA_VERSION)};
 `;
 
-const INSERT = `INSERT INTO entries (datasource_id, sql, started_at, duration_ms, outcome, row_count, message, source)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?)`;
+const INSERT = `INSERT INTO entries (datasource_id, sql, started_at, duration_ms, outcome, row_count, message, source, parameters)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`;
 const COUNT = "SELECT count(*) AS n FROM entries WHERE datasource_id = ?";
 const PRUNE = `DELETE FROM entries WHERE id IN (
   SELECT id FROM entries WHERE datasource_id = ? ORDER BY started_at, id LIMIT ?
@@ -94,13 +106,13 @@ const PRUNE = `DELETE FROM entries WHERE id IN (
 const CLEAR = "DELETE FROM entries WHERE datasource_id = ?";
 // `instr` rather than LIKE, so `%` and `_` in the query match themselves.
 const SEARCH = `WITH matching AS (
-  SELECT id, sql, started_at, duration_ms, outcome, row_count, message,
+  SELECT id, sql, started_at, duration_ms, outcome, row_count, message, parameters,
     row_number() OVER (PARTITION BY sql ORDER BY started_at DESC, id DESC) AS recency,
     count(*) OVER (PARTITION BY sql) AS runs
   FROM entries
   WHERE datasource_id = ? AND instr(lower(sql), lower(?)) > 0
 )
-SELECT sql, started_at, duration_ms, outcome, row_count, message, runs
+SELECT sql, started_at, duration_ms, outcome, row_count, message, parameters, runs
 FROM matching WHERE recency = 1
 ORDER BY started_at DESC, id DESC
 LIMIT ?`;
@@ -112,7 +124,23 @@ interface SearchRow {
   readonly outcome: HistoryOutcome;
   readonly row_count: number | null;
   readonly message: string | null;
+  readonly parameters: string | null;
   readonly runs: number;
+}
+
+function parametersOf(text: string | null): HistoryParameters | null {
+  if (text === null) return null;
+  try {
+    const parsed: unknown = JSON.parse(text);
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return null;
+    const values: Record<string, string | null> = {};
+    for (const [name, value] of Object.entries(parsed as Record<string, unknown>)) {
+      if (typeof value === "string" || value === null) values[name] = value;
+    }
+    return values;
+  } catch {
+    return null;
+  }
 }
 
 /** Opens `path` as this schema, creating it in an empty file; throws when the file holds anything else. */
@@ -126,14 +154,20 @@ function openAsSchema(path: string): DatabaseSync {
       database.exec(CREATE_SCHEMA);
       return database;
     }
-    if (version !== SCHEMA_VERSION) throw new Error(`history schema version ${String(version)}`);
-    const columns = (database.prepare("PRAGMA table_info(entries)").all() as { name: string }[]).map((c) => c.name);
-    if (columns.join() !== COLUMNS.join()) throw new Error(`history columns ${columns.join(", ")}`);
+    const migration = MIGRATIONS[version];
+    if (migration !== undefined && tablesMatch(database, COLUMNS.slice(0, -1))) database.exec(migration);
+    else if (version !== SCHEMA_VERSION) throw new Error(`history schema version ${String(version)}`);
+    if (!tablesMatch(database, COLUMNS)) throw new Error("history columns differ from this schema");
     return database;
   } catch (cause) {
     database.close();
     throw cause;
   }
+}
+
+function tablesMatch(database: DatabaseSync, expected: readonly string[]): boolean {
+  const columns = (database.prepare("PRAGMA table_info(entries)").all() as { name: string }[]).map((c) => c.name);
+  return columns.join() === expected.join();
 }
 
 function moveAside(path: string, now: () => number): string {
@@ -183,6 +217,7 @@ export function openQueryHistory(path: string, options: QueryHistoryOptions = {}
           entry.rowCount,
           entry.message,
           entry.source,
+          entry.parameters == null ? null : JSON.stringify(entry.parameters),
         );
         const { n } = count.get(entry.datasourceId) as { n: number };
         if (n > limit) prune.run(entry.datasourceId, n - limit);
@@ -201,6 +236,7 @@ export function openQueryHistory(path: string, options: QueryHistoryOptions = {}
         lastOutcome: row.outcome,
         lastRowCount: row.row_count,
         lastMessage: row.message,
+        lastParameters: parametersOf(row.parameters),
         runs: row.runs,
       }));
     },

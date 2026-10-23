@@ -59,6 +59,7 @@ describe("query history", () => {
         lastOutcome: "error",
         lastRowCount: null,
         lastMessage: "boom",
+        lastParameters: null,
         runs: 2,
       },
       {
@@ -68,6 +69,7 @@ describe("query history", () => {
         lastOutcome: "success",
         lastRowCount: 1,
         lastMessage: null,
+        lastParameters: null,
         runs: 1,
       },
     ]);
@@ -158,5 +160,36 @@ describe("query history", () => {
 
     expect(history.recoveredFrom).toBe(`${path}.corrupt-99`);
     expect(history.search(PG, "")).toEqual([]);
+  });
+
+  it("givenParameters_whenRecorded_thenSearchReturnsLastValues", () => {
+    const history = open();
+    history.record(entry({ sql: "SELECT :id", startedAt: 1_000, parameters: { ":id": "1" } }));
+    history.record(entry({ sql: "SELECT :id", startedAt: 2_000, parameters: { ":id": null } }));
+
+    expect(history.search(PG, "").map((found) => found.lastParameters)).toEqual([{ ":id": null }]);
+  });
+
+  it("givenVersionOneFile_whenOpened_thenMigratedKeepingRows", async () => {
+    const { DatabaseSync } = await import("node:sqlite");
+    const path = join(await temporaryDirectory(), "history.sqlite");
+    const old = new DatabaseSync(path);
+    old.exec(`CREATE TABLE entries (
+      id INTEGER PRIMARY KEY, datasource_id TEXT NOT NULL, sql TEXT NOT NULL, started_at INTEGER NOT NULL,
+      duration_ms INTEGER NOT NULL, outcome TEXT NOT NULL, row_count INTEGER NULL, message TEXT NULL,
+      source TEXT NOT NULL);
+    INSERT INTO entries (datasource_id, sql, started_at, duration_ms, outcome, row_count, message, source)
+      VALUES ('pg', 'SELECT 1', 1, 2, 'success', 1, NULL, 'console');
+    PRAGMA user_version = 1;`);
+    old.close();
+
+    const history = open(path);
+    history.record(entry({ sql: "SELECT :x", parameters: { ":x": "y" } }));
+
+    expect(history.recoveredFrom).toBeNull();
+    expect(history.search(PG, "").map((found) => [found.sql, found.lastParameters])).toEqual([
+      ["SELECT :x", { ":x": "y" }],
+      ["SELECT 1", null],
+    ]);
   });
 });
