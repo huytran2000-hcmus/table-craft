@@ -54,4 +54,6 @@ started, not when it is merged.
 | 041 | [XLSX is written in-house as a streamed ZIP](041-xlsx-is-written-in-house-as-a-streamed-zip.md)                                                                        |
 | 042 | [Reformat is the plugin's language, over `sql-formatter`](042-reformat-is-the-plugins-language-over-sql-formatter.md)                                                  |
 | 043 | [Query parameters are found by the plugin and bound by the driver](043-query-parameters-are-found-by-the-plugin-and-bound-by-the-driver.md)                            |
+| 044 | [The app signs its own updates](044-the-app-signs-its-own-updates.md)                                                                                                  |
+| 045 | [The update lives in the main toolbar, before Settings](045-the-update-lives-in-the-main-toolbar-before-settings.md)                                                   |
 | 048 | [The current namespace comes from the console](048-the-current-namespace-comes-from-the-console.md)                                                                    |

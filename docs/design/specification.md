@@ -569,7 +569,8 @@ comfortable, 32 px compact) in the panel colour with a bottom border. Left to ri
 - the run widget: Run, Cancel, Commit and Rollback, icon-only with tooltips. Cancel needs the
   `cancel` capability and Commit and Rollback the `transactions` one; an action that is not
   available (`available(context)` false) is not drawn;
-- Search Everywhere and Settings….
+- Search Everywhere, the Update button when there is an update to show (see In-app update), and
+  Settings….
 
 Every button is an action button (`ui/ActionButton.tsx`) that invokes its action and keeps focus
 where it was (`mousedown` is prevented), so Run from the toolbar runs the statement at the caret.
@@ -1398,6 +1399,86 @@ manager. Help → Export Diagnostics… lists what it will include, asks for a p
 without credentials and `history.json` (the last 50 runs: datasource, outcome, rows, duration,
 time, without SQL or messages). The zip writer is in-house over `node:zlib`.
 
+## In-app update
+
+Plan 020, decisions 044 and 045. The updater lives in main (`main/update/`); the renderer draws
+the state main pushes and invokes actions.
+
+**Manifest.** `update-manifest.json` is `{ schema: 1, version, notesUrl, minimumVersion, assets }`
+with `assets` keyed `<platform>-<arch>` (`darwin-arm64`, `darwin-x64`, `win32-x64`, `linux-x64`),
+each `{ url, size, sha256 }`. `update-manifest.json.sig` is the base64 Ed25519 signature of the
+manifest's bytes. Main fetches both from
+`https://github.com/tranphucbol/table-craft/releases/latest/download/` with `net.fetch` and
+verifies the signature against `UPDATE_PUBLIC_KEY` (`main/update/manifest.ts`) before parsing.
+A manifest is rejected for a bad signature, a schema other than 1, or a malformed field (asset URLs
+must be `https:` without credentials, `sha256` 64 hex digits). Versions compare as semver, a
+pre-release below its release. `scripts/update-manifest.ts` writes and signs the manifest in the
+release job from `TABLE_CRAFT_UPDATE_SIGNING_KEY`, naming assets by `TableCraft-<version>-<arch>`.
+
+**State.** One union, pushed on `table-craft:update.state` and read with `update.state`, every
+member carrying `current`:
+
+| Phase         | Carries                            | Button                     |
+| ------------- | ---------------------------------- | -------------------------- |
+| `idle`        | —                                  | none                       |
+| `checking`    | —                                  | none                       |
+| `available`   | `release {version, size}`          | Update (accent)            |
+| `downloading` | `release`, `received`, `total`     | `NN%`                      |
+| `ready`       | `release`                          | Restart to Update (accent) |
+| `error`       | `release?`, `message`, `retryable` | Update failed (danger)     |
+| `ineligible`  | `release`, `message`               | Update (neutral)           |
+
+The invoke channels are `update.check`, `update.download`, `update.cancel`, `update.install`,
+`update.skip`, `update.dismiss` and `update.openNotes`; none takes a URL. The actions
+(`renderer/actions/updateActions.ts`) are Check for Updates… (Help menu and Settings → Advanced),
+Show Update (the button), Download, Cancel Download, Retry, Restart to Update, Skip This Version,
+Later, Dismiss and Release Notes, each available only in the phases where it applies.
+
+**Checks.** With `updates.checkAutomatically` on (the default), a packaged app checks 10 s after
+the window first shows and every 24 h. An automatic check that fails on the network, or finds a
+manifest of a later schema, stays `idle` and logs a warning; one that finds the skipped version
+(`<userData>/update-state.json`) stays `idle`. A manual check reports every outcome; with nothing
+newer Help → Check for Updates… says "You're up to date". A development run never checks on its
+own and, asked, reports that it cannot replace itself.
+
+**Eligibility.** In order: not packaged; no asset for this platform and architecture; older than
+`minimumVersion`; on macOS translocated (`/AppTranslocation/`), on a mounted volume (`/Volumes/`)
+or in a folder main cannot write; on Linux not started from an AppImage. An ineligible release is
+shown with the reason and Release Notes, which opens the release page.
+
+**Download.** Streamed to a temporary file and hashed as it arrives; progress is pushed at most
+every 100 ms and logged at 25, 50 and 75 %. A size or SHA-256 mismatch deletes the file and says
+"The download does not match the signed release: SHA-256 …"; an interrupted download deletes it
+and offers Retry, which starts over. On macOS the zip is expanded with `ditto -x -k` into
+`.table-craft-update-<id>` beside the bundle and must hold exactly one app with its executable.
+
+**Install.** Restart to Update goes through the close guard. At `will-quit` main hands over:
+macOS writes a `/bin/sh` script (`main/update/swap.ts`) and starts it detached. The script waits
+up to 60 s for the old process, moves the bundle to `<bundle>.update-backup`, moves the staged one
+in, restores the backup if the new bundle lacks its executable, strips `com.apple.quarantine`,
+removes the backup and staging folder and starts the new executable with the old arguments. Its
+output goes to `<userData>/update-swap.log`, which the next launch logs under scope `update` and
+deletes. Windows runs the downloaded installer with `/S --updated --force-run`; Linux renames the
+downloaded AppImage over `$APPIMAGE` and relaunches. Quitting with a staged or partial update and
+no install discards it. A second launch while one instance runs focuses the first window
+(`requestSingleInstanceLock`).
+
+**Logging.** Scope `update`, with `current` and a `step` (`check`, `download`, `install`, `swap`);
+URLs are logged without query strings. A rejected signature and a hash mismatch are errors;
+network failures are warnings.
+
+**Testing seam.** A build made with `TABLE_CRAFT_UPDATE_TEST_BUILD=1` is named "TableCraft Update
+Test" (own bundle, profile, keychain item) and, like a development run, honours
+`TABLE_CRAFT_UPDATE_MANIFEST_URL`, `TABLE_CRAFT_UPDATE_PUBLIC_KEY` (a PEM file) and
+`TABLE_CRAFT_UPDATE_FIRST_CHECK_MS`, and accepts `http:` loopback assets when the manifest URL is
+overridden. A release build compiles that path out.
+
+**Keychain.** The keychain grants "TableCraft Safe Storage" to an ad-hoc signed app by its code
+hash, which every build changes. After an update the new version blocks at startup on macOS's
+prompt for the login keychain password; Always Allow keeps saved passwords readable, Deny leaves
+them unreadable (connect asks for them) until a later launch is allowed. The ready popover says so
+on macOS.
+
 ## Packaging
 
 Plan 014, decision 033. electron-builder (`packages/desktop/electron-builder.yml`) packs `dist/`
@@ -1408,7 +1489,8 @@ maps or `node_modules`: Vite inlines every runtime dependency, so `@table-craft/
 `main/paths.ts` (`appPaths`) resolves the engine, preload, renderer, plugin directory and icon for
 a development run (under `dist/`) and a packaged one.
 
-Targets: a DMG per macOS architecture (arm64, x64), NSIS for Windows x64, AppImage for Linux x64,
+Targets: a DMG and a zip per macOS architecture (arm64, x64), the zip being what the in-app
+update downloads, NSIS for Windows x64, AppImage for Linux x64,
 each named `TableCraft-<version>-<arch>.<ext>` in `packages/desktop/release/`. The product is
 TableCraft; the profile folder, the Linux executable, the app id, the packages and the IPC
 channels keep `table-craft` (decision 037).
@@ -1439,8 +1521,8 @@ CI (`.github/workflows/ci.yml`) runs on every push and pull request: `verify` on
 format, typecheck, unit tests, the contract suite on PostgreSQL and MySQL) and `package` on macOS
 arm64, macOS x64, Windows x64 and Linux x64, each building its installer, running the packaged
 suite on SQLite and uploading the installer. The macOS jobs block; Windows and Linux are
-best-effort. A `v*` tag adds a draft GitHub release with the installers once the blocking jobs
-pass.
+best-effort. A `v*` tag adds a draft GitHub release with the installers, `update-manifest.json` and its
+signature once the blocking jobs pass (see In-app update).
 
 ## Storage
 

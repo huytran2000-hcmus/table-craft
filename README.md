@@ -31,7 +31,7 @@ are reached through datasource plugins loaded at runtime.
 ## Install
 
 Installers are published on the [Releases](https://github.com/tranphucbol/table-craft/releases)
-page; the first release is not out yet.
+page. Once installed, TableCraft [updates itself](#updates).
 
 | Platform              | File                                   |
 | :-------------------- | :------------------------------------- |
@@ -76,6 +76,35 @@ so after the refused launch. The _damaged_ message offers no such button; use `x
 Pick the DMG that matches your Mac: `arm64` for Apple silicon, `x64` for Intel. An app you build
 yourself with `bun run desktop:package` was never downloaded, so it carries no quarantine and opens
 directly.
+
+### Updates
+
+A little after launch, and once a day while it runs, TableCraft asks GitHub whether a newer release
+is out. When there is one, an **Update** button appears in the main toolbar, just left of Settings;
+nothing is downloaded until you click it and choose **Download**. The button shows the progress,
+then turns into **Restart to Update**: TableCraft quits, puts the new version in place of the old
+one and opens again. **Skip This Version** hides that release until a newer one comes out; **Later**
+closes the popover and leaves the button where it is.
+
+- **Help → Check for Updates…** asks right away, and says so when you are up to date.
+- Turn off **Check for updates automatically** in Settings → Advanced to check only from Help.
+- Every release is described by a manifest signed with the project's key. TableCraft refuses a
+  manifest whose signature does not verify and a download whose SHA-256 does not match it, deletes
+  what it fetched and tells you why
+  ([decision 044](docs/decisions/044-the-app-signs-its-own-updates.md)).
+- On macOS the app replaces itself only from a folder you can write to, such as `/Applications`.
+  Run from the disk image or from a folder macOS moved it to, the button explains what to do and
+  links to the release instead.
+- **macOS asks for your keychain password after every update.** The app is ad-hoc signed, so each
+  version looks like a different app to the keychain. Before the new version opens, macOS asks
+  for your login keychain password to let it read “TableCraft Safe Storage”; enter it and choose
+  **Always Allow**. **Deny** leaves passwords saved _Forever_ unreadable, so connecting asks for
+  them, until you allow it at a later launch. Installing a new DMG by hand asks the same.
+- On Windows the update runs the installer silently and reopens TableCraft; on Linux it replaces
+  the AppImage you started.
+
+Release `v0.1.0` predates updates: install the next release by hand once, and it keeps itself
+current from then on.
 
 ### Build from source
 
@@ -398,20 +427,24 @@ Everything is stored in one profile folder:
 - Windows: `%APPDATA%\table-craft`
 - Linux: `~/.config/table-craft`
 
-| Path               | Holds                                                                     |
-| :----------------- | :------------------------------------------------------------------------ |
-| `datasources.json` | Data sources and folders, without passwords                               |
-| `secrets.json`     | Passwords saved _Forever_, encrypted with the operating system's keychain |
-| `consoles/`        | One folder per data source with its console files                         |
-| `history.sqlite`   | Query history                                                             |
-| `settings.json`    | [Settings](#settings)                                                     |
-| `logs/`            | The app log, `table-craft.log` and up to four older files of 5 MB each    |
-| `themes/`          | Your themes                                                               |
-| `plugins/`         | Your plugins                                                              |
+| Path                | Holds                                                                     |
+| :------------------ | :------------------------------------------------------------------------ |
+| `datasources.json`  | Data sources and folders, without passwords                               |
+| `secrets.json`      | Passwords saved _Forever_, encrypted with the operating system's keychain |
+| `consoles/`         | One folder per data source with its console files                         |
+| `history.sqlite`    | Query history                                                             |
+| `settings.json`     | [Settings](#settings)                                                     |
+| `logs/`             | The app log, `table-craft.log` and up to four older files of 5 MB each    |
+| `update-state.json` | The version you chose to skip                                             |
+| `update-swap.log`   | The last macOS update's swap, logged and removed at the next launch       |
+| `themes/`           | Your themes                                                               |
+| `plugins/`          | Your plugins                                                              |
 
 Passwords are never written to `datasources.json` or to the log, and there is no plaintext fallback:
-where the keychain cannot encrypt, _Forever_ is disabled. TableCraft sends nothing anywhere
-except to the databases you connect to.
+where the keychain cannot encrypt, _Forever_ is disabled. Apart from the databases you connect to,
+TableCraft talks only to GitHub, to [check for updates](#updates), and sends nothing about you
+there; turn **Check for updates automatically** off and it asks only when you choose **Help → Check
+for Updates…**.
 
 ## Not in v1
 
