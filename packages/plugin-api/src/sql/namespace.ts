@@ -1,5 +1,13 @@
+import { PluginError, type NamespaceSwitch } from "@table-craft/plugin-api";
 import { unquote, type Identifier } from "./scope.js";
-import { Lexer, significantTokens, wordOf, type SqlDialectOptions, type Token } from "./tokens.js";
+import {
+  Lexer,
+  significantTokens,
+  wordOf,
+  type NamespaceStatementForm,
+  type SqlDialectOptions,
+  type Token,
+} from "./tokens.js";
 
 /** Where a session-namespace statement points unqualified names. */
 export interface NamespaceTarget {
@@ -194,4 +202,31 @@ export function namespaceTarget(sql: string, dialect: SqlDialectOptions): Namesp
     if (target !== null) return target;
   }
   return null;
+}
+
+const SWITCH_TARGETS: Readonly<Record<NamespaceStatementForm, NamespaceSwitch["targets"]>> = {
+  use: "topLevel",
+  searchPath: "schema",
+};
+
+/**
+ * The console's namespace switch for a dialect moving its namespace by `form` (decision 060):
+ * `USE db`, or a search path of exactly the one schema, so nothing unqualified resolves in a schema
+ * the console's label does not show. Only the search path is undone by a rollback.
+ */
+export function namespaceSwitcher(
+  form: NamespaceStatementForm,
+  quoteIdentifier: (name: string) => string,
+): NamespaceSwitch {
+  return {
+    targets: SWITCH_TARGETS[form],
+    transactional: form === "searchPath",
+    statement(path) {
+      const name = path.at(-1);
+      if (name === undefined) {
+        throw new PluginError("statementFailed", "A namespace switch names no namespace; pick one from the list.");
+      }
+      return form === "use" ? `USE ${quoteIdentifier(name)}` : `SET search_path TO ${quoteIdentifier(name)}`;
+    },
+  };
 }

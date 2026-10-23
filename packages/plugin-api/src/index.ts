@@ -99,6 +99,8 @@ export {
   type InsertRow,
   type InsertTarget,
   KEYWORD_CASES,
+  type NamespaceSwitch,
+  switchableTo,
   type NewColumn,
   type KeywordCase,
   PARAMETER_STYLES,

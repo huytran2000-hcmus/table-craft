@@ -1,4 +1,11 @@
-import { classifyTokens, namespaceSlotAt, namespaceTarget, type SqlDialectOptions } from "@table-craft/plugin-api/sql";
+import {
+  classifyTokens,
+  namespaceSlotAt,
+  namespaceSwitcher,
+  namespaceTarget,
+  quoteIdentifierWith,
+  type SqlDialectOptions,
+} from "@table-craft/plugin-api/sql";
 import { describe, expect, it } from "vitest";
 
 const MYSQL: SqlDialectOptions = { backslashEscapes: true, hashComments: true, namespaceStatements: ["use"] };
@@ -162,5 +169,20 @@ describe("namespaceSlotAt", () => {
   it("givenSelect_whenSlotRead_thenNull", () => {
     expect(slotAt("SELECT * FROM |", MYSQL)).toBeNull();
     expect(slotAt("SET work_mem TO |", POSTGRES)).toBeNull();
+  });
+});
+
+describe("namespaceSwitcher", () => {
+  it("givenNamespaceSwitcher_whenStatementWritten_thenDialectForm", () => {
+    const mysql = namespaceSwitcher("use", quoteIdentifierWith("`"));
+    const postgres = namespaceSwitcher("searchPath", quoteIdentifierWith('"'));
+
+    expect(mysql).toMatchObject({ targets: "topLevel", transactional: false });
+    expect(mysql.statement(["my `db`"])).toBe("USE `my ``db```");
+    expect(postgres).toMatchObject({ targets: "schema", transactional: true });
+    expect(postgres.statement(["table_craft", "Archive"])).toBe('SET search_path TO "Archive"');
+    expect(() => postgres.statement([])).toThrow(/pick one/);
+    expect(classifyTokens(postgres.statement(["x"]), POSTGRES).setsNamespace).toBe(true);
+    expect(namespaceTarget(mysql.statement(["a`b"]), MYSQL)?.candidates[0]?.name).toBe("a`b");
   });
 });

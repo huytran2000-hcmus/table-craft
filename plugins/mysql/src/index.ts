@@ -31,6 +31,7 @@ import {
   defaultKeyword,
   explainedVerb,
   planText,
+  namespaceSwitcher,
   quoteIdentifierWith,
   sqlSavepoints,
   SQL_FUNCTIONS,
@@ -127,6 +128,7 @@ const language: SqlLanguage = {
     types: MYSQL_IMPORT_TYPES,
     decimal: mysqlDecimal,
   }),
+  namespaceSwitch: namespaceSwitcher("use", quoteIdentifier),
   objects: mysqlObjects({
     name: identifierWriter({ quoteIdentifier, plainIdentifier: PLAIN_IDENTIFIER, keywords: KEYWORDS }),
     text: (value) => sqlLiteral(value, LITERALS),

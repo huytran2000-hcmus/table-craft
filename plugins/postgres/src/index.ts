@@ -34,6 +34,7 @@ import {
   defaultValuesInsert,
   identifierWriter,
   planText,
+  namespaceSwitcher,
   quoteIdentifierWith,
   sqlSavepoints,
   SQL_FUNCTIONS,
@@ -128,6 +129,7 @@ const language: SqlLanguage = {
     types: POSTGRES_IMPORT_TYPES,
     decimal: postgresDecimal,
   }),
+  namespaceSwitch: namespaceSwitcher("searchPath", quoteIdentifier),
   objects: postgresObjects({
     name: identifierWriter({ quoteIdentifier, plainIdentifier: PLAIN_IDENTIFIER, keywords: KEYWORDS }),
     text: (value) => sqlLiteral(value, LITERALS),

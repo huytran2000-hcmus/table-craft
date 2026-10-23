@@ -1,5 +1,5 @@
 import type { z } from "zod";
-import type { Introspector, Relation } from "./catalog.js";
+import type { Introspector, Namespace, Relation } from "./catalog.js";
 import type {
   CompletionCatalog,
   CompletionRequest,
@@ -335,6 +335,32 @@ export interface SqlLanguage {
    * transaction undo only themselves when one is refused. `sqlSavepoints` implements it.
    */
   savepoint?(name: string): SavepointStatements;
+  /** Present exactly when the plugin declares `currentNamespace`: how the console switches namespace (decision 060). */
+  readonly namespaceSwitch?: NamespaceSwitch;
+}
+
+/** How a session moves to another namespace from the console's switcher (decision 060). */
+export interface NamespaceSwitch {
+  /**
+   * Which catalog namespaces a switch can name: `topLevel` the ones with a one-part path (MySQL's
+   * databases), `schema` those of kind `schema` (PostgreSQL's schemas).
+   */
+  readonly targets: "topLevel" | "schema";
+  /** Whether a rollback undoes the switch inside an open transaction. */
+  readonly transactional: boolean;
+  /**
+   * The one statement that makes `path` the session's current namespace, the name always quoted.
+   * Throws a `PluginError` coded `statementFailed` for a path it cannot name.
+   */
+  statement(path: readonly string[]): string;
+}
+
+/**
+ * Whether a switch over `targets` can name `namespace`. Not by `Namespace.kind` alone: MySQL lists
+ * its databases as top-level schemas, so a `USE` picks a top-level namespace whatever its kind.
+ */
+export function switchableTo(targets: NamespaceSwitch["targets"], namespace: Namespace): boolean {
+  return targets === "topLevel" ? namespace.path.length === 1 : namespace.kind === "schema";
 }
 
 export const TRANSACTION_MODES = ["auto", "manual"] as const;

@@ -1,15 +1,16 @@
-import type {
-  CompletionCatalog,
-  CompletionItem,
-  CompletionKind,
-  CompletionRequest,
-  CompletionResult,
-  Declaration,
-  Namespace,
-  Relation,
-  ResolveRequest,
-  SelectSource,
-  SqlLanguage,
+import {
+  switchableTo,
+  type CompletionCatalog,
+  type CompletionItem,
+  type CompletionKind,
+  type CompletionRequest,
+  type CompletionResult,
+  type Declaration,
+  type Namespace,
+  type Relation,
+  type ResolveRequest,
+  type SelectSource,
+  type SqlLanguage,
 } from "@table-craft/plugin-api";
 import { parseSimpleSelect, SELECT_READ_ONLY_REASONS, type SimpleSelect } from "./select.js";
 import {
@@ -152,13 +153,9 @@ function samePath(left: readonly string[] | null, right: readonly string[] | nul
   );
 }
 
-/**
- * Whether `namespace` is one `target` can switch to. Not by `Namespace.kind`: MySQL lists its
- * databases as top-level schemas, the namespaces holding relations, so a `USE` picks a top-level
- * namespace whatever its kind, and a search path a schema (found live, plan 022).
- */
+/** Whether `namespace` is one `target` can switch to (found live, plan 022). */
 function targetable(target: NamespaceTarget, namespace: Namespace): boolean {
-  return target.kind === "database" ? namespace.path.length === 1 : namespace.kind === "schema";
+  return switchableTo(target.kind === "database" ? "topLevel" : "schema", namespace);
 }
 
 function relationKind(relation: Relation): CompletionKind {

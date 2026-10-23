@@ -15,7 +15,13 @@ export { FORMAT_DIALECTS, sqlFormatter, type FormatDialect, type FormatterOption
 export { sqlParameters, type NativePlaceholder, type ParameterOptions } from "./parameters.js";
 export { sqlSplitter } from "./splitter.js";
 export { parseSimpleSelect, SELECT_READ_ONLY_REASONS, type SimpleSelect, type SimpleSelectItem } from "./select.js";
-export { namespaceSlotAt, namespaceTarget, type NamespaceSlot, type NamespaceTarget } from "./namespace.js";
+export {
+  namespaceSlotAt,
+  namespaceSwitcher,
+  namespaceTarget,
+  type NamespaceSlot,
+  type NamespaceTarget,
+} from "./namespace.js";
 export { type NamespaceStatementForm, type SqlDialectOptions } from "./tokens.js";
 export {
   defaultKeyword,

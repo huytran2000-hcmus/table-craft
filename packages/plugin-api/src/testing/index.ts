@@ -5,6 +5,7 @@ import {
   IMPORT_KINDS,
   DefinitionNotFoundError,
   isPluginError,
+  switchableTo,
   z,
   type BoundStatement,
   type ColumnDesign,
@@ -483,6 +484,10 @@ export function runPluginContract(plugin: DatasourcePlugin, fixture: ContractFix
         expect(session.currentNamespace !== undefined).toBe(declared);
         return Promise.resolve();
       });
+    });
+
+    it("givenPlugin_whenInspected_thenHasNamespaceSwitchExactlyWhenCurrentNamespaceDeclared", () => {
+      expect(plugin.language?.namespaceSwitch !== undefined).toBe(plugin.capabilities.includes("currentNamespace"));
     });
 
     it("givenPlugin_whenInspected_thenHasInsertRowsAndImportLanguageExactlyWhenBulkInsertDeclared", async () => {
@@ -1863,6 +1868,37 @@ export function runPluginContract(plugin: DatasourcePlugin, fixture: ContractFix
           expect(await current(session)).toEqual(path);
           expect(await collect((await session.execute("SELECT 1 AS one")).rows)).toEqual([[1]]);
         });
+      });
+
+      function switcher(): NonNullable<SqlLanguage["namespaceSwitch"]> {
+        const found = plugin.language?.namespaceSwitch;
+        if (found === undefined)
+          throw new Error("A plugin that declares currentNamespace needs language.namespaceSwitch.");
+        return found;
+      }
+
+      it("givenSwitchStatementForTarget_whenExecuted_thenCurrentNamespaceIsTarget", async () => {
+        const { path } = namespaceSwitch();
+        const { statement, targets } = switcher();
+        await withSession(plugin, fixture, async (session) => {
+          const listed = (await session.introspector?.namespaces()) ?? [];
+          const target = listed.find((namespace) => namespace.path.join(".") === path.join("."));
+          expect(target === undefined ? false : switchableTo(targets, target)).toBe(true);
+          const sql = statement(path);
+          expect(plugin.language?.classify(sql).setsNamespace).toBe(true);
+          await collect((await session.execute(sql)).rows);
+          expect(await current(session)).toEqual(path);
+        });
+      });
+
+      it("givenEmptyPath_whenSwitchStatementWritten_thenThrows", () => {
+        let thrown: unknown = null;
+        try {
+          switcher().statement([]);
+        } catch (error) {
+          thrown = error;
+        }
+        expect(isPluginError(thrown) ? thrown.code : thrown).toBe("statementFailed");
       });
 
       it.runIf(fixture.namespaceSwitch?.missing !== undefined)(
