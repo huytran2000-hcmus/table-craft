@@ -15,6 +15,14 @@ import type { EngineClient } from "@table-craft/desktop/renderer/engine/client.j
 import { carriedLayout, type ColumnLayout } from "@table-craft/desktop/renderer/model/columnLayout.js";
 import { executedText, explainedText, exportedText, firstLine } from "@table-craft/desktop/renderer/model/format.js";
 import { clampSelection, type GridSelection } from "@table-craft/desktop/renderer/model/gridSelection.js";
+import {
+  parameterPrompt,
+  parseParametersAnswer,
+  valuesFor,
+  type ParameterPrompt,
+  type ParameterValues,
+} from "@table-craft/desktop/renderer/model/parameters.js";
+import { caretAfterReformat } from "@table-craft/desktop/renderer/model/reformat.js";
 import { statementsToRun, type RunScope, type TextSpan } from "@table-craft/desktop/renderer/model/statementAt.js";
 import { useCatalog } from "@table-craft/desktop/renderer/state/catalog.js";
 import { useDatasources } from "@table-craft/desktop/renderer/state/datasources.js";
@@ -35,7 +43,12 @@ import {
   type ResultTab,
 } from "@table-craft/desktop/renderer/state/resultTab.js";
 import { createResultWindows, toError } from "@table-craft/desktop/renderer/state/resultWindows.js";
-import { currentFormats, currentPaging } from "@table-craft/desktop/renderer/state/settings.js";
+import {
+  currentFormatOptions,
+  currentFormats,
+  currentPaging,
+  detectsParameters,
+} from "@table-craft/desktop/renderer/state/settings.js";
 
 export {
   ANALYSED_PLAN_TITLE,
@@ -110,6 +123,10 @@ export interface ConsoleSession {
   readonly jump: Flash | null;
   /** Text an action asked the editor to put at its selection; the editor clears it once applied. */
   readonly insertion: Insertion | null;
+  /** A reformat for the editor to apply as one undo step; the editor clears it once applied. */
+  readonly replacement: Replacement | null;
+  /** The values the Parameters dialog last ran with, pre-filled next time; never written to disk. */
+  readonly parameterValues: ParameterValues;
 }
 
 export interface Insertion {
@@ -117,11 +134,33 @@ export interface Insertion {
   readonly seq: number;
 }
 
+export interface Replacement {
+  readonly from: number;
+  readonly to: number;
+  /** The text `from`–`to` held when the reformat was asked; the editor skips it if that changed. */
+  readonly before: string;
+  readonly text: string;
+  /** The selection once applied, in the new text's offsets. */
+  readonly selection: TextSpan;
+  readonly seq: number;
+}
+
+/** What the Parameters dialog asks (plan 019 decision 6). */
+export interface ParametersRequest {
+  readonly prompt: ParameterPrompt;
+  /** Pre-filled values: the console's last ones. */
+  readonly initial: ParameterValues;
+}
+
+export const REFORMAT_FAILED = "Could not reformat";
+
 export interface OpenOptions {
   readonly name?: string;
   readonly sql?: string;
   /** False for a console restored at launch: it stays disconnected until its first Run. */
   readonly connect?: boolean;
+  /** Values the next Parameters dialog starts from, such as a history entry's (plan 019 decision 9). */
+  readonly parameterValues?: ParameterValues;
 }
 
 export interface ConsolesState {
@@ -137,9 +176,13 @@ export interface ConsolesState {
   /** Puts the editor's caret at `span.from` and flashes `span`, as Go to Declaration lands. */
   readonly jumpTo: (id: string, span: TextSpan) => void;
   /** Asks the editor to replace its selection with `text`, or insert it at the caret, as one undo step. */
-  readonly insert: (id: string, text: string) => void;
+  readonly insert: (id: string, text: string, values?: ParameterValues) => void;
   /** The editor applied the insertion numbered `seq`. */
   readonly inserted: (id: string, seq: number) => void;
+  /** Reformats the selection, or the whole console when there is none (plan 019 decision 2). */
+  readonly reformat: (id: string) => Promise<void>;
+  /** The editor applied, or skipped as stale, the replacement numbered `seq`. */
+  readonly replaced: (id: string, seq: number) => void;
   /** Runs what `scope` picks, one statement after another, opening a session first when it has none. */
   readonly run: (id: string, scope: RunScope) => Promise<void>;
   /** Asks the engine to cancel the running statement; `run` then reports it as cancelled. */
@@ -267,6 +310,8 @@ export interface ConsolesDependencies {
   readonly confirmDestructive?: (statements: readonly ClassifiedStatement[]) => Promise<boolean>;
   /** Asks before Explain Analyse runs a write (plan 012 decision 9); false runs nothing. */
   readonly confirmAnalyse?: (request: AnalyseRequest) => Promise<boolean>;
+  /** Asks for a run's parameter values (plan 019 decision 6); null runs nothing. */
+  readonly askParameters?: (request: ParametersRequest) => Promise<ParameterValues | null>;
   /** DDL took effect outside a transaction: the datasource's cached catalog is stale (decision 19). */
   readonly onDdl?: (datasourceId: string) => void;
   /** Hears each statement start and end, for Services (plan 011, decision 11). */
@@ -293,11 +338,25 @@ function newConsole(datasourceId: string, name: string, sql: string, connect: bo
     flash: null,
     jump: null,
     insertion: null,
+    replacement: null,
+    parameterValues: {},
   };
 }
 
 function statementCount(count: number): string {
   return `${count} ${count === 1 ? "statement" : "statements"}`;
+}
+
+/** A run's prompt and the values the user gave it. */
+interface Bound {
+  readonly prompt: ParameterPrompt;
+  readonly values: ParameterValues;
+}
+
+/** The values the `index`-th statement of a run binds; undefined when it binds none. */
+function boundAt(bound: Bound | null, index: number): ParameterValues | undefined {
+  const prompted = bound?.prompt.statements[index];
+  return prompted === undefined || bound === null ? undefined : valuesFor(prompted, bound.values);
 }
 
 /** Finishes one execution in Services and history; `executionId` names its Services row. */
@@ -311,6 +370,8 @@ export function createConsolesStore(dependencies: ConsolesDependencies) {
   const clock = dependencies.clock ?? (() => Date.now());
   const confirmDestructive = dependencies.confirmDestructive ?? (() => Promise.resolve(true));
   const confirmAnalyse = dependencies.confirmAnalyse ?? (() => Promise.resolve(true));
+  const askParameters =
+    dependencies.askParameters ?? ((request: ParametersRequest) => Promise.resolve(request.initial));
   const executions = dependencies.executions ?? NO_EXECUTION_REPORTER;
   /** The execution each result tab came from, by result id, so fetching more updates its row count. */
   const producedBy = new Map<string, number>();
@@ -354,7 +415,12 @@ export function createConsolesStore(dependencies: ConsolesDependencies) {
     }
 
     /** One statement on its way to the engine: Services lists it now, history once it ends. */
-    function started(id: string, sql: string, label: string = firstLine(sql)): Ended {
+    function started(
+      id: string,
+      sql: string,
+      label: string = firstLine(sql),
+      parameters: ParameterValues | null = null,
+    ): Ended {
       const startedAt = clock();
       const datasourceId = get().consoles[id]?.datasourceId;
       const executionId = executions.start(id, { label, sql, startedAt });
@@ -372,6 +438,7 @@ export function createConsolesStore(dependencies: ConsolesDependencies) {
           rowCount,
           message,
           source: "console",
+          ...(parameters === null ? {} : { parameters }),
         });
       };
       return Object.assign(ended, { executionId });
@@ -515,11 +582,13 @@ export function createConsolesStore(dependencies: ConsolesDependencies) {
       client: EngineClient,
       sessionId: string,
       statements: readonly ClassifiedStatement[],
+      bound: Bound | null,
     ): Promise<RunOutcome> {
       for (const [index, statement] of statements.entries()) {
         const sql = firstLine(statement.sql);
+        const parameters = boundAt(bound, index);
         patch(id, { flash: { from: statement.from, to: statement.to, seq: ++flashes } });
-        const ended = started(id, statement.sql);
+        const ended = started(id, statement.sql, sql, parameters ?? null);
         const startedAt = dependencies.now();
         try {
           cursorsClosed(id);
@@ -527,6 +596,7 @@ export function createConsolesStore(dependencies: ConsolesDependencies) {
           const { transactionOpen, ...executed } = await client.call("statement.execute", {
             sessionId,
             sql: statement.sql,
+            ...(parameters === undefined ? {} : { parameters }),
             ...paging,
           });
           const elapsed = dependencies.now() - startedAt;
@@ -628,8 +698,28 @@ export function createConsolesStore(dependencies: ConsolesDependencies) {
       });
     }
 
+    /**
+     * The values `statements` bind, asking for them when any has a parameter; null when the user
+     * cancelled. Detection off, or no parameters, binds nothing and the statements run verbatim.
+     */
+    async function bindValues(id: string, statements: readonly ClassifiedStatement[]): Promise<Bound | null | false> {
+      if (!detectsParameters()) return null;
+      const prompt = parameterPrompt(statements);
+      if (prompt.names.length === 0) return null;
+      const initial = get().consoles[id]?.parameterValues ?? {};
+      const values = await asked(id, () => askParameters({ prompt, initial }));
+      if (values === null) return false;
+      const current = get().consoles[id];
+      if (current !== undefined) patch(id, { parameterValues: { ...current.parameterValues, ...values } });
+      return { prompt, values };
+    }
+
     /** Asks `ask` with the console waiting on the answer; the run's time starts once it is given. */
     async function confirmed(id: string, ask: () => Promise<boolean>): Promise<boolean> {
+      return asked(id, ask);
+    }
+
+    async function asked<T>(id: string, ask: () => Promise<T>): Promise<T> {
       patch(id, { status: "confirming" });
       try {
         return await ask();
@@ -726,7 +816,12 @@ export function createConsolesStore(dependencies: ConsolesDependencies) {
       async open(id, datasourceId, options = {}) {
         const connect = options.connect ?? true;
         const session = newConsole(datasourceId, options.name ?? DEFAULT_CONSOLE_NAME, options.sql ?? "", connect);
-        set({ consoles: { ...get().consoles, [id]: session } });
+        set({
+          consoles: {
+            ...get().consoles,
+            [id]: { ...session, parameterValues: options.parameterValues ?? session.parameterValues },
+          },
+        });
         if (connect) await openSession(id);
       },
 
@@ -775,10 +870,55 @@ export function createConsolesStore(dependencies: ConsolesDependencies) {
         patch(id, { selection });
       },
 
-      insert(id, text) {
-        if (get().consoles[id] === undefined) return;
+      insert(id, text, values) {
+        const current = get().consoles[id];
+        if (current === undefined) return;
         flashes += 1;
-        patch(id, { insertion: { text, seq: flashes } });
+        patch(id, {
+          insertion: { text, seq: flashes },
+          ...(values === undefined ? {} : { parameterValues: { ...current.parameterValues, ...values } }),
+        });
+      },
+
+      async reformat(id) {
+        const current = get().consoles[id];
+        if (current === undefined) return;
+        const { sql, selection } = current;
+        const whole = selection.from === selection.to;
+        const from = whole ? 0 : Math.min(selection.from, selection.to);
+        const to = whole ? sql.length : Math.max(selection.from, selection.to);
+        const before = sql.slice(from, to);
+        if (before.trim() === "") return;
+        try {
+          const client = await dependencies.connect(current.datasourceId);
+          const text = await client.call("sql.format", { text: before, options: currentFormatOptions() });
+          if (text === before || get().consoles[id] === undefined) return;
+          const caret = from + caretAfterReformat(before, text, selection.to - from);
+          flashes += 1;
+          patch(id, {
+            replacement: {
+              from,
+              to,
+              before,
+              text,
+              selection: whole ? { from: caret, to: caret } : { from, to: from + text.length },
+              seq: flashes,
+            },
+          });
+        } catch (cause) {
+          const error = toError(cause);
+          log(id, {
+            sql: "",
+            message: `${REFORMAT_FAILED}: ${firstLine(error.message)}`,
+            hint: error.hint,
+            tone: "error",
+          });
+        }
+      },
+
+      replaced(id, seq) {
+        if (get().consoles[id]?.replacement?.seq !== seq) return;
+        patch(id, { replacement: null });
       },
 
       inserted(id, seq) {
@@ -815,13 +955,15 @@ export function createConsolesStore(dependencies: ConsolesDependencies) {
             outcome = "succeeded";
           } else {
             const destructive = statements.filter((statement) => statement.destructive !== null);
-            if (destructive.length > 0 && !(await confirmed(id, () => confirmDestructive(destructive)))) {
-              log(id, { sql: "", message: "Cancelled; nothing ran.", tone: "warning" });
+            const declined = destructive.length > 0 && !(await confirmed(id, () => confirmDestructive(destructive)));
+            const bound = declined ? false : await bindValues(id, statements);
+            if (bound === false) {
+              log(id, { sql: "", message: DECLINED, tone: "warning" });
               patch(id, { activeResult: OUTPUT_TAB });
               outcome = "cancelled";
             } else {
               replaceUnpinned(id);
-              outcome = await execute(id, client, sessionId, statements);
+              outcome = await execute(id, client, sessionId, statements, bound);
             }
           }
         } catch (cause) {
@@ -926,22 +1068,25 @@ export function createConsolesStore(dependencies: ConsolesDependencies) {
         let statementStartedAt = dependencies.now();
         try {
           const [statement] = await client.call("script.split", { text: tab.sql });
-          if (
+          const declined =
             statement !== undefined &&
             statement.destructive !== null &&
-            !(await confirmed(id, () => confirmDestructive([statement])))
-          ) {
-            log(id, { sql: "", message: "Cancelled; nothing ran.", tone: "warning" });
+            !(await confirmed(id, () => confirmDestructive([statement])));
+          const bound = declined ? false : await bindValues(id, statement === undefined ? [] : [statement]);
+          const parameters = bound === false ? undefined : boundAt(bound, 0);
+          if (bound === false) {
+            log(id, { sql: "", message: DECLINED, tone: "warning" });
             outcome = "cancelled";
           } else {
             cursorsClosed(id);
-            ended = started(id, tab.sql);
+            ended = started(id, tab.sql, sql, parameters ?? null);
             producedBy.set(resultId, ended.executionId);
             statementStartedAt = dependencies.now();
             const paging = currentPaging();
             const { transactionOpen, ...executed } = await client.call("statement.execute", {
               sessionId,
               sql: tab.sql,
+              ...(parameters === undefined ? {} : { parameters }),
               ...paging,
             });
             const kind = statement?.kind ?? "read";
@@ -1061,6 +1206,27 @@ async function askDestructive(statements: readonly ClassifiedStatement[]): Promi
   return answer !== null;
 }
 
+export const PARAMETERS_TITLE = "Parameters";
+
+/** The Parameters dialog's question for a prompt; each statement shows its placeholders marked. */
+export function parametersQuestion(request: ParametersRequest): ModalRequest {
+  return {
+    kind: "parameters",
+    title: PARAMETERS_TITLE,
+    names: request.prompt.names,
+    initial: request.initial,
+    statements: request.prompt.statements.map(({ statement }) => ({
+      sql: statement.sql,
+      marks: statement.parameters.map(({ from, to }) => ({ from, to })),
+    })),
+  };
+}
+
+async function askParametersInDialog(request: ParametersRequest): Promise<ParameterValues | null> {
+  const answer = await useModal.getState().ask(parametersQuestion(request));
+  return answer === null ? null : parseParametersAnswer(answer);
+}
+
 async function askAnalyse(request: AnalyseRequest): Promise<boolean> {
   return (await useModal.getState().ask(analyseConfirmation(request))) !== null;
 }
@@ -1070,6 +1236,7 @@ export const useConsoles = createConsolesStore({
   now: () => performance.now(),
   confirmDestructive: askDestructive,
   confirmAnalyse: askAnalyse,
+  askParameters: askParametersInDialog,
   onDdl: (datasourceId) => void useCatalog.getState().refreshCached(datasourceId),
   executions: {
     start: (tabId, start) => useExecutions.getState().start(tabId, start),

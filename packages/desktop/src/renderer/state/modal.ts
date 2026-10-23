@@ -90,7 +90,22 @@ export type ModalRequest =
       readonly names: readonly string[];
       readonly read: (name: string) => Promise<string>;
       readonly highlight: string | null | undefined;
+    }
+  | {
+      /** The Parameters dialog (plan 019 decision 6): resolves `parametersAnswer(values)`. */
+      readonly kind: "parameters";
+      readonly title: string;
+      /** One row per name, in the order the statements first use them. */
+      readonly names: readonly string[];
+      readonly initial: Readonly<Record<string, string | null>>;
+      /** The statements, each with the spans its placeholders occupy. */
+      readonly statements: readonly MarkedStatement[];
     };
+
+export interface MarkedStatement {
+  readonly sql: string;
+  readonly marks: readonly { readonly from: number; readonly to: number }[];
+}
 
 export const HISTORY_CHOICES = { restore: "restore", copy: "copy", clear: "clear" } as const;
 export const CLOSED_CONSOLE_CHOICES = { open: "open", delete: "delete" } as const;

@@ -9,6 +9,9 @@ import {
   DEFAULT_SETTINGS,
   FETCH_ALL_CAP_RANGE,
   FONT_SIZE_RANGE,
+  INDENT_WIDTH_RANGE,
+  KEYWORD_CASES,
+  LINES_BETWEEN_STATEMENTS_RANGE,
   NULL_TEXT_LENGTH,
   PAGE_ROWS_RANGE,
   type NumberRange,
@@ -23,6 +26,8 @@ const RANGE_DASH = "–";
 const MIN_SHORTCUT_ROWS = 25;
 
 const RANGES: Readonly<Record<string, NumberRange>> = {
+  "editor.format.indentWidth": INDENT_WIDTH_RANGE,
+  "editor.format.linesBetweenStatements": LINES_BETWEEN_STATEMENTS_RANGE,
   "data.nullText": NULL_TEXT_LENGTH,
   "data.pageRows": PAGE_ROWS_RANGE,
   "data.fetchAllCap": FETCH_ALL_CAP_RANGE,
@@ -150,6 +155,7 @@ describe("README", () => {
     const choices = (path: string) => codeSpans(rows.find(([field]) => field === `\`${path}\``)?.[1] ?? "");
     expect(choices("appearance.theme")).toEqual(["system", ...BUILT_IN_THEME_IDS, USER_THEME_CHOICE]);
     expect(choices("appearance.density")).toEqual(Object.keys(DENSITIES));
+    expect(choices("editor.format.keywordCase")).toEqual(KEYWORD_CASES);
   });
 
   it("givenPluginsSection_whenCapabilitiesListed_thenTheyEqualCapabilities", () => {

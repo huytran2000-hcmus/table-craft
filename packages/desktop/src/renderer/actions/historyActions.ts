@@ -1,4 +1,4 @@
-import type { DatasourceView } from "@table-craft/desktop/preload/bridge.js";
+import type { DatasourceView, HistoryStatement } from "@table-craft/desktop/preload/bridge.js";
 import type { ActionContext } from "@table-craft/desktop/renderer/actions/context.js";
 import {
   closedConsoles,
@@ -80,11 +80,12 @@ async function showHistory(context: ActionContext): Promise<void> {
     context.console !== null && !context.inDatabasePane && context.console.datasourceId === view.id
       ? context.activeTab?.id
       : undefined;
+  let listed: readonly HistoryStatement[] = [];
   for (;;) {
     const answer = await useModal.getState().ask({
       kind: "history",
       title: `Query History: ${view.name}`,
-      search: (query) => history.search(view.id, query),
+      search: async (query) => (listed = await history.search(view.id, query)),
       highlight: highlightOf(view),
       restore: into === undefined ? OPEN_IN_CONSOLE : INSERT,
       now: Date.now(),
@@ -95,9 +96,10 @@ async function showHistory(context: ActionContext): Promise<void> {
       await clearHistory(view);
       continue;
     }
+    const values = listed.find((statement) => statement.sql === value)?.lastParameters ?? undefined;
     if (choice === HISTORY_CHOICES.copy) await navigator.clipboard.writeText(value);
-    else if (into !== undefined) useConsoles.getState().insert(into, value);
-    else await openConsole(view.id, value);
+    else if (into !== undefined) useConsoles.getState().insert(into, value, values);
+    else await openConsole(view.id, value, values);
     return;
   }
 }

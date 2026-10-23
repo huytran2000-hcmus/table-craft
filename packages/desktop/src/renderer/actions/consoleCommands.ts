@@ -1,4 +1,5 @@
 import { bridge } from "@table-craft/desktop/renderer/bridge.js";
+import type { ParameterValues } from "@table-craft/desktop/renderer/model/parameters.js";
 import {
   autosave,
   bridgeConsoleFiles,
@@ -34,14 +35,14 @@ export function persists(datasourceId: string): boolean {
 }
 
 /** Opens a console tab on the datasource, named with the first free `console`, `console_1`… (decision 16). */
-export function openConsole(datasourceId: string, sql?: string): Promise<void> {
+export function openConsole(datasourceId: string, sql?: string, parameterValues?: ParameterValues): Promise<void> {
   const previous = allocating.get(datasourceId) ?? Promise.resolve();
   const opened = previous.then(async () => {
     const saved = persists(datasourceId) ? await files.list(datasourceId).catch(() => []) : [];
     const name = firstFreeName([...saved, ...openNames(datasourceId)]);
     const tab = newTab(name);
     useTabs.getState().open(tab);
-    void useConsoles.getState().open(tab.id, datasourceId, { name, sql });
+    void useConsoles.getState().open(tab.id, datasourceId, { name, sql, parameterValues });
   });
   allocating.set(datasourceId, opened);
   return opened;

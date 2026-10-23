@@ -3,12 +3,19 @@ import type {
   ClassifiedStatement,
   ExecutedStatement,
   OpenedSession,
+  StatementParameter,
   TransactionMode,
   TransactionState,
 } from "@table-craft/desktop/engine/protocol.js";
 import { EngineRequestError, type EngineClient } from "@table-craft/desktop/renderer/engine/client.js";
 import { executedText, serviceState } from "@table-craft/desktop/renderer/model/format.js";
-import { createConsolesStore, OUTPUT_TAB, type ConsoleSession } from "@table-craft/desktop/renderer/state/consoles.js";
+import {
+  createConsolesStore,
+  OUTPUT_TAB,
+  type ConsoleSession,
+  type ParametersRequest,
+} from "@table-craft/desktop/renderer/state/consoles.js";
+import { useSettings } from "@table-craft/desktop/renderer/state/settings.js";
 import { createExecutionsStore } from "@table-craft/desktop/renderer/state/executions.js";
 import { createHistoryClient } from "@table-craft/desktop/renderer/state/history.js";
 import type { HistoryEntry } from "@table-craft/desktop/preload/bridge.js";
@@ -36,16 +43,31 @@ function split(text: string): ClassifiedStatement[] {
               : "write";
       const destructive =
         verb === "DROP" ? "DROP TABLE" : verb === "DELETE" && !/\bWHERE\b/i.test(sql) ? "DELETE without WHERE" : null;
-      statements.push({ from, to: from + sql.length, sql, kind, destructive });
+      statements.push({ from, to: from + sql.length, sql, kind, destructive, parameters: fakeParameters(sql) });
     }
     start += piece.length + 1;
   }
   return statements;
 }
 
+const FAKE_PARAMETER = /:[A-Za-z_]\w*|\?/g;
+
+/** `:name` and `?` anywhere, enough for the store; real detection is the plugin's. */
+function fakeParameters(sql: string): StatementParameter[] {
+  let positional = 0;
+  return [...sql.matchAll(FAKE_PARAMETER)].map((match) => {
+    const from = match.index;
+    const to = from + match[0].length;
+    return match[0] === "?"
+      ? { name: `?${String(++positional)}`, from, to, style: "positional" as const }
+      : { name: match[0], from, to, style: "named" as const };
+  });
+}
+
 /** An engine with one session: `FAIL` in a statement fails it; BEGIN, COMMIT, ROLLBACK and manual mode move its transaction. */
 function fakeEngine() {
   const executed: string[] = [];
+  const bound: unknown[] = [];
   const released: string[] = [];
   let mode: TransactionMode = "auto";
   let open = false;
@@ -67,6 +89,7 @@ function fakeEngine() {
       case "statement.execute": {
         const sql = String(params.sql);
         executed.push(sql);
+        bound.push(params.parameters);
         if (sql.includes("FAIL")) {
           return Promise.reject(
             new EngineRequestError({ code: "statementFailed", message: "syntax error", hint: "Fix the SQL." }),
@@ -90,6 +113,8 @@ function fakeEngine() {
         };
         return Promise.resolve(result);
       }
+      case "sql.format":
+        return Promise.resolve(String(params.text).replace(/\s+(FROM|WHERE)\b/g, "\n$1"));
       case "transaction.setMode":
         mode = params.mode as TransactionMode;
         return Promise.resolve(state());
@@ -105,13 +130,22 @@ function fakeEngine() {
     }
   });
   const client = { call } as unknown as EngineClient;
-  return { client, call, executed, released };
+  return { client, call, executed, bound, released };
 }
 
-function harness(options: { confirm?: boolean; record?: (entry: HistoryEntry) => void } = {}) {
+function harness(
+  options: {
+    confirm?: boolean;
+    record?: (entry: HistoryEntry) => void;
+    values?: Readonly<Record<string, string | null>> | null;
+  } = {},
+) {
   const engine = fakeEngine();
   const confirmDestructive = vi.fn((_statements: readonly ClassifiedStatement[]) =>
     Promise.resolve(options.confirm ?? true),
+  );
+  const askParameters = vi.fn((_request: ParametersRequest) =>
+    Promise.resolve(options.values === undefined ? {} : options.values),
   );
   const onDdl = vi.fn();
   const recorded: HistoryEntry[] = [];
@@ -122,6 +156,7 @@ function harness(options: { confirm?: boolean; record?: (entry: HistoryEntry) =>
     now: () => (now += 5),
     clock: () => 0,
     confirmDestructive,
+    askParameters,
     onDdl,
     executions: executions.getState(),
     record: options.record ?? ((entry) => recorded.push(entry)),
@@ -132,7 +167,7 @@ function harness(options: { confirm?: boolean; record?: (entry: HistoryEntry) =>
     return current;
   };
   const messages = () => session().output.map((entry) => entry.message);
-  return { ...engine, store, confirmDestructive, onDdl, session, messages, recorded, executions };
+  return { ...engine, store, confirmDestructive, askParameters, onDdl, session, messages, recorded, executions };
 }
 
 async function opened(sql: string, options: Parameters<typeof harness>[0] = {}) {
@@ -447,5 +482,144 @@ describe("console history and executions", () => {
 
     expect(insertion?.text).toBe("SELECT 2;");
     expect(session().insertion).toBeNull();
+  });
+});
+
+describe("query parameters", () => {
+  it("givenParameters_whenRun_thenPromptsAndSendsValues", async () => {
+    const { store, executed, bound, askParameters, recorded } = await opened(
+      "SELECT * FROM t WHERE id = :id;\nSELECT ?, ?;\nSELECT ? AND :id;",
+      { values: { ":id": "7", "?1": "a", "?2": null, "?3": "c" } },
+    );
+
+    await store.getState().run("c1", "all");
+
+    expect(askParameters.mock.calls[0]?.[0].prompt.names).toEqual([":id", "?1", "?2", "?3"]);
+    expect(executed).toHaveLength(3);
+    expect(bound).toEqual([{ ":id": "7" }, { "?1": "a", "?2": null }, { "?1": "c", ":id": "7" }]);
+    expect(recorded.map((entry) => entry.parameters)).toEqual(bound);
+    expect(store.getState().consoles.c1?.parameterValues).toEqual({ ":id": "7", "?1": "a", "?2": null, "?3": "c" });
+  });
+
+  it("givenRememberedValues_whenRunAgain_thenPromptPrefilled", async () => {
+    const { store, askParameters } = await opened("SELECT :id", { values: { ":id": "7" } });
+
+    await store.getState().run("c1", "all");
+    await store.getState().run("c1", "all");
+
+    expect(askParameters.mock.calls[1]?.[0].initial).toEqual({ ":id": "7" });
+  });
+
+  it("givenPromptCancelled_whenRun_thenNothingRuns", async () => {
+    const { store, executed, messages, session, recorded } = await opened("SELECT :id", { values: null });
+
+    await store.getState().run("c1", "all");
+
+    expect(executed).toEqual([]);
+    expect(recorded).toEqual([]);
+    expect(messages()).toEqual(["Cancelled; nothing ran."]);
+    expect(session().lastRun?.outcome).toBe("cancelled");
+  });
+
+  it("givenDestructiveDeclined_whenRun_thenParametersNeverAsked", async () => {
+    const { store, askParameters } = await opened("DELETE FROM t WHERE id = :id; DROP TABLE t", { confirm: false });
+
+    await store.getState().run("c1", "all");
+
+    expect(askParameters).not.toHaveBeenCalled();
+  });
+
+  it("givenNoParameters_whenRun_thenNeitherAskedNorSent", async () => {
+    const { store, askParameters, bound } = await opened("SELECT 1");
+
+    await store.getState().run("c1", "all");
+
+    expect(askParameters).not.toHaveBeenCalled();
+    expect(bound).toEqual([undefined]);
+  });
+
+  it("givenDetectionOff_whenRun_thenRunsVerbatim", async () => {
+    const settings = useSettings.getState().settings;
+    useSettings.setState({ settings: { ...settings, console: { parameters: false } } });
+    try {
+      const { store, askParameters, bound, executed } = await opened("SELECT :id");
+
+      await store.getState().run("c1", "all");
+
+      expect(askParameters).not.toHaveBeenCalled();
+      expect(executed).toEqual(["SELECT :id"]);
+      expect(bound).toEqual([undefined]);
+    } finally {
+      useSettings.setState({ settings });
+    }
+  });
+
+  it("givenResultWithParameters_whenRerun_thenPromptsAndSendsValues", async () => {
+    const { store, bound, askParameters, session } = await opened("SELECT :id", { values: { ":id": "7" } });
+    await store.getState().run("c1", "all");
+    const resultId = session().results[0]?.id ?? "";
+
+    await store.getState().rerun("c1", resultId);
+
+    expect(askParameters).toHaveBeenCalledTimes(2);
+    expect(bound).toEqual([{ ":id": "7" }, { ":id": "7" }]);
+  });
+
+  it("givenHistoryValues_whenInserted_thenRememberedForTheNextPrompt", async () => {
+    const { store } = await opened("");
+
+    store.getState().insert("c1", "SELECT :id", { ":id": "42" });
+
+    expect(store.getState().consoles.c1?.parameterValues).toEqual({ ":id": "42" });
+  });
+});
+
+describe("reformat", () => {
+  it("givenNoSelection_whenReformatted_thenWholeConsoleReplacedCaretOnToken", async () => {
+    const { store } = await opened("SELECT a FROM t WHERE b");
+    store.getState().setSelection("c1", { from: 9, to: 9 });
+
+    await store.getState().reformat("c1");
+
+    const replacement = store.getState().consoles.c1?.replacement;
+    expect(replacement).toMatchObject({ from: 0, to: 23, text: "SELECT a\nFROM t\nWHERE b" });
+    expect(replacement?.selection).toEqual({ from: 9, to: 9 });
+  });
+
+  it("givenSelection_whenReformatted_thenOnlySelectionReplaced", async () => {
+    const { store } = await opened("SELECT 1;\nSELECT a FROM t;");
+    store.getState().setSelection("c1", { from: 10, to: 25 });
+
+    await store.getState().reformat("c1");
+
+    expect(store.getState().consoles.c1?.replacement).toMatchObject({
+      from: 10,
+      to: 25,
+      before: "SELECT a FROM t",
+      text: "SELECT a\nFROM t",
+      selection: { from: 10, to: 25 },
+    });
+  });
+
+  it("givenFormatFails_whenReformatted_thenTextKeptAndOutputSaysWhy", async () => {
+    const { store, call, messages } = await opened("SELECT (");
+    call.mockImplementationOnce(() =>
+      Promise.reject(new EngineRequestError({ code: "formatFailed", message: "Parse error at line 1", hint: "h" })),
+    );
+
+    await store.getState().reformat("c1");
+
+    expect(store.getState().consoles.c1?.replacement).toBeNull();
+    expect(messages()).toEqual(["Could not reformat: Parse error at line 1"]);
+  });
+
+  it("givenReplacementApplied_whenAcknowledged_thenCleared", async () => {
+    const { store } = await opened("SELECT a FROM t");
+    await store.getState().reformat("c1");
+    const seq = store.getState().consoles.c1?.replacement?.seq ?? -1;
+
+    store.getState().replaced("c1", seq);
+
+    expect(store.getState().consoles.c1?.replacement).toBeNull();
   });
 });

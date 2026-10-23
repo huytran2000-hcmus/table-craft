@@ -143,6 +143,11 @@ anything runs. Switch
 **Tx: Auto** to **Tx: Manual** to work in a transaction, then **Commit** or **Rollback**. Consoles
 are saved as files as you type.
 
+**Reformat Code** (`⌥⌘L`) lays out the selection, or the whole console, and one `⌘Z` takes it
+back. A statement with `:name`, `?` or (on PostgreSQL) `$1` placeholders asks for their values
+before it runs; they are bound by the driver, never pasted into the SQL, and the next run starts
+from them.
+
 ![SQL console](docs/media/console.gif)
 
 See [SQL console](docs/design/specification.md#sql-console).
@@ -242,6 +247,7 @@ See [Settings and appearance](docs/design/specification.md#settings-and-appearan
 | Run All                   | `⇧⌘↩`   | `Ctrl+Shift+Enter`     |
 | Explain Plan              | `⇧⌘E`   | `Ctrl+Shift+E`         |
 | Commit                    | `⌥⇧⌘↩`  | `Ctrl+Alt+Shift+Enter` |
+| Reformat Code             | `⌥⌘L`   | `Ctrl+Alt+L`           |
 | New Console               | `⇧⌘L`   | `Ctrl+Shift+L`         |
 | Close Tab                 | `⌘W`    | `Ctrl+W`               |
 | Select Next Tab           | `⇧⌘]`   | `Ctrl+Shift+]`         |
@@ -277,18 +283,22 @@ Settings live in `settings.json` in your [profile folder](#where-your-data-lives
 dialog writes it; you can also edit it by hand, and a field that is missing or out of range falls
 back to its default without affecting the others.
 
-| Field                       | Values                                                            | Default       |
-| :-------------------------- | :---------------------------------------------------------------- | :------------ |
-| `appearance.theme`          | `system`, `dark`, `light`, `highContrast`, `user:<file stem>`     | `system`      |
-| `appearance.density`        | `comfortable`, `compact`                                          | `comfortable` |
-| `appearance.systemTitleBar` | `true`, `false`; read when the window opens                       | `false`       |
-| `appearance.fonts.ui`       | `family`: a font name, or `null` for the built-in; `sizePx`: 8–32 | `null`, 13    |
-| `appearance.fonts.editor`   | `family`: a font name, or `null` for the built-in; `sizePx`: 8–32 | `null`, 13    |
-| `appearance.fonts.grid`     | `family`: a font name, or `null` for the built-in; `sizePx`: 8–32 | `null`, 12    |
-| `data.nullText`             | 1–16 characters                                                   | `<null>`      |
-| `data.groupDigits`          | `true`, `false`                                                   | `false`       |
-| `data.pageRows`             | 10–10,000                                                         | 500           |
-| `data.fetchAllCap`          | 1,000–1,000,000, at least `pageRows`                              | 100,000       |
+| Field                                  | Values                                                             | Default       |
+| :------------------------------------- | :----------------------------------------------------------------- | :------------ |
+| `appearance.theme`                     | `system`, `dark`, `light`, `highContrast`, `user:<file stem>`      | `system`      |
+| `appearance.density`                   | `comfortable`, `compact`                                           | `comfortable` |
+| `appearance.systemTitleBar`            | `true`, `false`; read when the window opens                        | `false`       |
+| `appearance.fonts.ui`                  | `family`: a font name, or `null` for the built-in; `sizePx`: 8–32  | `null`, 13    |
+| `appearance.fonts.editor`              | `family`: a font name, or `null` for the built-in; `sizePx`: 8–32  | `null`, 13    |
+| `appearance.fonts.grid`                | `family`: a font name, or `null` for the built-in; `sizePx`: 8–32  | `null`, 12    |
+| `editor.format.keywordCase`            | `upper`, `lower`, `preserve`; how Reformat Code cases keywords     | `upper`       |
+| `editor.format.indentWidth`            | 1–8 spaces                                                         | 2             |
+| `editor.format.linesBetweenStatements` | 0–5 blank lines                                                    | 1             |
+| `console.parameters`                   | `true`, `false`; ask for `:name`, `?` and `$1` values before a run | `true`        |
+| `data.nullText`                        | 1–16 characters                                                    | `<null>`      |
+| `data.groupDigits`                     | `true`, `false`                                                    | `false`       |
+| `data.pageRows`                        | 10–10,000                                                          | 500           |
+| `data.fetchAllCap`                     | 1,000–1,000,000, at least `pageRows`                               | 100,000       |
 
 A theme of your own is a JSON file in `themes/` in the profile folder. It names a built-in theme as
 its base and overrides any of its colour tokens; it then appears as `user:<file stem>`, here
@@ -330,7 +340,7 @@ The manifest declares what the plugin can do, and the UI offers only what it dec
   "id": "postgres",
   "name": "PostgreSQL",
   "version": "0.0.0",
-  "apiVersion": "0.10.0",
+  "apiVersion": "0.11.0",
   "entry": "index.js",
   "capabilities": ["sql", "cancel", "schemaTree", "transactions", "ddl", "explain", "explainAnalyze"],
   "highlight": "postgresql",

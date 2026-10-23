@@ -6,7 +6,7 @@ import {
   type SystemAppearance,
   type UserThemeEntry,
 } from "@table-craft/desktop/appearance/themes.js";
-import type { ResultPaging } from "@table-craft/desktop/engine/protocol.js";
+import type { FormatOptions, ResultPaging } from "@table-craft/desktop/engine/protocol.js";
 import type {
   InvokeResult,
   SettingsChanged,
@@ -153,4 +153,14 @@ export function pagingOf(settings: Settings): ResultPaging {
 /** The paging to send now; a change applies to the next statement, not to open results. */
 export function currentPaging(): ResultPaging {
   return pagingOf(useSettings.getState().settings);
+}
+
+/** What Reformat Code sends with the text (plan 019 decision 3). */
+export function currentFormatOptions(): FormatOptions {
+  return useSettings.getState().settings.editor.format;
+}
+
+/** Whether a run looks for `:name`, `?` and `$1` and asks for their values (plan 019 decision 8). */
+export function detectsParameters(): boolean {
+  return useSettings.getState().settings.console.parameters;
 }

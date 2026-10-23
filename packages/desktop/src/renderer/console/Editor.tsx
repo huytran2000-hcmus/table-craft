@@ -24,7 +24,7 @@ import { registry } from "@table-craft/desktop/renderer/actions/index.js";
 import { trackEditor } from "@table-craft/desktop/renderer/console/caretAnchor.js";
 import { completion, connectedEngine } from "@table-craft/desktop/renderer/console/completionSource.js";
 import { EDITOR_THEME, FLASH_CLASS } from "@table-craft/desktop/renderer/console/editorTheme.js";
-import { insertionAt } from "@table-craft/desktop/renderer/console/insertion.js";
+import { insertionAt, replacementAt } from "@table-craft/desktop/renderer/console/insertion.js";
 import { useConsoleDatasource } from "@table-craft/desktop/renderer/console/useConsoleDatasource.js";
 import {
   DRAG_OBJECT_TYPE,
@@ -108,6 +108,7 @@ export function Editor({ consoleId }: { readonly consoleId: string }) {
   const flash = useConsoles((state) => state.consoles[consoleId]?.flash ?? null);
   const jump = useConsoles((state) => state.consoles[consoleId]?.jump ?? null);
   const insertion = useConsoles((state) => state.consoles[consoleId]?.insertion ?? null);
+  const replacement = useConsoles((state) => state.consoles[consoleId]?.replacement ?? null);
   const dialectRef = useRef(dialectOf(highlight));
 
   useEffect(() => {
@@ -212,6 +213,15 @@ export function Editor({ consoleId }: { readonly consoleId: string }) {
     view.focus();
     useConsoles.getState().inserted(consoleId, insertion.seq);
   }, [consoleId, insertion]);
+
+  useEffect(() => {
+    const view = viewRef.current;
+    if (view === null || replacement === null) return;
+    const spec = replacementAt(view.state, replacement);
+    if (spec !== null) view.dispatch(spec);
+    view.focus();
+    useConsoles.getState().replaced(consoleId, replacement.seq);
+  }, [consoleId, replacement]);
 
   useEffect(() => {
     const view = viewRef.current;

@@ -7,6 +7,7 @@ import {
   type DensityId,
 } from "@table-craft/desktop/appearance/themes.js";
 import { currentPlatform, formatChord } from "@table-craft/desktop/renderer/actions/chords.js";
+import { ACTION_IDS } from "@table-craft/desktop/renderer/actions/appActions.js";
 import { registry } from "@table-craft/desktop/renderer/actions/index.js";
 import { SETTINGS_ACTION_IDS } from "@table-craft/desktop/renderer/actions/settingsActions.js";
 import { WINDOW_ACTION_IDS } from "@table-craft/desktop/renderer/actions/windowActions.js";
@@ -31,6 +32,12 @@ import { cn } from "@table-craft/desktop/renderer/ui/cn.js";
 import {
   DEFAULT_SETTINGS,
   FONT_SIZE_RANGE,
+  INDENT_WIDTH_RANGE,
+  indentWidthError,
+  KEYWORD_CASES,
+  LINES_BETWEEN_STATEMENTS_RANGE,
+  linesBetweenStatementsError,
+  type KeywordCase,
   FETCH_ALL_CAP_RANGE,
   fetchAllCapError,
   fontFamilyError,
@@ -55,6 +62,12 @@ const PAGE_TITLES: Readonly<Record<SettingsPage, string>> = {
 const DENSITY_LABELS: Readonly<Record<DensityId, string>> = {
   comfortable: "Comfortable",
   compact: "Compact",
+};
+
+const KEYWORD_CASE_LABELS: Readonly<Record<KeywordCase, string>> = {
+  upper: "UPPER",
+  lower: "lower",
+  preserve: "As typed",
 };
 
 const FONT_LABELS: Readonly<Record<FontRole, string>> = {
@@ -89,7 +102,11 @@ const RESTORE: Readonly<Record<SettingsPage, (current: Settings) => Settings>> =
       systemTitleBar: DEFAULT_SETTINGS.appearance.systemTitleBar,
     },
   }),
-  editor: (current) => withFont(current, "editor", DEFAULT_SETTINGS.appearance.fonts.editor),
+  editor: (current) => ({
+    ...withFont(current, "editor", DEFAULT_SETTINGS.appearance.fonts.editor),
+    editor: DEFAULT_SETTINGS.editor,
+    console: DEFAULT_SETTINGS.console,
+  }),
   dataEditor: (current) => ({
     ...withFont(current, "grid", DEFAULT_SETTINGS.appearance.fonts.grid),
     data: DEFAULT_SETTINGS.data,
@@ -450,6 +467,78 @@ function chordText(actionId: string): string {
   return shortcut === undefined ? "" : formatChord(shortcut, currentPlatform());
 }
 
+function FormattingFields() {
+  const format = useSettings((state) => state.settings.editor.format);
+  const caseId = useId();
+  const setFormat = (patch: Partial<Settings["editor"]["format"]>) =>
+    update((current) => ({
+      ...current,
+      editor: { ...current.editor, format: { ...current.editor.format, ...patch } },
+    }));
+  return (
+    <>
+      <FieldRow label="Keyword case" htmlFor={caseId}>
+        <select
+          id={caseId}
+          className={cn(INPUT_CLASS, "w-28")}
+          value={format.keywordCase}
+          onChange={(event) => {
+            const chosen = KEYWORD_CASES.find((keywordCase) => keywordCase === event.target.value);
+            if (chosen !== undefined) setFormat({ keywordCase: chosen });
+          }}
+        >
+          {KEYWORD_CASES.map((keywordCase) => (
+            <option key={keywordCase} value={keywordCase}>
+              {KEYWORD_CASE_LABELS[keywordCase]}
+            </option>
+          ))}
+        </select>
+      </FieldRow>
+      <NumberField
+        label="Indent width"
+        value={format.indentWidth}
+        range={INDENT_WIDTH_RANGE}
+        check={indentWidthError}
+        onValid={(indentWidth) => setFormat({ indentWidth })}
+      />
+      <NumberField
+        label="Blank lines between statements"
+        value={format.linesBetweenStatements}
+        range={LINES_BETWEEN_STATEMENTS_RANGE}
+        check={linesBetweenStatementsError}
+        onValid={(linesBetweenStatements) => setFormat({ linesBetweenStatements })}
+      />
+      <p className="col-start-2 text-ink-muted">
+        {chordText(ACTION_IDS.reformat)} reformats the selection, or the whole console without one.
+      </p>
+    </>
+  );
+}
+
+function ParametersField() {
+  const parameters = useSettings((state) => state.settings.console.parameters);
+  const id = useId();
+  return (
+    <>
+      <FieldRow label="Parameters" htmlFor={id}>
+        <label className="flex items-center gap-cell">
+          <input
+            id={id}
+            type="checkbox"
+            checked={parameters}
+            onChange={(event) => {
+              const checked = event.target.checked;
+              update((current) => ({ ...current, console: { ...current.console, parameters: checked } }));
+            }}
+          />
+          Ask for :name, ? and $1 values before a run
+        </label>
+      </FieldRow>
+      <p className="col-start-2 text-ink-muted">Off, statements go to the server exactly as written.</p>
+    </>
+  );
+}
+
 function EditorPage() {
   return (
     <>
@@ -460,6 +549,10 @@ function EditorPage() {
         {chordText(SETTINGS_ACTION_IDS.zoomOut)} shrinks it and {chordText(SETTINGS_ACTION_IDS.zoomReset)} restores{" "}
         {DEFAULT_SETTINGS.appearance.fonts.editor.sizePx} px.
       </p>
+      <SectionTitle>Formatting</SectionTitle>
+      <FormattingFields />
+      <SectionTitle>Running</SectionTitle>
+      <ParametersField />
     </>
   );
 }

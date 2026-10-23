@@ -3,6 +3,7 @@ import { useState } from "react";
 import { Button, CONTENT_CLASS, OVERLAY_CLASS, TextInput } from "@table-craft/desktop/renderer/dialogs/parts.js";
 import { useModal, type ModalItem, type ModalRequest } from "@table-craft/desktop/renderer/state/modal.js";
 import { OpenClosedConsole } from "@table-craft/desktop/renderer/dialogs/OpenClosedConsole.js";
+import { ParametersDialog } from "@table-craft/desktop/renderer/dialogs/ParametersDialog.js";
 import { QueryHistory } from "@table-craft/desktop/renderer/dialogs/QueryHistory.js";
 import { SqlGenerator } from "@table-craft/desktop/renderer/dialogs/SqlGenerator.js";
 import { PreviewStatements } from "@table-craft/desktop/renderer/table/PreviewDialog.js";
@@ -17,9 +18,10 @@ const MODAL_WIDTHS: Readonly<Record<ModalRequest["kind"], string>> = {
   generator: "w-generator",
   history: "w-picker",
   closedConsoles: "w-picker",
+  parameters: "w-[40rem]",
 };
 
-type PickerKind = "generator" | "history" | "closedConsoles";
+type PickerKind = "generator" | "history" | "closedConsoles" | "parameters";
 
 function Items({ items }: { readonly items: readonly ModalItem[] }) {
   return (
@@ -121,6 +123,8 @@ export function Modal() {
             <QueryHistory request={pending.request} />
           ) : pending.request.kind === "closedConsoles" ? (
             <OpenClosedConsole request={pending.request} />
+          ) : pending.request.kind === "parameters" ? (
+            <ParametersDialog request={pending.request} />
           ) : (
             <Body request={pending.request} />
           )}

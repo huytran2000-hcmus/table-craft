@@ -23,6 +23,7 @@ import { useTabs } from "@table-craft/desktop/renderer/state/tabs.js";
 export const ACTION_IDS = {
   run: "console.run",
   runAll: "console.runAll",
+  reformat: "console.reformat",
   cancel: "console.cancel",
   commit: "transaction.commit",
   rollback: "transaction.rollback",
@@ -126,6 +127,18 @@ export const APP_ACTIONS: readonly AnyAction[] = [
     shortcut: "Mod+Shift+Enter",
     when: canRunConsole,
     run: (context) => runActive(context, "all"),
+  }),
+  defineAction({
+    id: ACTION_IDS.reformat,
+    title: "Reformat Code",
+    category: "Console",
+    shortcut: "Mod+Alt+L",
+    tabKind: "console",
+    available: (context) => context.capabilities.includes("sql"),
+    when: (context) => context.console !== null,
+    run: async (context) => {
+      if (context.activeTab !== null) await useConsoles.getState().reformat(context.activeTab.id);
+    },
   }),
   defineAction({
     id: ACTION_IDS.commit,
