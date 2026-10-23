@@ -21,7 +21,7 @@ import {
   type ScopeAt,
   type Source,
 } from "./scope.js";
-import { namespaceTarget, type NamespaceTarget } from "./namespace.js";
+import { namespaceSlotAt, namespaceTarget, type NamespaceSlot, type NamespaceTarget } from "./namespace.js";
 import { sqlSplitter } from "./splitter.js";
 import type { SqlDialectOptions } from "./tokens.js";
 
@@ -132,6 +132,9 @@ const UNQUOTED_WORD = "^[A-Za-z0-9_$]*$";
 const ALIAS_WORD_BREAK = /[^A-Za-z0-9]+|(?<=[a-z0-9])(?=[A-Z])/;
 const FALLBACK_ALIAS = "t";
 const QUOTES = new Set(['"', "`"]);
+/** Below every other namespace: `USE mysql` is legitimate but rarely meant. */
+const SYSTEM_NAMESPACE_BOOST = -20;
+const CURRENT_DETAIL = "current";
 
 interface ColumnInfo {
   readonly name: string;
@@ -536,7 +539,41 @@ export function sqlCompleter(
     return { text: head + request.text, offset: request.offset + head.length, shift: head.length };
   }
 
+  /** Decision 2 and 3 of plan 029: what a `USE` or search path element can name, as the caret's quote needs it. */
+  async function namespaceItems(slot: NamespaceSlot, lookup: Lookup): Promise<CompletionItem[]> {
+    const target: NamespaceTarget = { kind: slot.kind, candidates: [] };
+    const namespaces = (await lookup.namespaces()).filter(
+      (namespace) =>
+        targetable(target, namespace) &&
+        !slot.listed.some((listed) => denotes(listed, namespace.path.at(-1) ?? namespace.name)),
+    );
+    const ordered = [
+      ...namespaces.filter((namespace) => !namespace.system),
+      ...namespaces.filter((namespace) => namespace.system),
+    ];
+    const quote = slot.quote;
+    return ordered.map((namespace) => {
+      const name = namespace.path.at(-1) ?? namespace.name;
+      const apply =
+        quote === null
+          ? quoted(name)
+          : name.replaceAll(quote.char, quote.char + quote.char) + (quote.closed ? "" : quote.char);
+      const detail = samePath(namespace.path, lookup.current) ? CURRENT_DETAIL : null;
+      const entry = item("namespace", name, apply, detail);
+      return namespace.system ? { ...entry, boost: SYSTEM_NAMESPACE_BOOST } : entry;
+    });
+  }
+
   async function complete(request: CompletionRequest, catalog: CompletionCatalog): Promise<CompletionResult> {
+    if (request.scope === undefined) {
+      const slot = namespaceSlotAt(request.text, request.offset, options.dialect);
+      if (slot !== null) {
+        const lookup = new Lookup(catalog);
+        await lookup.follow(request.text, request.offset);
+        const items = await namespaceItems(slot, lookup);
+        return { from: slot.from, to: slot.to, items, validFor: slot.quote === null ? UNQUOTED_WORD : null };
+      }
+    }
     const { text, offset, shift } = wrap(request);
     const scope = scopeAt(text, offset, options.dialect);
     const lookup = new Lookup(catalog);

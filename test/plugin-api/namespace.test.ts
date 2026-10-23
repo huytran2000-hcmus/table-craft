@@ -1,4 +1,4 @@
-import { classifyTokens, namespaceTarget, type SqlDialectOptions } from "@table-craft/plugin-api/sql";
+import { classifyTokens, namespaceSlotAt, namespaceTarget, type SqlDialectOptions } from "@table-craft/plugin-api/sql";
 import { describe, expect, it } from "vitest";
 
 const MYSQL: SqlDialectOptions = { backslashEscapes: true, hashComments: true, namespaceStatements: ["use"] };
@@ -89,5 +89,78 @@ describe("classifyTokens namespace statements", () => {
     expect(classifyTokens("RESET ALL", POSTGRES).setsNamespace).toBe(true);
     expect(classifyTokens("SET work_mem TO '64MB'", POSTGRES)).toEqual({ kind: "other", destructive: null });
     expect(classifyTokens("USE archive")).toEqual({ kind: "other", destructive: null });
+  });
+});
+
+/** `text` with `|` marking the caret. */
+function slotAt(marked: string, dialect: SqlDialectOptions) {
+  const offset = marked.indexOf("|");
+  return namespaceSlotAt(marked.replace("|", ""), offset, dialect);
+}
+
+describe("namespaceSlotAt", () => {
+  it("givenUseAndSpace_whenSlotRead_thenDatabaseSlotAtCaret", () => {
+    expect(slotAt("USE |", MYSQL)).toEqual({ kind: "database", from: 4, to: 4, quote: null, listed: [] });
+    expect(slotAt("SELECT 1;\nuse |", MYSQL)).toMatchObject({ kind: "database", from: 14, to: 14 });
+  });
+
+  it("givenUsePartialWord_whenSlotRead_thenFromWordStart", () => {
+    expect(slotAt("USE arc|", MYSQL)).toEqual({ kind: "database", from: 4, to: 7, quote: null, listed: [] });
+    expect(slotAt("USE arc|;\nSELECT 1", MYSQL)).toMatchObject({ from: 4, to: 7 });
+  });
+
+  it("givenUseOpenBacktick_whenSlotRead_thenInsideQuote", () => {
+    expect(slotAt("USE `arc|", MYSQL)).toEqual({
+      kind: "database",
+      from: 5,
+      to: 8,
+      quote: { char: "`", closed: false },
+      listed: [],
+    });
+    expect(slotAt("USE `ar|c`", MYSQL)).toMatchObject({ quote: { char: "`", closed: true } });
+  });
+
+  it("givenUseFinishedName_whenSlotRead_thenNull", () => {
+    expect(slotAt("USE `archive`|", MYSQL)).toBeNull();
+    expect(slotAt("USE archive |", MYSQL)).toBeNull();
+    expect(slotAt("USE|", MYSQL)).toBeNull();
+    expect(slotAt("USE 'archive|", MYSQL)).toBeNull();
+    expect(slotAt("USE -- here |", MYSQL)).toBeNull();
+  });
+
+  it("givenSearchPathSecondElement_whenSlotRead_thenListsFirst", () => {
+    const slot = slotAt("SET search_path TO archive, |", POSTGRES);
+
+    expect(slot).toMatchObject({ kind: "schema", from: 28, to: 28, quote: null });
+    expect(slot?.listed.map((name) => name.name)).toEqual(["archive"]);
+    expect(slotAt("set local search_path = pub|", POSTGRES)).toMatchObject({ kind: "schema", from: 24, listed: [] });
+    expect(slotAt("SET search_path TO archive |", POSTGRES)).toBeNull();
+    expect(slotAt("SET search_path |", POSTGRES)).toBeNull();
+  });
+
+  it("givenSearchPathStringElement_whenSlotRead_thenInsideString", () => {
+    expect(slotAt("SET search_path TO 'arc|", POSTGRES)).toMatchObject({
+      from: 20,
+      to: 23,
+      quote: { char: "'", closed: false },
+    });
+    expect(slotAt("SET search_path TO E'arc|", POSTGRES)).toBeNull();
+  });
+
+  it("givenSetSchema_whenSlotRead_thenSchemaSlot", () => {
+    expect(slotAt("SET SCHEMA |", POSTGRES)).toMatchObject({ kind: "schema", from: 11, listed: [] });
+    expect(slotAt('SET SESSION SCHEMA "ar|', POSTGRES)).toMatchObject({ quote: { char: '"', closed: false } });
+    expect(slotAt("SET SCHEMA archive, |", POSTGRES)).toBeNull();
+  });
+
+  it("givenDialectWithoutForms_whenSlotRead_thenNull", () => {
+    expect(slotAt("USE |", {})).toBeNull();
+    expect(slotAt("USE |", POSTGRES)).toBeNull();
+    expect(slotAt("SET search_path TO |", MYSQL)).toBeNull();
+  });
+
+  it("givenSelect_whenSlotRead_thenNull", () => {
+    expect(slotAt("SELECT * FROM |", MYSQL)).toBeNull();
+    expect(slotAt("SET work_mem TO |", POSTGRES)).toBeNull();
   });
 });

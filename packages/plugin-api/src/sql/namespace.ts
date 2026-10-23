@@ -1,5 +1,5 @@
 import { unquote, type Identifier } from "./scope.js";
-import { significantTokens, wordOf, type SqlDialectOptions, type Token } from "./tokens.js";
+import { Lexer, significantTokens, wordOf, type SqlDialectOptions, type Token } from "./tokens.js";
 
 /** Where a session-namespace statement points unqualified names. */
 export interface NamespaceTarget {
@@ -19,6 +19,7 @@ const ASSIGNMENTS = new Set(["TO", "="]);
 const DEFAULT = "DEFAULT";
 const LIST_SEPARATOR = ",";
 const STRING_QUOTE = "'";
+const BLOCK_COMMENT_END = "*/";
 
 function identifier(text: string, token: Token | undefined): Identifier | null {
   if (token === undefined) return null;
@@ -79,6 +80,104 @@ function searchPathTarget(text: string, tokens: readonly Token[]): NamespaceTarg
   const names = list(text, tokens, at);
   if (names === null || (parameter === SCHEMA && names.length !== 1)) return null;
   return { kind: "schema", candidates: names };
+}
+
+/** The caret's place in a session-namespace statement's target list. */
+export interface NamespaceSlot {
+  readonly kind: NamespaceTarget["kind"];
+  /** What accepting an item replaces; inside a quote it starts after the quote. */
+  readonly from: number;
+  readonly to: number;
+  /** The quote the caret is inside, and whether the name already closes it. */
+  readonly quote: { readonly char: string; readonly closed: boolean } | null;
+  /** The names the statement lists before the caret's. */
+  readonly listed: readonly Identifier[];
+}
+
+const NAME_TOKENS = new Set<Token["kind"]>(["word", "quoted", "string"]);
+
+/** The statement's tokens around `offset`, comments dropped; null when the caret is in a comment. */
+function tokensAround(text: string, offset: number, dialect: SqlDialectOptions): Token[] | null {
+  const lexer = new Lexer(text, dialect);
+  let tokens: Token[] = [];
+  for (let token = lexer.next(); token !== null; token = lexer.next()) {
+    if (token.kind === "comment") {
+      if (token.from < offset && offset < token.to) return null;
+      if (offset === token.to && !text.slice(token.from, token.to).endsWith(BLOCK_COMMENT_END)) return null;
+      continue;
+    }
+    if (token.kind === "delimiter") {
+      if (token.to <= offset) tokens = [];
+      else if (token.from >= offset) break;
+      continue;
+    }
+    tokens.push(token);
+  }
+  return tokens;
+}
+
+function closes(raw: string): boolean {
+  return raw.length >= 2 && raw.endsWith(raw.charAt(0));
+}
+
+/** The names of `name , name ,` from `at` to the end; null when the tokens are not such a list. */
+function listedBefore(text: string, tokens: readonly Token[], at: number): Identifier[] | null {
+  if ((tokens.length - at) % 2 !== 0) return null;
+  const names: Identifier[] = [];
+  for (let index = at; index < tokens.length; index += 2) {
+    const name = identifier(text, tokens[index]);
+    if (name === null || wordAt(text, tokens, index + 1) !== LIST_SEPARATOR) return null;
+    names.push(name);
+  }
+  return names;
+}
+
+function searchPathListStart(text: string, tokens: readonly Token[]): { at: number; single: boolean } | null {
+  if (wordAt(text, tokens, 0) !== SET) return null;
+  let at = SET_SCOPES.has(wordAt(text, tokens, 1) ?? "") ? 2 : 1;
+  const parameter = wordAt(text, tokens, at);
+  at += 1;
+  if (parameter === SCHEMA) return { at, single: true };
+  if (parameter !== SEARCH_PATH || !ASSIGNMENTS.has(wordAt(text, tokens, at) ?? "")) return null;
+  return { at: at + 1, single: false };
+}
+
+/**
+ * Where the caret at `offset` names a namespace a session-namespace statement of the dialect moves
+ * to: `USE |` or the elements of `SET search_path TO a, |` and `SET SCHEMA |`. Null anywhere else,
+ * and after a name whose closing quote is typed.
+ */
+export function namespaceSlotAt(text: string, offset: number, dialect: SqlDialectOptions): NamespaceSlot | null {
+  const forms = dialect.namespaceStatements ?? [];
+  if (forms.length === 0) return null;
+  const tokens = tokensAround(text, offset, dialect);
+  if (tokens === null) return null;
+  const touched = tokens.findIndex((token) => token.from < offset && offset <= token.to);
+  const prefix = touched >= 0 && NAME_TOKENS.has(tokens[touched]?.kind ?? "symbol") ? tokens[touched] : undefined;
+  const before = tokens.filter((token) => (prefix === undefined ? token.to <= offset : token.to <= prefix.from));
+  let from = prefix?.from ?? offset;
+  let quote: NamespaceSlot["quote"] = null;
+  if (prefix !== undefined && prefix.kind !== "word") {
+    const raw = text.slice(prefix.from, prefix.to);
+    const char = raw.charAt(0);
+    if (prefix.kind === "string" && char !== STRING_QUOTE) return null;
+    const closed = closes(raw);
+    if (closed && offset === prefix.to) return null;
+    quote = { char, closed };
+    from = prefix.from + char.length;
+  }
+  for (const form of forms) {
+    if (form === "use") {
+      if (prefix?.kind === "string" || before.length !== 1 || wordAt(text, before, 0) !== USE) continue;
+      return { kind: "database", from, to: offset, quote, listed: [] };
+    }
+    const start = searchPathListStart(text, before);
+    if (start === null) continue;
+    if (start.single && before.length !== start.at) continue;
+    const listed = listedBefore(text, before, start.at);
+    if (listed !== null) return { kind: "schema", from, to: offset, quote, listed };
+  }
+  return null;
 }
 
 /**

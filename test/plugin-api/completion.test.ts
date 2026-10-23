@@ -476,3 +476,90 @@ describe("sqlCompleter follows the script's namespace statements", () => {
     expect(result.items.some((entry) => entry.label === "old_orders")).toBe(false);
   });
 });
+
+describe("sqlCompleter in a namespace statement's target", () => {
+  const usingMysql = sqlCompleter({
+    dialect: { backslashEscapes: true, hashComments: true, namespaceStatements: ["use"] },
+    identifierFolding: "none",
+    plainIdentifier: /^[A-Za-z_][A-Za-z0-9_$]*$/,
+    quoteIdentifier: quoteIdentifierWith("`"),
+    keywords: SQL_KEYWORDS,
+    functions: SQL_FUNCTIONS,
+  });
+  const searchingPostgres = sqlCompleter({
+    dialect: { dollarQuotes: true, namespaceStatements: ["searchPath"] },
+    identifierFolding: "lower",
+    plainIdentifier: /^[a-z_][a-z0-9_$]*$/,
+    quoteIdentifier: quoteIdentifierWith('"'),
+    keywords: SQL_KEYWORDS,
+    functions: SQL_FUNCTIONS,
+  });
+
+  function database(name: string, system = false): Namespace {
+    return { path: [name], name, kind: "schema", system, current: name === "table_craft" };
+  }
+
+  function mysqlCatalog() {
+    const base = fakeCatalog(new Map(), ["table_craft"]);
+    const databases = [
+      database("information_schema", true),
+      database("table_craft"),
+      database("my db`s"),
+      database("archive"),
+    ];
+    return { ...base, namespaces: () => Promise.resolve(databases) };
+  }
+
+  it("givenUse_whenCompleted_thenDatabasesSystemLastCurrentMarked", async () => {
+    const result = await complete("USE |", usingMysql, mysqlCatalog());
+
+    expect(result.items.map((entry) => entry.kind)).toEqual(["namespace", "namespace", "namespace", "namespace"]);
+    expect(ranked(result)).toEqual(["archive", "my db`s", "table_craft", "information_schema"]);
+    expect(result.items.find((entry) => entry.label === "table_craft")?.detail).toBe("current");
+    expect(result.items.find((entry) => entry.label === "my db`s")?.apply).toBe("`my db``s`");
+    expect(result).toMatchObject({ from: 4, to: 4, validFor: "^[A-Za-z0-9_$]*$" });
+  });
+
+  it("givenUsePartial_whenCompleted_thenFromWordStart", async () => {
+    const result = await complete("SELECT 1;\nUSE arc|", usingMysql, mysqlCatalog());
+
+    expect(result).toMatchObject({ from: 14, to: 17 });
+    expect(labels(result)).toContain("archive");
+    expect(labels(result, "keyword")).toEqual([]);
+  });
+
+  it("givenUseInBacktick_whenCompleted_thenBareNameClosed", async () => {
+    const result = await complete("USE `my|", usingMysql, mysqlCatalog());
+
+    expect(result).toMatchObject({ from: 5, to: 7, validFor: null });
+    expect(result.items.find((entry) => entry.label === "my db`s")?.apply).toBe("my db``s`");
+    expect(result.items.find((entry) => entry.label === "archive")?.apply).toBe("archive`");
+  });
+
+  it("givenSearchPathTo_whenCompleted_thenSchemasOnlyNoKeywords", async () => {
+    const result = await complete("SET search_path TO |", searchingPostgres);
+
+    expect(labels(result)).toEqual(["public", "archive"]);
+    expect(result.items.find((entry) => entry.label === "public")?.detail).toBe("current");
+    expect((await complete("SET SCHEMA |", searchingPostgres)).items.length).toBe(2);
+  });
+
+  it("givenSearchPathSecond_whenCompleted_thenListedLeftOut", async () => {
+    const result = await complete("SET search_path TO Archive, |", searchingPostgres);
+
+    expect(labels(result)).toEqual(["public"]);
+  });
+
+  it("givenSearchPathString_whenCompleted_thenInsideString", async () => {
+    const result = await complete("SET search_path TO 'arc|", searchingPostgres);
+
+    expect(result).toMatchObject({ from: 20, to: 23, validFor: null });
+    expect(result.items.find((entry) => entry.label === "archive")?.apply).toBe("archive'");
+  });
+
+  it("givenSqliteUse_whenCompleted_thenNoNamespaces", async () => {
+    const result = await complete("USE |", mysql, mysqlCatalog());
+
+    expect(labels(result, "namespace")).toEqual([]);
+  });
+});
