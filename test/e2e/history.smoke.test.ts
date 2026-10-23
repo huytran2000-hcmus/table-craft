@@ -294,6 +294,9 @@ describe.runIf(DATABASES_ENABLED)("query history and Services live test", () => 
       await closeRunning();
 
       page = await launchSaved(userDataDir);
+      // The restored console's editor focuses itself when it mounts, which can land after the tree
+      // click; the dialog would then offer Insert rather than Open in Console.
+      await waitUntilReady(page);
       await treeNode(page, "mysql").click();
       await openHistory(page, "mysql");
 
