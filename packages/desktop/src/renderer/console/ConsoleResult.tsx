@@ -146,6 +146,7 @@ export function ConsoleResult({
           commit: () => void store().commitEdit(consoleId, resultId),
           cancel: () => store().cancelEdit(consoleId, resultId),
           menu: CONSOLE_CELL_MENU,
+          readOnlyColumns: edits.readOnlyColumns,
         };
 
   return (

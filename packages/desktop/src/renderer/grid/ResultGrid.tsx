@@ -62,7 +62,12 @@ import { FilterChips, FindBar } from "@table-craft/desktop/renderer/grid/FindBar
 import { useLayout } from "@table-craft/desktop/renderer/state/layout.js";
 import { currentFormats, useCellFormats, useRowHeightPx } from "@table-craft/desktop/renderer/state/settings.js";
 import { cn } from "@table-craft/desktop/renderer/ui/cn.js";
-import { SortAscendingMark, SortDescendingMark, TYPE_GLYPHS } from "@table-craft/desktop/renderer/ui/icons.js";
+import {
+  ReadOnlyIcon,
+  SortAscendingMark,
+  SortDescendingMark,
+  TYPE_GLYPHS,
+} from "@table-craft/desktop/renderer/ui/icons.js";
 
 const OVERSCAN_ROWS = 20;
 const MIN_GUTTER_DIGITS = 2;
@@ -72,6 +77,7 @@ const MENU_ITEM =
   "flex h-row cursor-default items-center justify-between gap-gap rounded px-gap outline-none data-[disabled]:text-ink-muted data-[highlighted]:bg-selection";
 const MENU_CONTENT = "z-50 min-w-48 rounded border border-line bg-raised p-1 text-ui text-ink shadow-lg";
 const PRINTABLE_KEY_LENGTH = 1;
+const READ_ONLY_COLUMN_TITLE = " (read-only: not a column of the table)";
 
 /** What the grid asks of the store that owns its result: a console's or a table tab's. */
 export interface GridHost {
@@ -103,6 +109,8 @@ export interface GridEdits {
   readonly cancel: () => void;
   /** Cell context menu entries by action id; null draws a separator. */
   readonly menu: readonly (string | null)[];
+  /** By result column: true for one that takes no edits, such as an expression in a console result. */
+  readonly readOnlyColumns?: readonly boolean[];
 }
 
 type EditMark = "modified" | "inserted" | "deleted";
@@ -411,6 +419,7 @@ function Rows({ ownerId, result, visible, host, edits }: RowsProps) {
             position={position}
             bounds={bounds}
             select={select}
+            readOnly={edits?.readOnlyColumns?.[column] === true}
           />
         ))}
       </div>
@@ -691,9 +700,10 @@ interface HeaderCellProps {
   readonly position: number;
   readonly bounds: GridBounds;
   readonly select: (selection: ResultTab["selection"]) => void;
+  readonly readOnly: boolean;
 }
 
-function HeaderCell({ ownerId, host, result, column, position, bounds, select }: HeaderCellProps) {
+function HeaderCell({ ownerId, host, result, column, position, bounds, select, readOnly }: HeaderCellProps) {
   const name = result.columns[column]?.name ?? "";
   const type = result.columns[column]?.type ?? null;
   const Glyph = TYPE_GLYPHS[GLYPH_OF[result.typeClasses[column] ?? "text"]];
@@ -744,7 +754,8 @@ function HeaderCell({ ownerId, host, result, column, position, bounds, select }:
           data-header-col={position}
           data-column-name={name}
           aria-sort={mark === null ? "none" : mark.direction === "asc" ? "ascending" : "descending"}
-          title={`${name}: ${type ?? "unknown"}`}
+          title={`${name}: ${type ?? "unknown"}${readOnly ? READ_ONLY_COLUMN_TITLE : ""}`}
+          data-read-only={readOnly ? "" : undefined}
           className="relative flex min-w-0 cursor-default items-center gap-1 overflow-hidden border-r border-line px-cell text-ink"
           onClick={(event) => {
             if (event.metaKey || event.ctrlKey) {
@@ -756,7 +767,8 @@ function HeaderCell({ ownerId, host, result, column, position, bounds, select }:
           }}
         >
           <Glyph aria-hidden className="size-icon shrink-0 text-ink-muted" />
-          <span className="truncate">{name}</span>
+          <span className={cn("truncate", readOnly && "text-ink-muted italic")}>{name}</span>
+          {readOnly ? <ReadOnlyIcon aria-label="read-only" className="size-icon shrink-0 text-ink-muted" /> : null}
           {mark === null ? null : (
             <SortMark direction={mark.direction} position={mark.position} several={result.sort.length > 1} />
           )}
