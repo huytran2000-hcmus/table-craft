@@ -2,6 +2,7 @@ import type { QueryHistory } from "@table-craft/core";
 import { z } from "@table-craft/plugin-api";
 import { ConsoleFileError, type ConsoleFiles } from "@table-craft/desktop/main/consoleFiles.js";
 import { draftSchema } from "@table-craft/desktop/main/datasources.js";
+import { logWriteRequest } from "@table-craft/desktop/main/log/schema.js";
 import { SecretStoreError } from "@table-craft/desktop/main/secrets.js";
 import { settingsSchema, type SettingsService } from "@table-craft/desktop/main/settings.js";
 import { DatasourceError, type DatasourceService } from "@table-craft/desktop/main/service.js";
@@ -17,7 +18,10 @@ import {
   type SaveDatasourceRequest,
   type WindowState,
 } from "@table-craft/desktop/preload/bridge.js";
+import type { Logger, LogRecord } from "@table-craft/desktop/log/record.js";
 
+/** Every record from `log.write` is the renderer's, whatever it claims (plan 017 decision 8). */
+const RENDERER_PROCESS = "renderer";
 const BUG_HINT = "This is a TableCraft bug; restart the app and report it.";
 
 const secretChange = z.discriminatedUnion("action", [
@@ -88,7 +92,18 @@ export interface IpcOptions<Sender> {
   readonly windowState: (sender: Sender) => WindowState;
   /** Quits through the close guard and starts again. */
   readonly relaunch: () => void;
-  readonly log: (message: string, cause: unknown) => void;
+  /** Main's `ipc` logger: rejected payloads and failed handlers are written here (plan 017). */
+  readonly log: Logger;
+  readonly logs: LogChannels<Sender>;
+}
+
+/** The log and diagnostics behind the `log.*` and `diagnostics.export` channels (plan 017). */
+export interface LogChannels<Sender> {
+  /** Records the renderer sent, already validated; main sets their process. */
+  write(records: readonly LogRecord[]): void;
+  read(): Promise<readonly LogRecord[]>;
+  reveal(): void;
+  exportDiagnostics(sender: Sender): Promise<string | null>;
 }
 
 function failureOf(cause: unknown): BridgeFailure | null {
@@ -112,7 +127,7 @@ export function registerIpc<Sender>(ipc: InvokeRegistrar<Sender>, options: IpcOp
     ipc.handle(channel, async (event, payload): Promise<InvokeResult<T>> => {
       const parsed = schema.safeParse(payload);
       if (!parsed.success) {
-        options.log(`rejected ${channel}`, parsed.error);
+        options.log.warn("request rejected", { channel, error: parsed.error.message });
         return {
           ok: false,
           error: { message: `Main could not read the request: ${parsed.error.message}`, hint: BUG_HINT },
@@ -123,7 +138,7 @@ export function registerIpc<Sender>(ipc: InvokeRegistrar<Sender>, options: IpcOp
       } catch (cause) {
         const failure = failureOf(cause);
         if (failure !== null) return { ok: false, error: failure };
-        options.log(`${channel} failed`, cause);
+        options.log.error("handler failed", { channel, err: cause });
         const message = cause instanceof Error ? cause.message : String(cause);
         return { ok: false, error: { message, hint: BUG_HINT } };
       }
@@ -191,6 +206,18 @@ export function registerIpc<Sender>(ipc: InvokeRegistrar<Sender>, options: IpcOp
     options.relaunch();
     return null;
   });
+
+  const { logs } = options;
+  handle(INVOKE_CHANNELS.logWrite, logWriteRequest, (records) => {
+    logs.write(records.map((record) => ({ ...record, process: RENDERER_PROCESS })));
+    return null;
+  });
+  handle(INVOKE_CHANNELS.logRead, noRequest, () => logs.read());
+  handle(INVOKE_CHANNELS.logReveal, noRequest, () => {
+    logs.reveal();
+    return null;
+  });
+  handle(INVOKE_CHANNELS.exportDiagnostics, noRequest, (_request, sender) => logs.exportDiagnostics(sender));
 
   const { history } = options;
   handle(INVOKE_CHANNELS.historyRecord, historyEntry, (entry) => {

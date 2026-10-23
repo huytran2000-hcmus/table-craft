@@ -64,7 +64,14 @@ import type {
   TableQuery,
   TransactionState,
 } from "@table-craft/desktop/engine/protocol.js";
+import {
+  connectionTarget,
+  logResponse,
+  type LoggedRequest,
+  type RequestContext,
+} from "@table-craft/desktop/engine/requestLog.js";
 import { engineRequestSchema, readRequestId } from "@table-craft/desktop/engine/requests.js";
+import type { Logger, LogFields } from "@table-craft/desktop/log/record.js";
 
 const SESSION_PREFIX = "session-";
 const BUG_HINT = "This is a TableCraft bug; restart the app and report it.";
@@ -72,6 +79,8 @@ const BUG_HINT = "This is a TableCraft bug; restart the app and report it.";
 export interface EngineOptions {
   readonly datasource: DatasourceConfig;
   readonly plugins: readonly PluginLoadResult[];
+  /** Where request records go (plan 017); silent when absent, as in most tests. */
+  readonly log?: Logger;
 }
 
 /** One renderer port's view of the engine. Its sessions and results die with it. */
@@ -87,8 +96,11 @@ export interface Engine {
 }
 
 class EngineFailure extends Error {
-  constructor(readonly error: EngineError) {
-    super(error.message);
+  constructor(
+    readonly error: EngineError,
+    cause?: unknown,
+  ) {
+    super(error.message, cause === undefined ? undefined : { cause });
   }
 }
 
@@ -108,11 +120,14 @@ function messageOf(cause: unknown): string {
 
 function connectionFailed(cause: unknown): unknown {
   if (!isPluginError(cause) || cause.code !== "connectionFailed") return cause;
-  return new EngineFailure({
-    code: "connectionFailed",
-    message: `Could not connect: ${cause.message}`,
-    hint: "Check that the database is running and that the host, port, user and password are right.",
-  });
+  return new EngineFailure(
+    {
+      code: "connectionFailed",
+      message: `Could not connect: ${cause.message}`,
+      hint: "Check that the database is running and that the host, port, user and password are right.",
+    },
+    cause,
+  );
 }
 
 const STATEMENT_HINT = "Fix the statement and run it again.";
@@ -128,11 +143,10 @@ function statementFailed(cause: unknown, readOnly: boolean): EngineFailure {
       hint: "Run it again when ready.",
     });
   }
-  return new EngineFailure({
-    code: "statementFailed",
-    message: messageOf(cause),
-    hint: readOnly ? READ_ONLY_STATEMENT_HINT : STATEMENT_HINT,
-  });
+  return new EngineFailure(
+    { code: "statementFailed", message: messageOf(cause), hint: readOnly ? READ_ONLY_STATEMENT_HINT : STATEMENT_HINT },
+    cause,
+  );
 }
 
 function explainFailed(cause: unknown, readOnly: boolean): EngineFailure {
@@ -279,6 +293,30 @@ function countOf(value: WireValue | undefined): number {
 }
 
 export function createEngine(options: EngineOptions, now: () => number = Date.now): Engine {
+  const log = options.log ?? null;
+  let target: LogFields | null = null;
+
+  /** Classified for the record only; a plugin that cannot classify leaves the kind unknown. */
+  function statementKind(request: LoggedRequest): string | null {
+    if (typeof request.sql !== "string") return null;
+    try {
+      return sqlLanguage().classify(request.sql).kind;
+    } catch {
+      return null;
+    }
+  }
+
+  function logContext(request: LoggedRequest, started: number): RequestContext {
+    const manifest = options.plugins.find((entry) => entry.manifest?.id === options.datasource.pluginId)?.manifest;
+    target ??= connectionTarget(manifest?.connection.fields ?? [], options.datasource.config);
+    return {
+      log: log as Logger,
+      elapsedMs: now() - started,
+      statementKind: statementKind(request),
+      target: { pluginId: options.datasource.pluginId, ...target },
+    };
+  }
+
   function sqlLanguage(): SqlLanguage {
     const { language } = loadedPlugin(options.plugins, options.datasource.pluginId).plugin;
     if (language === undefined) {
@@ -537,11 +575,10 @@ export function createEngine(options: EngineOptions, now: () => number = Date.no
         )
         .catch((cause: unknown) => {
           if (isPluginError(cause)) throw statementFailed(cause, options.datasource.readOnly);
-          throw new EngineFailure({
-            code: "statementFailed",
-            message: `Export failed: ${messageOf(cause)}`,
-            hint: EXPORT_HINT,
-          });
+          throw new EngineFailure(
+            { code: "statementFailed", message: `Export failed: ${messageOf(cause)}`, hint: EXPORT_HINT },
+            cause,
+          );
         });
       track(handle, results.state(handle));
       return { path, rows: count, bytes, elapsedMs: now() - started };
@@ -737,7 +774,7 @@ export function createEngine(options: EngineOptions, now: () => number = Date.no
         await closeCursorOf(sessionId);
         await change(transactions);
       } catch (cause) {
-        throw new EngineFailure({ code: "statementFailed", message: messageOf(cause), hint });
+        throw new EngineFailure({ code: "statementFailed", message: messageOf(cause), hint }, cause);
       }
       return { mode: transactions.mode, transactionOpen: transactions.open };
     }
@@ -861,10 +898,17 @@ export function createEngine(options: EngineOptions, now: () => number = Date.no
             },
           };
         }
+        const request = parsed.data;
+        const started = now();
         try {
-          return await route(parsed.data);
+          const response = await route(request);
+          if (log !== null)
+            logResponse(request, { result: (response as { result?: unknown }).result }, logContext(request, started));
+          return response;
         } catch (cause) {
-          return { id: parsed.data.id, type: "engine.error", error: toEngineError(cause) };
+          const error = toEngineError(cause);
+          if (log !== null) logResponse(request, { error, cause }, logContext(request, started));
+          return { id: request.id, type: "engine.error", error };
         }
       },
       async close() {

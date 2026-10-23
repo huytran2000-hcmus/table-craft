@@ -1,0 +1,156 @@
+import type { ConnectionField } from "@table-craft/plugin-api";
+import type { EngineError } from "@table-craft/desktop/engine/protocol.js";
+import type { Logger, LogFields } from "@table-craft/desktop/log/record.js";
+
+/**
+ * What the engine logs about each request (plan 017 decisions 5 and 7): the envelope at debug,
+ * a summary of the requests a developer reconstructs a session from at info, and every failure.
+ * Never a statement's text, a row value or a config secret.
+ */
+
+export interface LoggedRequest {
+  readonly id: number;
+  readonly type: string;
+  readonly [field: string]: unknown;
+}
+
+export interface RequestContext {
+  readonly log: Logger;
+  readonly elapsedMs: number;
+  /** The statement kind from the plugin's classifier, for requests that carry SQL; null otherwise. */
+  readonly statementKind: string | null;
+  /** The datasource's connection fields that are safe to log, for `session.open`. */
+  readonly target: LogFields;
+}
+
+/** Field keys that name a person rather than a place, left out of the connect record with the secrets. */
+const IDENTITY_KEY = /user|login|account/i;
+
+/** The config values a connect record carries: every manifest field that is neither secret, a password, nor a user name. */
+export function connectionTarget(fields: readonly ConnectionField[], config: unknown): LogFields {
+  const values = (typeof config === "object" && config !== null ? config : {}) as Record<string, unknown>;
+  const target: Record<string, unknown> = {};
+  for (const field of fields) {
+    if (field.secret === true || field.kind === "password" || IDENTITY_KEY.test(field.key)) continue;
+    const value = values[field.key];
+    if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") target[field.key] = value;
+  }
+  return target;
+}
+
+const SCOPES: Readonly<Record<string, string>> = {
+  "session.open": "connection",
+  "session.close": "connection",
+  "statement.execute": "query",
+  "statement.cancel": "query",
+  "statement.explain": "query",
+  "table.query": "query",
+  "result.fetchMore": "query",
+  "transaction.setMode": "transaction",
+  "transaction.commit": "transaction",
+  "transaction.rollback": "transaction",
+  "result.export": "export",
+  "edits.submit": "edits",
+};
+const DEFAULT_SCOPE = "request";
+
+function record(value: unknown): Readonly<Record<string, unknown>> {
+  return typeof value === "object" && value !== null ? (value as Record<string, unknown>) : {};
+}
+
+function summary(request: LoggedRequest, result: unknown, context: RequestContext): [string, LogFields] | null {
+  const value = record(result);
+  const base = { requestId: request.id, elapsedMs: context.elapsedMs };
+  switch (request.type) {
+    case "session.open":
+      return [
+        "connected",
+        { ...base, sessionId: value.sessionId, serverVersion: value.serverVersion, ...context.target },
+      ];
+    case "session.close":
+      return ["session closed", { ...base, sessionId: request.sessionId }];
+    case "statement.execute":
+      return [
+        "statement finished",
+        {
+          ...base,
+          sessionId: request.sessionId,
+          kind: context.statementKind,
+          rowCount: value.rowCount,
+          rowsAffected: value.rowsAffected,
+          complete: value.complete,
+          transactionOpen: value.transactionOpen,
+        },
+      ];
+    case "statement.cancel":
+      return ["cancel requested", { ...base, sessionId: request.sessionId }];
+    case "statement.explain":
+      return [
+        "plan explained",
+        { ...base, sessionId: request.sessionId, kind: context.statementKind, analyze: request.analyze },
+      ];
+    case "table.query":
+      return ["table opened", { ...base, sessionId: request.sessionId, rowCount: record(value.statement).rowCount }];
+    case "transaction.setMode":
+      return ["transaction mode set", { ...base, sessionId: request.sessionId, mode: value.mode }];
+    case "transaction.commit":
+      return ["transaction committed", { ...base, sessionId: request.sessionId }];
+    case "transaction.rollback":
+      return ["transaction rolled back", { ...base, sessionId: request.sessionId }];
+    case "result.export":
+      return ["result exported", { ...base, extractor: request.extractor, rows: value.rows, bytes: value.bytes }];
+    case "edits.submit":
+      return [
+        "edits submitted",
+        {
+          ...base,
+          sessionId: request.sessionId,
+          edits: Array.isArray(request.edits) ? request.edits.length : null,
+          rowsAffected: value.rowsAffected,
+        },
+      ];
+    default:
+      return null;
+  }
+}
+
+const FAILURE_MESSAGES: Readonly<Record<string, string>> = {
+  "session.open": "connect failed",
+  "statement.execute": "statement failed",
+  "result.export": "export failed",
+  "edits.submit": "edits rejected",
+};
+
+export type RequestOutcome =
+  | { readonly result: unknown }
+  /** `cause` is what was thrown, logged as `err` so the driver's code and the cause chain survive. */
+  | { readonly error: EngineError; readonly cause: unknown };
+
+export function logResponse(request: LoggedRequest, outcome: RequestOutcome, context: RequestContext): void {
+  const scoped = context.log.child(SCOPES[request.type] ?? DEFAULT_SCOPE);
+  const failed = "error" in outcome;
+  scoped.debug("request", {
+    requestId: request.id,
+    type: request.type,
+    elapsedMs: context.elapsedMs,
+    outcome: failed ? outcome.error.code : "ok",
+  });
+  if (!failed) {
+    const described = summary(request, outcome.result, context);
+    if (described !== null) scoped.info(...described);
+    return;
+  }
+  const fields = {
+    requestId: request.id,
+    type: request.type,
+    elapsedMs: context.elapsedMs,
+    code: outcome.error.code,
+    error: outcome.error.message,
+    ...(context.statementKind === null ? {} : { kind: context.statementKind }),
+    ...(request.type === "session.open" ? context.target : {}),
+    err: outcome.cause,
+  };
+  const message = FAILURE_MESSAGES[request.type] ?? "request failed";
+  if (outcome.error.code === "cancelled") scoped.info(message, fields);
+  else scoped.warn(message, fields);
+}

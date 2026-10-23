@@ -19,6 +19,8 @@ export const ENGINE_PORT_MESSAGE = "engine.port";
 export const ENGINE_SHUTDOWN_MESSAGE = "engine.shutdown";
 /** What a probe engine posts on its parent port, once, before it exits. */
 export const ENGINE_PROBED_MESSAGE = "engine.probed";
+/** What an engine posts on its parent port for each log record; main alone writes the log (plan 017). */
+export const ENGINE_LOG_MESSAGE = "engine.log";
 
 /** Mirrors `WireValue` in plugin-api. */
 export type WireValue =
@@ -216,6 +218,12 @@ export type ProbeResult =
       readonly elapsedMs: number;
     }
   | { readonly ok: false; readonly error: EngineError };
+
+/** `record` is a `LogRecord` (`log/record.ts`); main validates it and sets its `process`. */
+export interface EngineLog {
+  readonly kind: typeof ENGINE_LOG_MESSAGE;
+  readonly record: unknown;
+}
 
 export interface EngineProbed {
   readonly kind: typeof ENGINE_PROBED_MESSAGE;

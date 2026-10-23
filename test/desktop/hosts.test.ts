@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { ENGINE_PROBED_MESSAGE, ENGINE_SHUTDOWN_MESSAGE } from "@table-craft/desktop/engine/protocol.js";
+import {
+  ENGINE_LOG_MESSAGE,
+  ENGINE_PROBED_MESSAGE,
+  ENGINE_SHUTDOWN_MESSAGE,
+} from "@table-craft/desktop/engine/protocol.js";
+import { createLogger, type LogRecord } from "@table-craft/desktop/log/record.js";
 import { createHostRegistry, PROBE_TIMEOUT_MS } from "@table-craft/desktop/main/hosts.js";
 import { fakeHostDependencies } from "../support/fakeHosts.js";
 
@@ -105,4 +110,47 @@ describe("host registry", () => {
 
     expect(await probing).toMatchObject({ ok: false, error: { code: "internal" } });
   });
+
+  it("givenEngineLogMessage_whenPosted_thenForwardedWithItsProcess", () => {
+    const { dependencies, forwarded, hosts, protectedConfigs } = loggedRegistry();
+
+    hosts.open(DATASOURCE, "window-1");
+    dependencies.forked[0]?.answer({ kind: ENGINE_LOG_MESSAGE, record: { msg: "hi" } });
+    dependencies.forked[0]?.answer({ kind: "something.else" });
+
+    expect(forwarded).toEqual([[{ msg: "hi" }, "engine:pg"]]);
+    expect(protectedConfigs).toEqual([DATASOURCE]);
+  });
+
+  it("givenEngineDies_whenExited_thenWarnRecordWithCodeAndUptime", () => {
+    const { dependencies, hosts, records } = loggedRegistry();
+
+    hosts.open(DATASOURCE, "window-1");
+    dependencies.forked[0]?.exit(137);
+
+    expect(records.map((record) => [record.level, record.msg])).toEqual([
+      ["info", "engine host started"],
+      ["warn", "engine host exited unexpectedly"],
+    ]);
+    expect(records[1]).toMatchObject({ scope: "engine", datasourceId: "pg", code: 137, clean: false, uptimeMs: 0 });
+  });
 });
+
+function loggedRegistry() {
+  const dependencies = fakeHostDependencies();
+  const records: LogRecord[] = [];
+  const forwarded: [unknown, string][] = [];
+  const protectedConfigs: unknown[] = [];
+  const hosts = createHostRegistry({
+    pluginRoots: ["/plugins"],
+    dependencies,
+    onExit: () => {},
+    now: () => 0,
+    log: {
+      logger: createLogger({ process: "main", scope: "app", sink: (record) => records.push(record) }),
+      forward: (record, process) => forwarded.push([record, process]),
+      protect: (datasource) => protectedConfigs.push(datasource),
+    },
+  });
+  return { dependencies, forwarded, hosts, protectedConfigs, records };
+}

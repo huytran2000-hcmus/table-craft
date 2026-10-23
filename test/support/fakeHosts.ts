@@ -7,7 +7,10 @@ export class FakeEngineProcess implements EngineProcess {
   readonly #messageListeners: ((message: unknown) => void)[] = [];
   readonly #exitListeners: ((code: number) => void)[] = [];
 
-  constructor(readonly serviceName: string) {}
+  constructor(
+    readonly serviceName: string,
+    readonly logProcess = "",
+  ) {}
 
   postMessage(message: unknown): void {
     this.posted.push(message);
@@ -51,8 +54,8 @@ export function fakeHostDependencies(): FakeHostDependencies {
   return {
     forked,
     ports,
-    fork(serviceName) {
-      const process = new FakeEngineProcess(serviceName);
+    fork(serviceName, logProcess) {
+      const process = new FakeEngineProcess(serviceName, logProcess);
       forked.push(process);
       return process;
     },

@@ -5,6 +5,7 @@
  */
 import type { UserThemeEntry } from "@table-craft/desktop/appearance/themes.js";
 import type { Capability, ProbeResult } from "@table-craft/desktop/engine/protocol.js";
+import type { LogRecord } from "@table-craft/desktop/log/record.js";
 import type { Settings } from "@table-craft/desktop/settings/settings.js";
 
 export const CHANNELS = {
@@ -22,6 +23,8 @@ export const CHANNELS = {
   settingsChanged: "table-craft:settings.changed",
   /** Main to a window: it entered or left full screen; the payload is its `WindowState`. */
   windowState: "table-craft:window.state-changed",
+  /** Main to every window: records were written to the log; the payload is a `LogRecord[]`. */
+  logAppended: "table-craft:log.appended",
 } as const;
 
 /** Renderer to main, through `ipcRenderer.invoke`; each answers with an `InvokeResult`. */
@@ -51,6 +54,10 @@ export const INVOKE_CHANNELS = {
   popupMenu: "table-craft:menu.popup",
   windowState: "table-craft:window.state",
   relaunch: "table-craft:app.relaunch",
+  logWrite: "table-craft:log.write",
+  logRead: "table-craft:log.read",
+  logReveal: "table-craft:log.reveal",
+  exportDiagnostics: "table-craft:diagnostics.export",
 } as const;
 
 /** The `window.postMessage` kind preload uses to hand a port on; contextBridge cannot carry one. */
@@ -284,4 +291,13 @@ export interface TableCraftBridge {
   onWindowState(listener: (state: WindowState) => void): () => void;
   /** Quits through the close guard (decision 024) and starts the app again; a refused close stays. */
   relaunch(): Promise<InvokeResult<null>>;
+  /** Hands main a batch of the renderer's records; main sets their process and filters by level (plan 017). */
+  logWrite(records: readonly LogRecord[]): Promise<InvokeResult<null>>;
+  /** The newest records across the log files, newest first. */
+  logRead(): Promise<InvokeResult<readonly LogRecord[]>>;
+  /** Shows the log file in Finder or Explorer. */
+  logReveal(): Promise<InvokeResult<null>>;
+  onLogAppended(listener: (records: readonly LogRecord[]) => void): () => void;
+  /** Asks for a path, then writes the diagnostics zip there; the path written, or null when cancelled. */
+  exportDiagnostics(): Promise<InvokeResult<string | null>>;
 }

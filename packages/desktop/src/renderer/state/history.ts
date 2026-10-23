@@ -5,6 +5,7 @@ import type {
   TableCraftBridge,
 } from "@table-craft/desktop/preload/bridge.js";
 import { bridge } from "@table-craft/desktop/renderer/bridge.js";
+import { rendererLog } from "@table-craft/desktop/renderer/log/log.js";
 import { datasourceById, useDatasources } from "@table-craft/desktop/renderer/state/datasources.js";
 
 /** A history search or clear main could not do; `hint` says what to try. */
@@ -70,5 +71,5 @@ export function createHistoryClient(options: HistoryClientOptions): HistoryClien
 export const history = createHistoryClient({
   bridge,
   isEphemeral: (datasourceId) => datasourceById(useDatasources.getState(), datasourceId)?.ephemeral ?? true,
-  log: (message, cause) => console.error(`TableCraft: ${message}`, cause),
+  log: (message, cause) => rendererLog("history").warn(message, { err: cause }),
 });

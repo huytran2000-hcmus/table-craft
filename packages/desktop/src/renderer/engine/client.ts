@@ -8,19 +8,26 @@ import type {
 } from "@table-craft/desktop/engine/protocol.js";
 import { ENGINE_PORT_WINDOW_MESSAGE, type EnginePortWindowMessage } from "@table-craft/desktop/preload/bridge.js";
 import { bridge } from "@table-craft/desktop/renderer/bridge.js";
+import { rendererLog } from "@table-craft/desktop/renderer/log/log.js";
 
 /** A request the engine answered with `engine.error`, or one that can no longer be answered. */
 export class EngineRequestError extends Error {
   override readonly name = "EngineRequestError";
   readonly code: EngineErrorCode;
   readonly hint: string;
+  /** The id the engine logged the request under (plan 017 decision 6); null when it never reached one. */
+  readonly requestId: number | null;
 
-  constructor(error: EngineError) {
+  constructor(error: EngineError, requestId: number | null = null) {
     super(error.message);
     this.code = error.code;
     this.hint = error.hint;
+    this.requestId = requestId;
   }
 }
+
+/** One counter for the window, so an id names one request across every datasource's log records. */
+let nextRequestId = 1;
 
 export interface EngineClient {
   call<M extends EngineMethod>(type: M, params: EngineCalls[M]["params"]): Promise<ResultOf<M>>;
@@ -35,21 +42,20 @@ interface Pending {
 
 export function clientFor(port: MessagePort): EngineClient {
   const pending = new Map<number, Pending>();
-  let nextId = 1;
   let failure: EngineError | null = null;
 
   port.addEventListener("message", (event: MessageEvent<EngineResponse>) => {
     const response = event.data;
     if (response.id === null) {
-      console.error(
-        `engine rejected an unreadable request: ${response.type === "engine.error" ? response.error.message : ""}`,
-      );
+      rendererLog("engine").error("engine rejected an unreadable request", {
+        error: response.type === "engine.error" ? response.error.message : null,
+      });
       return;
     }
     const waiting = pending.get(response.id);
     if (waiting === undefined) return;
     pending.delete(response.id);
-    if (response.type === "engine.error") waiting.reject(new EngineRequestError(response.error));
+    if (response.type === "engine.error") waiting.reject(new EngineRequestError(response.error, response.id));
     else waiting.resolve(response.result);
   });
   port.start();
@@ -57,7 +63,7 @@ export function clientFor(port: MessagePort): EngineClient {
   return {
     call(type, params) {
       if (failure !== null) return Promise.reject(new EngineRequestError(failure));
-      const id = nextId++;
+      const id = nextRequestId++;
       return new Promise((resolve, reject) => {
         pending.set(id, { resolve, reject });
         port.postMessage({ ...params, id, type });

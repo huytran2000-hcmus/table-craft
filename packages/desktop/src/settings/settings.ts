@@ -67,12 +67,22 @@ export interface ConsoleSettings {
   readonly parameters: boolean;
 }
 
+/** The levels Settings → Advanced offers; `error` and `warn` are always written (plan 017 decision 3). */
+export const LOG_LEVEL_CHOICES = ["info", "debug"] as const;
+export type LogLevelChoice = (typeof LOG_LEVEL_CHOICES)[number];
+
+export interface LogSettings {
+  /** `debug` adds every engine request envelope to the log; applies without a restart. */
+  readonly level: LogLevelChoice;
+}
+
 export interface Settings {
   readonly version: typeof SETTINGS_VERSION;
   readonly appearance: AppearanceSettings;
   readonly editor: EditorSettings;
   readonly console: ConsoleSettings;
   readonly data: DataSettings;
+  readonly log: LogSettings;
 }
 
 export type FontRole = keyof FontSettings;
@@ -114,6 +124,9 @@ export const DEFAULT_SETTINGS: Settings = {
     groupDigits: false,
     pageRows: 500,
     fetchAllCap: 100_000,
+  },
+  log: {
+    level: "info",
   },
 };
 
@@ -212,6 +225,7 @@ export function readSettings(input: unknown): Settings {
   const data = record(root.data);
   const editor = record(root.editor);
   const console = record(root.console);
+  const log = record(root.log);
   const defaults = DEFAULT_SETTINGS;
   const pageRows = inRange(data.pageRows, PAGE_ROWS_RANGE) ? data.pageRows : defaults.data.pageRows;
   const fetchAllCap =
@@ -245,6 +259,11 @@ export function readSettings(input: unknown): Settings {
       groupDigits: typeof data.groupDigits === "boolean" ? data.groupDigits : defaults.data.groupDigits,
       pageRows,
       fetchAllCap,
+    },
+    log: {
+      level: LOG_LEVEL_CHOICES.includes(log.level as LogLevelChoice)
+        ? (log.level as LogLevelChoice)
+        : defaults.log.level,
     },
   };
 }

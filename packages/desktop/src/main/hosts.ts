@@ -6,14 +6,17 @@
  */
 import {
   ENGINE_BOOT_MESSAGE,
+  ENGINE_LOG_MESSAGE,
   ENGINE_PROBED_MESSAGE,
   ENGINE_SHUTDOWN_MESSAGE,
   type DatasourceConfig,
   type EngineBoot,
+  type EngineLog,
   type EngineMode,
   type EngineProbed,
   type ProbeResult,
 } from "@table-craft/desktop/engine/protocol.js";
+import type { Logger } from "@table-craft/desktop/log/record.js";
 
 /** Test Connection gives up after this long and kills the probe engine (plan 004). */
 export const PROBE_TIMEOUT_MS = 15_000;
@@ -22,6 +25,8 @@ export const SHUTDOWN_GRACE_MS = 3_000;
 const MS_PER_SECOND = 1_000;
 const SERVICE_NAME_PREFIX = "table-craft-engine-";
 const PROBE_SERVICE_NAME_PREFIX = "table-craft-probe-";
+const ENGINE_LOG_PROCESS = "engine:";
+const PROBE_LOG_PROCESS = "probe:";
 
 /** The slice of Electron's `UtilityProcess` the registry uses. */
 export interface EngineProcess {
@@ -32,7 +37,8 @@ export interface EngineProcess {
 }
 
 export interface HostDependencies<Target> {
-  fork(serviceName: string): EngineProcess;
+  /** `logProcess` names the process in the log, `engine:<id>` or `probe:<id>` (plan 017). */
+  fork(serviceName: string, logProcess: string): EngineProcess;
   /** Hands one end of a fresh channel to `host` and the other, tagged with the datasource, to `target`. */
   connectPort(host: EngineProcess, datasourceId: string, target: Target): void;
   setTimeout(run: () => void, ms: number): unknown;
@@ -45,6 +51,17 @@ export interface HostRegistryOptions<Target> {
   /** `clean` is false when the engine died without being asked to, which the tree shows as failed. */
   readonly onExit: (datasourceId: string, code: number, clean: boolean) => void;
   readonly probeTimeoutMs?: number;
+  readonly log?: HostLog;
+  readonly now?: () => number;
+}
+
+/** How the registry reaches main's log (plan 017 decisions 7 and 9). */
+export interface HostLog {
+  readonly logger: Logger;
+  /** A record an engine posted, with the process it came from. */
+  forward(record: unknown, process: string): void;
+  /** Called with every config before it leaves for an engine, so its secrets are redacted from then on. */
+  protect(datasource: DatasourceConfig): void;
 }
 
 export interface HostRegistry<Target> {
@@ -72,18 +89,39 @@ function isProbed(message: unknown): message is EngineProbed {
   return (message as { kind?: unknown } | null)?.kind === ENGINE_PROBED_MESSAGE;
 }
 
+function isEngineLog(message: unknown): message is EngineLog {
+  return (message as { kind?: unknown } | null)?.kind === ENGINE_LOG_MESSAGE;
+}
+
 export function createHostRegistry<Target>(options: HostRegistryOptions<Target>): HostRegistry<Target> {
   const { dependencies } = options;
   const hosts = new Map<string, RunningHost>();
   const probeTimeoutMs = options.probeTimeoutMs ?? PROBE_TIMEOUT_MS;
+  const now = options.now ?? Date.now;
+  const log = options.log?.logger.child("engine");
+
+  function fork(serviceName: string, logProcess: string): EngineProcess {
+    const process = dependencies.fork(serviceName, logProcess);
+    process.on("message", (message) => {
+      if (isEngineLog(message)) options.log?.forward(message.record, logProcess);
+    });
+    return process;
+  }
 
   function spawn(datasource: DatasourceConfig): RunningHost {
-    const process = dependencies.fork(`${SERVICE_NAME_PREFIX}${datasource.id}`);
+    const startedAt = now();
+    const fields = { datasourceId: datasource.id, pluginId: datasource.pluginId };
+    const process = fork(`${SERVICE_NAME_PREFIX}${datasource.id}`, `${ENGINE_LOG_PROCESS}${datasource.id}`);
+    log?.info("engine host started", fields);
     let host: RunningHost | null = null;
     const exited = new Promise<void>((resolve) => {
       process.once("exit", (code) => {
         if (hosts.get(datasource.id) === host) hosts.delete(datasource.id);
-        options.onExit(datasource.id, code, host?.stopping === true || code === 0);
+        const clean = host?.stopping === true || code === 0;
+        const exit = { ...fields, code, clean, uptimeMs: now() - startedAt };
+        if (clean) log?.info("engine host exited", exit);
+        else log?.warn("engine host exited unexpectedly", exit);
+        options.onExit(datasource.id, code, clean);
         resolve();
       });
     });
@@ -104,13 +142,25 @@ export function createHostRegistry<Target>(options: HostRegistryOptions<Target>)
   }
 
   function probe(datasource: DatasourceConfig): Promise<ProbeResult> {
-    const process = dependencies.fork(`${PROBE_SERVICE_NAME_PREFIX}${datasource.id}`);
+    options.log?.protect(datasource);
+    const startedAt = now();
+    const fields = { datasourceId: datasource.id, pluginId: datasource.pluginId };
+    const process = fork(`${PROBE_SERVICE_NAME_PREFIX}${datasource.id}`, `${PROBE_LOG_PROCESS}${datasource.id}`);
     return new Promise((resolve) => {
       let settled = false;
       const settle = (result: ProbeResult): void => {
         if (settled) return;
         settled = true;
         dependencies.clearTimeout(timer);
+        const elapsedMs = now() - startedAt;
+        if (result.ok) log?.info("test connection succeeded", { ...fields, elapsedMs });
+        else
+          log?.warn("test connection failed", {
+            ...fields,
+            elapsedMs,
+            code: result.error.code,
+            error: result.error.message,
+          });
         resolve(result);
       };
       const timer = dependencies.setTimeout(() => {
@@ -143,6 +193,7 @@ export function createHostRegistry<Target>(options: HostRegistryOptions<Target>)
 
   return {
     open(datasource, target) {
+      options.log?.protect(datasource);
       const host = hosts.get(datasource.id) ?? spawn(datasource);
       dependencies.connectPort(host.process, datasource.id, target);
     },

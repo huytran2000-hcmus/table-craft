@@ -29,6 +29,7 @@ const CHOSEN: Settings = {
   editor: { format: { keywordCase: "lower", indentWidth: 4, linesBetweenStatements: 0 } },
   console: { parameters: false },
   data: { nullText: "∅", groupDigits: true, pageRows: 100, fetchAllCap: 2_000 },
+  log: { level: "debug" },
 };
 
 function store(files = memoryFiles()) {
@@ -73,6 +74,13 @@ describe("settings store", () => {
     expect(loaded.settings).toEqual(DEFAULT_SETTINGS);
     expect(loaded.warning).toContain("version");
     expect(files.contents.get(`${PATH}.corrupt-${String(NOW)}`)).toBe(newer);
+  });
+
+  it("givenUnknownLogLevel_whenLoaded_thenInfo", async () => {
+    const file = { ...CHOSEN, log: { level: "trace" } };
+    const { store: loading } = store(memoryFiles({ [PATH]: JSON.stringify(file) }));
+
+    expect((await loading.load()).settings.log).toEqual({ level: "info" });
   });
 
   it("givenOneOutOfRangeField_whenLoaded_thenOnlyThatFieldFallsBack", async () => {

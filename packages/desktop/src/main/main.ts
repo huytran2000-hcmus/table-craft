@@ -1,6 +1,9 @@
 import { randomUUID } from "node:crypto";
+import { existsSync } from "node:fs";
 import { mkdir, readdir, readFile, rename, rm, writeFile } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { release } from "node:os";
+import { basename, dirname, join } from "node:path";
+import { createInterface } from "node:readline";
 import {
   app,
   BrowserWindow,
@@ -10,6 +13,7 @@ import {
   MessageChannelMain,
   nativeTheme,
   safeStorage,
+  screen,
   shell,
   utilityProcess,
   type OpenDialogOptions,
@@ -17,7 +21,7 @@ import {
   type UtilityProcess,
   type WebContents,
 } from "electron";
-import { openQueryHistory } from "@table-craft/core";
+import { openQueryHistory, type HistoryRun } from "@table-craft/core";
 import { windowChrome } from "@table-craft/desktop/main/chrome.js";
 import { createCloseGuard } from "@table-craft/desktop/main/closeGuard.js";
 import { createConsoleFiles, type DirectoryFileSystem } from "@table-craft/desktop/main/consoleFiles.js";
@@ -25,25 +29,40 @@ import { datasourceFromEnvironment } from "@table-craft/desktop/main/datasource.
 import { createDatasourceStore } from "@table-craft/desktop/main/datasources.js";
 import { createHostRegistry, type EngineProcess } from "@table-craft/desktop/main/hosts.js";
 import { registerIpc } from "@table-craft/desktop/main/ipc.js";
+import {
+  DIAGNOSTICS_HISTORY_RUNS,
+  diagnosticsEntries,
+  diagnosticsFileName,
+} from "@table-craft/desktop/main/log/diagnostics.js";
+import { createLogHub } from "@table-craft/desktop/main/log/hub.js";
+import { readLogFile, readRecent } from "@table-craft/desktop/main/log/read.js";
+import { createRedactor, isSecretKey } from "@table-craft/desktop/main/log/redact.js";
+import { readLogRecord } from "@table-craft/desktop/main/log/schema.js";
+import { createLogWriter, LOG_DIRECTORY, nodeLogFiles } from "@table-craft/desktop/main/log/writer.js";
+import { zip } from "@table-craft/desktop/main/log/zip.js";
 import { installApplicationMenu } from "@table-craft/desktop/main/menu.js";
 import { createLoneAlt, menuButtonAnchor, popupApplicationMenu } from "@table-craft/desktop/main/menuPopup.js";
 import { appPaths } from "@table-craft/desktop/main/paths.js";
-import { listPlugins } from "@table-craft/desktop/main/plugins.js";
-import { createSecretStore, type Cipher } from "@table-craft/desktop/main/secrets.js";
+import { discoverInstalled, type PluginReport } from "@table-craft/desktop/main/plugins.js";
+import { createSecretStore, type Cipher, type SecretStore } from "@table-craft/desktop/main/secrets.js";
 import { createDatasourceService } from "@table-craft/desktop/main/service.js";
 import {
   createSettingsService,
   createSettingsStore,
+  SETTINGS_FILE,
   type SettingsService,
 } from "@table-craft/desktop/main/settings.js";
 import { createThemeFolder } from "@table-craft/desktop/main/themes.js";
 import { DENSITIES, resolveTheme, type DensityTokens, type Theme } from "@table-craft/desktop/appearance/themes.js";
-import { ENGINE_PORT_MESSAGE } from "@table-craft/desktop/engine/protocol.js";
+import { ENGINE_PORT_MESSAGE, type DatasourceConfig } from "@table-craft/desktop/engine/protocol.js";
+import { DEFAULT_LOG_LEVEL, enabled, LOG_READ_LIMIT, type LogRecord } from "@table-craft/desktop/log/record.js";
 import {
   CHANNELS,
   type AppInfo,
+  type Datasource,
   type DatasourceList,
   type EngineExited,
+  type PluginInfo,
   type SettingsChanged,
   type WindowState,
 } from "@table-craft/desktop/preload/bridge.js";
@@ -58,8 +77,13 @@ const USER_DATA = "userData";
 const APP_DATA = "appData";
 /** A test seam: a fresh profile per launch, so layout, datasources and plugins never leak between smoke runs. */
 const USER_DATA_ENV = "TABLE_CRAFT_USER_DATA";
-/** stdout and stderr inherit the app's, so engine output reaches the terminal that launched it. */
-const HOST_STDIO = "inherit";
+/** Piped, so engine output reaches the log (plan 017 decision 9); mirrored to the terminal when unpackaged. */
+const HOST_STDIO = "pipe";
+const MAIN_PROCESS = "main";
+const STDIO_SCOPE = "stdio";
+/** What the terminal mirror prints: warnings and errors, so `bun run desktop` shows what it did before the log. */
+const MIRROR_LEVEL = "warn";
+const DIAGNOSTICS_TITLE = "Export Diagnostics";
 const UTF8 = "utf8";
 const MISSING_FILE = "ENOENT";
 const CIPHER_ENCODING = "base64";
@@ -76,6 +100,86 @@ const MAC_PLATFORM = "darwin";
 // this, userData and so the user plugin root would be `Electron`.
 app.setName(APP_NAME);
 app.setPath(USER_DATA, process.env[USER_DATA_ENV] || join(app.getPath(APP_DATA), USER_DATA_DIRECTORY));
+
+let settingsService: SettingsService | null = null;
+let installedPlugins: readonly PluginInfo[] = [];
+
+function mirrorToTerminal(record: LogRecord): void {
+  if (!enabled(record.level, MIRROR_LEVEL)) return;
+  const { ts: _ts, level, process: from, scope, msg, err, ...fields } = record;
+  console.error(`TableCraft ${level} [${from}/${scope}] ${msg}`, fields, err?.stack ?? err?.message ?? "");
+}
+
+/** Main's one log (plan 017, decision 038); built first so a failure at launch is already written. */
+const logHub = createLogHub({
+  writer: createLogWriter({
+    directory: join(app.getPath(USER_DATA), LOG_DIRECTORY),
+    files: nodeLogFiles,
+    onFailure: (cause) => console.error("TableCraft: the log could not be written; it is off until restart.", cause),
+  }),
+  redactor: createRedactor(),
+  level: () => settingsService?.snapshot().settings.log.level ?? DEFAULT_LOG_LEVEL,
+  ...(app.isPackaged ? {} : { mirror: mirrorToTerminal }),
+});
+const mainLog = logHub.logger(MAIN_PROCESS);
+const engineLog = mainLog.child("engine");
+
+process.on("uncaughtException", (cause) => mainLog.error("uncaught exception", { err: cause }));
+process.on("unhandledRejection", (cause) => mainLog.error("unhandled rejection", { err: cause }));
+app.on("render-process-gone", (_event, contents, details) => {
+  mainLog
+    .child("window")
+    .error("renderer gone", { reason: details.reason, exitCode: details.exitCode, url: basename(contents.getURL()) });
+});
+app.on("child-process-gone", (_event, details) => {
+  engineLog.warn("child process gone", {
+    type: details.type,
+    reason: details.reason,
+    exitCode: details.exitCode,
+    serviceName: details.serviceName ?? null,
+  });
+});
+
+/** Every secret a config carries is redacted from the log from now on (plan 017 decision 5). */
+function protectConfig(datasource: DatasourceConfig): void {
+  const config = typeof datasource.config === "object" && datasource.config !== null ? datasource.config : {};
+  const fields = installedPlugins.find((plugin) => plugin.id === datasource.pluginId)?.fields ?? [];
+  const secret = new Set(
+    fields.filter((field) => field.secret === true || field.kind === "password").map((f) => f.key),
+  );
+  for (const [key, value] of Object.entries(config)) {
+    if (typeof value === "string" && (secret.has(key) || isSecretKey(key))) logHub.redactor.remember(value);
+  }
+}
+
+/** The store, with every value it hands out or takes in remembered by the redactor. */
+function protectedSecrets(store: SecretStore): SecretStore {
+  return {
+    ...store,
+    set(datasourceId, key, mode, value) {
+      logHub.redactor.remember(value);
+      return store.set(datasourceId, key, mode, value);
+    },
+    get(datasourceId, key, mode) {
+      const value = store.get(datasourceId, key, mode);
+      if (value !== undefined) logHub.redactor.remember(value);
+      return value;
+    },
+  };
+}
+
+function captureStdio(host: UtilityProcess, logProcess: string): void {
+  const stdio = logHub.logger(logProcess).child(STDIO_SCOPE);
+  const streams = [
+    [host.stdout, "info", process.stdout],
+    [host.stderr, "warn", process.stderr],
+  ] as const;
+  for (const [stream, level, terminal] of streams) {
+    if (stream === null) continue;
+    if (!app.isPackaged) stream.pipe(terminal);
+    createInterface({ input: stream }).on("line", (line) => stdio[level](line));
+  }
+}
 
 const ephemeral = datasourceFromEnvironment(process.env);
 
@@ -124,7 +228,10 @@ const cipher: Cipher = {
   decrypt: (cipherText) => safeStorage.decryptString(Buffer.from(cipherText, CIPHER_ENCODING)),
 };
 
-function broadcast(channel: string, payload: DatasourceList | EngineExited | SettingsChanged): void {
+function broadcast(
+  channel: string,
+  payload: DatasourceList | EngineExited | SettingsChanged | readonly LogRecord[],
+): void {
   for (const window of BrowserWindow.getAllWindows()) window.webContents.send(channel, payload);
 }
 
@@ -133,8 +240,9 @@ const pluginRoots = [paths.builtInPlugins, join(app.getPath(USER_DATA), USER_PLU
 const hosts = createHostRegistry<WebContents>({
   pluginRoots,
   dependencies: {
-    fork: (serviceName): EngineProcess => {
+    fork: (serviceName, logProcess): EngineProcess => {
       const host: UtilityProcess = utilityProcess.fork(paths.engineEntry, [], { serviceName, stdio: HOST_STDIO });
+      captureStdio(host, logProcess);
       return host;
     },
     connectPort(host, datasourceId, contents) {
@@ -146,6 +254,14 @@ const hosts = createHostRegistry<WebContents>({
     clearTimeout: (timer) => clearTimeout(timer as NodeJS.Timeout),
   },
   onExit: (datasourceId, code, clean) => broadcast(CHANNELS.engineExited, { datasourceId, code, clean }),
+  log: {
+    logger: mainLog,
+    forward(record, process) {
+      const read = readLogRecord(record, process);
+      if (read !== null) logHub.write(read);
+    },
+    protect: protectConfig,
+  },
 });
 
 const closeGuard = createCloseGuard<BrowserWindow>({ quit: () => app.quit() });
@@ -251,23 +367,116 @@ async function chooseFile(contents: WebContents, title: string): Promise<string 
   return picked.canceled ? null : (picked.filePaths[0] ?? null);
 }
 
+function logPlugins(report: readonly PluginReport[]): void {
+  const plugins = mainLog.child("plugins");
+  for (const plugin of report) {
+    if (plugin.status === "available") plugins.info("plugin found", { ...plugin });
+    else plugins.warn("plugin unavailable", { ...plugin });
+  }
+}
+
+/** Pushes written records to every window's Log tool window, one message per turn rather than per record. */
+function forwardAppendedRecords(): void {
+  let pending: LogRecord[] = [];
+  logHub.subscribe((record) => {
+    if (pending.length === 0) {
+      setImmediate(() => {
+        const batch = pending;
+        pending = [];
+        broadcast(CHANNELS.logAppended, batch);
+      });
+    }
+    pending.push(record);
+  });
+}
+
+function aboutReport(plugins: readonly PluginReport[]): unknown {
+  return {
+    ...appInfo,
+    node: process.versions.node,
+    platform: process.platform,
+    osRelease: release(),
+    arch: process.arch,
+    locale: app.getLocale(),
+    packaged: app.isPackaged,
+    plugins,
+    displays: screen.getAllDisplays().map((display) => ({
+      width: display.size.width,
+      height: display.size.height,
+      scaleFactor: display.scaleFactor,
+    })),
+    generatedAt: new Date().toISOString(),
+  };
+}
+
+interface DiagnosticsInputs {
+  readonly about: () => unknown;
+  readonly settingsPath: string;
+  readonly datasources: () => readonly Datasource[];
+  readonly runs: () => readonly HistoryRun[];
+}
+
+/** Help → Export Diagnostics (plan 017 decision 10): the path written, or null when the dialog was cancelled. */
+async function exportDiagnostics(sender: WebContents, inputs: DiagnosticsInputs): Promise<string | null> {
+  const log = mainLog.child("diagnostics");
+  const path = await saveFile(sender, DIAGNOSTICS_TITLE, diagnosticsFileName(new Date()));
+  if (path === null) return null;
+  log.info("diagnostics export started");
+  await logHub.writer.drain();
+  const logs = [];
+  for (const file of [...logHub.writer.paths].reverse()) {
+    const text = await readLogFile(file);
+    if (text !== null) logs.push({ name: basename(file), text });
+  }
+  const entries = diagnosticsEntries({
+    logs,
+    about: inputs.about(),
+    settings: await files.readText(inputs.settingsPath),
+    datasources: inputs.datasources(),
+    plugins: installedPlugins,
+    runs: inputs.runs(),
+    redactor: logHub.redactor,
+  });
+  const archive = zip(entries, new Date());
+  await writeFile(path, archive);
+  log.info("diagnostics exported", { path, bytes: archive.length, entries: entries.map((entry) => entry.name) });
+  return path;
+}
+
 void app.whenReady().then(async () => {
   app.setAboutPanelOptions({ applicationName: APP_NAME, applicationVersion: appVersion });
   if (process.platform === MAC_PLATFORM && !app.isPackaged) app.dock?.setIcon(paths.icon);
   const directory = app.getPath(USER_DATA);
   const consoles = createConsoleFiles({ directory, files });
   await mkdir(directory, { recursive: true });
+  mainLog.info("TableCraft started", {
+    version: appVersion,
+    electron: process.versions.electron,
+    chrome: process.versions.chrome,
+    node: process.versions.node,
+    platform: process.platform,
+    osRelease: release(),
+    arch: process.arch,
+    locale: app.getLocale(),
+    packaged: app.isPackaged,
+    userData: directory,
+  });
   const history = openQueryHistory(join(directory, HISTORY_FILE));
   if (history.recoveredFrom !== null) {
-    console.error(`TableCraft: ${HISTORY_FILE} could not be read; it was moved to ${history.recoveredFrom}`);
+    mainLog
+      .child("history")
+      .warn("history file unreadable; moved aside", { file: HISTORY_FILE, movedTo: history.recoveredFrom });
   }
   app.on("will-quit", () => history.close());
+  const installed = await discoverInstalled(pluginRoots);
+  installedPlugins = installed.plugins;
+  logPlugins(installed.report);
   // safeStorage answers only once the app is ready.
   const service = await createDatasourceService<WebContents>({
     store: createDatasourceStore({ directory, files }),
-    secrets: await createSecretStore({ directory, files, cipher }),
+    secrets: protectedSecrets(await createSecretStore({ directory, files, cipher })),
     hosts,
-    plugins: await listPlugins(pluginRoots),
+    plugins: installed.plugins,
     ephemeral,
     newId: randomUUID,
     consoles,
@@ -283,7 +492,13 @@ void app.whenReady().then(async () => {
       broadcast(CHANNELS.settingsChanged, changed);
     },
   });
-  if (settings.snapshot().warning !== null) console.error(`TableCraft: ${String(settings.snapshot().warning)}`);
+  settingsService = settings;
+  const settingsWarning = settings.snapshot().warning;
+  if (settingsWarning !== null) mainLog.child("settings").warn("settings file set aside", { warning: settingsWarning });
+  const datasourcesWarning = service.list().warning;
+  if (datasourcesWarning !== null)
+    mainLog.child("datasources").warn("datasources file set aside", { warning: datasourcesWarning });
+  forwardAppendedRecords();
   nativeTheme.on("updated", () => {
     if (settings.snapshot().settings.appearance.theme === "system") applyWindowAppearance(settings);
   });
@@ -317,7 +532,28 @@ void app.whenReady().then(async () => {
       relaunchRequested = true;
       app.quit();
     },
-    log: (message, cause) => console.error(`TableCraft: ${message}`, cause),
+    log: mainLog.child("ipc"),
+    logs: {
+      write: (records) => {
+        for (const record of records) logHub.write(record);
+      },
+      async read() {
+        await logHub.writer.drain();
+        return readRecent(logHub.writer.paths, LOG_READ_LIMIT);
+      },
+      reveal() {
+        const [current] = logHub.writer.paths;
+        if (current !== undefined && existsSync(current)) shell.showItemInFolder(current);
+        else void shell.openPath(logHub.writer.directory);
+      },
+      exportDiagnostics: (sender) =>
+        exportDiagnostics(sender, {
+          about: () => aboutReport(installed.report),
+          settingsPath: join(directory, SETTINGS_FILE),
+          datasources: () => service.list().datasources,
+          runs: () => history.recentRuns(DIAGNOSTICS_HISTORY_RUNS),
+        }),
+    },
   });
   installApplicationMenu(() => BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0] ?? null);
   createWindow(settings);

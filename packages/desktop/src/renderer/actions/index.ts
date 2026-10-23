@@ -2,6 +2,8 @@ import { useSyncExternalStore } from "react";
 import { ALL_ACTIONS } from "@table-craft/desktop/renderer/actions/allActions.js";
 import { currentContext } from "@table-craft/desktop/renderer/actions/context.js";
 import { createActionRegistry, type InvokeOutcome } from "@table-craft/desktop/renderer/actions/registry.js";
+import { EngineRequestError } from "@table-craft/desktop/renderer/engine/client.js";
+import { rendererLog } from "@table-craft/desktop/renderer/log/log.js";
 import { useCatalog } from "@table-craft/desktop/renderer/state/catalog.js";
 import { useConsoles } from "@table-craft/desktop/renderer/state/consoles.js";
 import { useDataSourcesDialog } from "@table-craft/desktop/renderer/state/dataSourcesDialog.js";
@@ -16,7 +18,8 @@ import { useWindowState } from "@table-craft/desktop/renderer/state/windowState.
 
 /** The app's one registry. Everything that runs a command goes through `invoke` (decision 015). */
 export const registry = createActionRegistry(currentContext, (id, cause) => {
-  console.error(`Action "${id}" failed.`, cause);
+  const requestId = cause instanceof EngineRequestError ? cause.requestId : null;
+  rendererLog("action").error("action failed", { actionId: id, requestId, err: cause });
 });
 registry.register(ALL_ACTIONS);
 

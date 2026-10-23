@@ -12,6 +12,7 @@ import {
   type TableCraftBridge,
   type WindowState,
 } from "@table-craft/desktop/preload/bridge.js";
+import type { LogRecord } from "@table-craft/desktop/log/record.js";
 
 /** Structural, because this program has no DOM lib and preload is the one place that needs it. */
 interface TransferringWindow {
@@ -77,6 +78,11 @@ const bridge: TableCraftBridge = {
   windowState: () => invoke(INVOKE_CHANNELS.windowState),
   onWindowState: (listener) => subscribe<WindowState>(CHANNELS.windowState, listener),
   relaunch: () => invoke(INVOKE_CHANNELS.relaunch),
+  logWrite: (records) => invoke(INVOKE_CHANNELS.logWrite, records),
+  logRead: () => invoke(INVOKE_CHANNELS.logRead),
+  logReveal: () => invoke(INVOKE_CHANNELS.logReveal),
+  onLogAppended: (listener) => subscribe<readonly LogRecord[]>(CHANNELS.logAppended, listener),
+  exportDiagnostics: () => invoke(INVOKE_CHANNELS.exportDiagnostics),
 };
 
 contextBridge.exposeInMainWorld(BRIDGE_KEY, bridge);

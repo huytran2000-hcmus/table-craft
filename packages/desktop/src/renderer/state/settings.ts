@@ -14,6 +14,7 @@ import type {
   TableCraftBridge,
 } from "@table-craft/desktop/preload/bridge.js";
 import { bridge } from "@table-craft/desktop/renderer/bridge.js";
+import { rendererLog } from "@table-craft/desktop/renderer/log/log.js";
 import type { CellFormats } from "@table-craft/desktop/renderer/grid/format.js";
 import { DEFAULT_SETTINGS, type Settings } from "@table-craft/desktop/settings/settings.js";
 
@@ -120,7 +121,7 @@ export type SettingsStore = ReturnType<typeof createSettingsStore>;
 
 export const useSettings = createSettingsStore({
   bridge,
-  log: (message, cause) => console.error(`TableCraft: ${message}`, cause),
+  log: (message, cause) => rendererLog("settings").warn(message, { err: cause }),
 });
 
 /** The theme the settings choose, made concrete for the system appearance and the user themes. */
