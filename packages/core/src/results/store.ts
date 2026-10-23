@@ -1,6 +1,18 @@
 import type { Column, ExecuteResult, Row } from "@table-craft/plugin-api";
 import { CoreError } from "@table-craft/core/errors.js";
 import { compareValues, inferredTypeClass, typeClass, type TypeClass } from "@table-craft/core/results/compare.js";
+import {
+  computeView,
+  matchesIn,
+  nextMatch,
+  viewActive,
+  viewState,
+  type CellPosition,
+  type ComputedView,
+  type FoundMatch,
+  type ViewSpec,
+  type ViewState,
+} from "@table-craft/core/results/view.js";
 
 /** Rows per window the grid requests; desktop's protocol pins the same value (decision 009). */
 export const RESULT_WINDOW_ROWS = 500;
@@ -31,6 +43,8 @@ export interface ResultSummary extends ResultState {
 export interface ResultWindow {
   readonly offset: number;
   readonly rows: readonly Row[];
+  /** With a find query set: the matched cells in these rows as flat `row, column` pairs (decision 050). */
+  readonly matches?: readonly number[];
 }
 
 export type SortDirection = "asc" | "desc";
@@ -66,6 +80,10 @@ interface StoredResult {
   keys: readonly SortKey[];
   /** Positions in `rows` in sorted order; null when unsorted or stale after a fetch. */
   order: number[] | null;
+  /** The find query and local filters the grid set; null shows every held row. */
+  spec: ViewSpec | null;
+  /** `spec` applied to the rows; null when there is none or it is stale after a fetch or sort. */
+  view: ComputedView | null;
   /** The fetch in flight, so fetches on one handle run one after another. */
   fetching: Promise<unknown>;
   /** Raised by `stopFetch` and `closeCursor`; the running fetch checks it between rows. */
@@ -118,6 +136,8 @@ export class ResultStore {
       complete: false,
       keys: [],
       order: null,
+      spec: null,
+      view: null,
       fetching: Promise.resolve(),
       stopRequested: false,
     };
@@ -195,22 +215,72 @@ export class ResultStore {
     }
     stored.keys = keys;
     stored.order = null;
+    stored.view = null;
     return stateOf(stored);
   }
 
-  /** At most `RESULT_WINDOW_ROWS` rows from `offset` in the current sort order. */
+  /**
+   * Sets the find query and local filters every later window, copy and visible-only export sees
+   * (decision 050); null clears them. Recomputed after each fetch and sort.
+   */
+  setView(handle: ResultHandle, spec: ViewSpec | null): ViewState {
+    const stored = this.#stored(handle);
+    const columns = stored.columns.length;
+    const outside = [...(spec?.columns ?? []), ...(spec?.filters ?? []).map((chip) => chip.column)].find(
+      (column) => !Number.isInteger(column) || column < 0 || column >= columns,
+    );
+    if (outside !== undefined) {
+      throw new CoreError(
+        "invalidRequest",
+        `Column ${String(outside)} is outside this result's ${String(columns)} columns.`,
+        "Search and filter the columns the result has.",
+      );
+    }
+    stored.spec = viewActive(spec) ? spec : null;
+    stored.view = null;
+    return this.viewState(handle);
+  }
+
+  /** What the current view shows; every held row when no view is set. */
+  viewState(handle: ResultHandle): ViewState {
+    const stored = this.#stored(handle);
+    const view = this.#view(stored);
+    if (view === null) return { shown: stored.rows.length, filtered: false, sources: null, matches: 0, error: null };
+    return viewState(view, stored.rows.length);
+  }
+
+  /** The match after (or before) `from` in the current view, wrapping; null when nothing matches. */
+  findMatch(handle: ResultHandle, from: CellPosition | null, backward: boolean): FoundMatch | null {
+    const view = this.#view(this.#stored(handle));
+    return view === null ? null : nextMatch(view, from, backward);
+  }
+
+  /** At most `RESULT_WINDOW_ROWS` rows from `offset` in the current sort order and view. */
   window(handle: ResultHandle, offset: number, limit: number = RESULT_WINDOW_ROWS): ResultWindow {
     const stored = this.#stored(handle);
     const start = Math.max(0, offset);
     const count = Math.max(0, Math.min(limit, RESULT_WINDOW_ROWS));
-    if (stored.keys.length === 0) return { offset: start, rows: stored.rows.slice(start, start + count) };
-    const order = this.#order(stored).slice(start, start + count);
-    return { offset: start, rows: order.map((index) => stored.rows[index] as Row) };
+    const view = this.#view(stored);
+    const positions = view?.sources ?? (stored.keys.length === 0 ? null : this.#order(stored));
+    const rows =
+      positions === null
+        ? stored.rows.slice(start, start + count)
+        : positions.slice(start, start + count).map((index) => stored.rows[index] as Row);
+    if (view === null || stored.spec === null || stored.spec.find === null) return { offset: start, rows };
+    return { offset: start, rows, matches: matchesIn(view, start, rows.length) };
   }
 
-  /** Every held row in the current sort order, for copy and export. */
+  /** Every held row in the current sort order, for edits, conditions and a whole-result export. */
   rows(handle: ResultHandle): readonly Row[] {
     return this.#ordered(this.#stored(handle));
+  }
+
+  /** The rows the current view shows, in its order: what copy and a visible-only export read. */
+  shownRows(handle: ResultHandle): readonly Row[] {
+    const stored = this.#stored(handle);
+    const sources = this.#view(stored)?.sources ?? null;
+    if (sources === null) return this.#ordered(stored);
+    return sources.map((index) => stored.rows[index] as Row);
   }
 
   columns(handle: ResultHandle): readonly Column[] {
@@ -274,6 +344,17 @@ export class ResultStore {
     return stored.order;
   }
 
+  #view(stored: StoredResult): ComputedView | null {
+    if (stored.spec === null) return null;
+    stored.view ??= computeView(
+      stored.rows,
+      stored.keys.length === 0 ? null : this.#order(stored),
+      stored.classes,
+      stored.spec,
+    );
+    return stored.view;
+  }
+
   #ordered(stored: StoredResult): readonly Row[] {
     if (stored.keys.length === 0) return stored.rows;
     return this.#order(stored).map((index) => stored.rows[index] as Row);
@@ -297,6 +378,7 @@ export class ResultStore {
       rows.push(next.value);
     }
     stored.order = null;
+    stored.view = null;
     if (stored.iterator === null || stored.lookahead !== null || stored.stopRequested) return;
     const next = await stored.iterator.next();
     if (next.done === true) {

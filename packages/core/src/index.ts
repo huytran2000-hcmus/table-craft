@@ -63,6 +63,19 @@ export {
   type SortDirection,
   type SortKey,
 } from "./results/store.js";
+export {
+  computeView,
+  displayText,
+  findMatcher,
+  type CellPosition,
+  type DisplayFormats,
+  type FilterChip,
+  type FilterOp,
+  type FindQuery,
+  type FoundMatch,
+  type ViewSpec,
+  type ViewState,
+} from "./results/view.js";
 export { loadedPlugin, openSession } from "./sessions/open.js";
 export {
   EXTRACTOR_KINDS,
