@@ -148,6 +148,19 @@ folder, comment, the plugin's connection fields, read-only mode and a colour tha
 save mode: _Forever_ keeps it encrypted by the operating system's keychain, _Until restart_ keeps it
 in memory, and _Never_ asks on every connect.
 
+Paste a connection URL such as `postgresql://alice:secret@db.example.com:5432/sales?sslmode=require`
+into the URL row, or into Host, and the fields fill themselves; the password goes to its save mode,
+never to `datasources.json`. A SQLite file takes a path or a `sqlite:` URL. **Copy as URL** in a data
+source's context menu copies its URL without the password.
+
+Sessions stay healthy on their own. Every connection uses TCP keepalive (30 s by default, under
+Advanced). A console idle that long checks its session before the next Run and reconnects if the
+connection dropped, saying so in Output; a statement running when the network goes away fails
+within one keepalive interval instead of hanging. A **statement timeout** (Settings → Editor →
+Running, or per data source under Advanced) cancels a console statement that runs too long. An
+open transaction is never replaced silently: if its connection drops, the error says its changes
+are gone.
+
 ![Connections](docs/media/connections.gif)
 
 See [Datasources and secrets](docs/design/specification.md#datasources-and-secrets).

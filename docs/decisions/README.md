@@ -57,3 +57,5 @@ started, not when it is merged.
 | 044 | [The app signs its own updates](044-the-app-signs-its-own-updates.md)                                                                                                  |
 | 045 | [The update lives in the main toolbar, before Settings](045-the-update-lives-in-the-main-toolbar-before-settings.md)                                                   |
 | 048 | [The current namespace comes from the console](048-the-current-namespace-comes-from-the-console.md)                                                                    |
+| 054 | [The engine keeps sessions alive, times statements out and reconnects](054-the-engine-keeps-sessions-alive-times-statements-out-and-reconnects.md)                     |
+| 055 | [Connection URLs are manifest data](055-connection-urls-are-manifest-data.md)                                                                                          |
