@@ -1,0 +1,168 @@
+import { describe, expect, it } from "vitest";
+import { PluginError, type DatasourcePlugin, type SqlLanguage, type StatementClass } from "@table-craft/plugin-api";
+import type { PluginLoadResult } from "@table-craft/core";
+import sqlite from "@table-craft/plugin-sqlite";
+import { createEngine } from "@table-craft/desktop/engine/engine.js";
+import type {
+  EngineResponse,
+  ExecutedStatement,
+  OpenedSession,
+  TransactionState,
+} from "@table-craft/desktop/engine/protocol.js";
+import { RESULT_FETCH_ALL_CAP, RESULT_PAGE_ROWS } from "@table-craft/desktop/engine/protocol.js";
+import { fakeManifest } from "../support/manifests.js";
+
+const PLUGIN_ID = "switching";
+const PAGING = { pageRows: RESULT_PAGE_ROWS, fetchAllCap: RESULT_FETCH_ALL_CAP };
+const USE = /^USE\s+(\w+)$/i;
+const KNOWN = new Set(["main", "archive"]);
+
+/**
+ * SQLite with a pretend `USE`: the switch is held in the fake, which counts how often the engine
+ * asks for it, so the tests see when the engine reads and what it reports.
+ */
+function switchingPlugin(options: { failRead?: boolean } = {}) {
+  let current: readonly string[] = ["main"];
+  let reads = 0;
+  const base = sqlite.language as SqlLanguage;
+  const language: SqlLanguage = {
+    ...base,
+    classify: (sql): StatementClass =>
+      USE.test(sql.trim()) ? { kind: "other", destructive: null, setsNamespace: true } : base.classify(sql),
+  };
+  const plugin: DatasourcePlugin = {
+    ...sqlite,
+    id: PLUGIN_ID,
+    capabilities: ["sql", "transactions", "currentNamespace"],
+    language,
+    connect: async (config, connectOptions) => {
+      const session = await sqlite.connect(config, connectOptions);
+      return {
+        execute: (sql, params) => {
+          const target = USE.exec(sql.trim())?.[1];
+          if (target === undefined) return session.execute(sql, params);
+          if (!KNOWN.has(target))
+            return Promise.reject(new PluginError("statementFailed", `Unknown database '${target}'`));
+          current = [target];
+          return session.execute("SELECT 1 WHERE 0");
+        },
+        ...(session.transactions === undefined ? {} : { transactions: session.transactions }),
+        currentNamespace: () => {
+          reads += 1;
+          return options.failRead === true
+            ? Promise.reject(new PluginError("statementFailed", "gone"))
+            : Promise.resolve(current);
+        },
+        serverVersion: session.serverVersion,
+        close: () => session.close(),
+      };
+    },
+  };
+  const loaded: PluginLoadResult = {
+    status: "loaded",
+    directory: "plugins/switching",
+    manifest: fakeManifest({
+      id: PLUGIN_ID,
+      name: "Switching",
+      capabilities: ["sql", "transactions", "currentNamespace"],
+    }),
+    plugin,
+  };
+  const connection = createEngine({
+    datasource: { id: "s", pluginId: PLUGIN_ID, config: { path: ":memory:" }, readOnly: false },
+    plugins: [loaded],
+  }).connect();
+  return { connection, reads: () => reads };
+}
+
+function resultOf<T>(response: EngineResponse): T {
+  if (response.type === "engine.error") throw new Error(`unexpected engine error: ${response.error.message}`);
+  return response.result as T;
+}
+
+type Connection = ReturnType<typeof switchingPlugin>["connection"];
+
+async function open(connection: Connection): Promise<OpenedSession> {
+  return resultOf<OpenedSession>(await connection.handle({ id: 1, type: "session.open" }));
+}
+
+function execute(connection: Connection, sessionId: string, sql: string): Promise<EngineResponse> {
+  return connection.handle({ id: 2, type: "statement.execute", ...PAGING, sessionId, sql });
+}
+
+describe("engine current namespace", () => {
+  it("givenNamespaceCapability_whenSessionOpens_thenReportsNamespace", async () => {
+    const { connection } = switchingPlugin();
+
+    expect((await open(connection)).namespace).toEqual(["main"]);
+  });
+
+  it("givenFailingRead_whenSessionOpens_thenNamespaceNull", async () => {
+    const { connection } = switchingPlugin({ failRead: true });
+
+    expect((await open(connection)).namespace).toBeNull();
+  });
+
+  it("givenUseStatement_whenExecuted_thenReportsNewNamespace", async () => {
+    const { connection } = switchingPlugin();
+    const { sessionId } = await open(connection);
+
+    const executed = resultOf<ExecutedStatement>(await execute(connection, sessionId, "USE archive"));
+
+    expect(executed.namespace).toEqual(["archive"]);
+  });
+
+  it("givenOrdinaryStatement_whenExecuted_thenNoNamespaceRead", async () => {
+    const { connection, reads } = switchingPlugin();
+    const { sessionId } = await open(connection);
+    const before = reads();
+
+    const executed = resultOf<ExecutedStatement>(await execute(connection, sessionId, "SELECT 1"));
+
+    expect(executed).not.toHaveProperty("namespace");
+    expect(reads()).toBe(before);
+  });
+
+  it("givenFailedUse_whenExecuted_thenNoNamespace", async () => {
+    const { connection, reads } = switchingPlugin();
+    const { sessionId } = await open(connection);
+    const before = reads();
+
+    const response = await execute(connection, sessionId, "USE nowhere");
+
+    expect(response).toMatchObject({ type: "engine.error", error: { code: "statementFailed" } });
+    expect(reads()).toBe(before);
+  });
+
+  it("givenFailingRead_whenUseExecuted_thenStatementSucceedsWithoutNamespace", async () => {
+    const { connection } = switchingPlugin({ failRead: true });
+    const { sessionId } = await open(connection);
+
+    const executed = resultOf<ExecutedStatement>(await execute(connection, sessionId, "USE archive"));
+
+    expect(executed).not.toHaveProperty("namespace");
+  });
+
+  it("givenRollback_whenTransacted_thenReportsNamespace", async () => {
+    const { connection } = switchingPlugin();
+    const { sessionId } = await open(connection);
+    await connection.handle({ id: 3, type: "transaction.setMode", sessionId, mode: "manual" });
+    await execute(connection, sessionId, "USE archive");
+
+    const rolledBack = resultOf<TransactionState>(
+      await connection.handle({ id: 4, type: "transaction.rollback", sessionId }),
+    );
+
+    expect(rolledBack).toEqual({ mode: "manual", transactionOpen: false, namespace: ["archive"] });
+  });
+
+  it("givenCommitStatement_whenExecuted_thenReportsNamespace", async () => {
+    const { connection } = switchingPlugin();
+    const { sessionId } = await open(connection);
+    await execute(connection, sessionId, "BEGIN");
+
+    const committed = resultOf<ExecutedStatement>(await execute(connection, sessionId, "COMMIT"));
+
+    expect(committed.namespace).toEqual(["main"]);
+  });
+});

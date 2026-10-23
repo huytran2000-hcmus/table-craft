@@ -41,6 +41,24 @@ describe("engine completion", () => {
     );
   });
 
+  it("givenCurrent_whenCompleting_thenCompletesAgainstIt", async () => {
+    const engine = connection();
+    const text = "SELECT * FROM ";
+    const tables = async (current?: readonly string[]) =>
+      resultOf<CompletionResult>(
+        await engine.handle({
+          id: 1,
+          type: "completion.complete",
+          text,
+          offset: text.length,
+          ...(current === undefined ? {} : { current }),
+        }),
+      ).items.filter((item) => item.kind === "table");
+
+    expect((await tables(["main"])).map((item) => item.label)).toContain("orders");
+    expect(await tables(["nowhere"])).toEqual([]);
+  });
+
   it("givenScopeParam_whenCompletingWhereBar_thenOffersTableColumns", async () => {
     const engine = connection();
 

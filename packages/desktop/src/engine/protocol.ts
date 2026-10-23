@@ -96,7 +96,15 @@ export interface FormatOptions {
 export interface TransactionState {
   readonly mode: TransactionMode;
   readonly transactionOpen: boolean;
+  /** The session's namespace after a commit or rollback, which may undo a switch; see `ExecutedStatement`. */
+  readonly namespace?: CurrentNamespace;
 }
+
+/**
+ * The namespace a console's session is in, as an introspector path (decision 048); null when the
+ * plugin reports none, such as a search_path that names no schema.
+ */
+export type CurrentNamespace = readonly string[] | null;
 
 /** Mirrors `Namespace` in plugin-api. */
 export interface Namespace {
@@ -341,6 +349,11 @@ export interface ExecutedStatement extends ResultState {
   readonly firstWindow: ResultWindow;
   /** Whether the session holds a transaction open after the statement; always false without `transactions`. */
   readonly transactionOpen: boolean;
+  /**
+   * Present only when the engine read the session's namespace after the statement: it may have
+   * switched one (decision 048). Absent, the console keeps the namespace it had.
+   */
+  readonly namespace?: CurrentNamespace;
 }
 
 /** Mirrors `CellInput` in core: text the database casts, `NULL`, or the column's default. */
@@ -491,6 +504,8 @@ export interface OpenedSession {
   readonly capabilities: readonly Capability[];
   /** What the server reports about itself, for the status bar; null when it reports nothing. */
   readonly serverVersion: string | null;
+  /** Where the session starts; always null without `currentNamespace`. */
+  readonly namespace: CurrentNamespace;
 }
 
 /**
@@ -655,11 +670,20 @@ export interface EngineCalls {
    * session (decision 028). With `scope`, `text` is a clause body against that table. Needs `sql`.
    */
   "completion.complete": {
-    params: { readonly text: string; readonly offset: number; readonly scope?: CompletionScope };
+    params: {
+      readonly text: string;
+      readonly offset: number;
+      readonly scope?: CompletionScope;
+      /** The console's namespace, which unqualified names resolve against instead of the catalog's. */
+      readonly current?: readonly string[];
+    };
     result: CompletionResult;
   };
   /** Where the name at `offset` was declared; null when it names nothing known. Needs `sql`. */
-  "navigation.resolve": { params: { readonly text: string; readonly offset: number }; result: Declaration | null };
+  "navigation.resolve": {
+    params: { readonly text: string; readonly offset: number; readonly current?: readonly string[] };
+    result: Declaration | null;
+  };
   /** The ORDER BY bar's text for header-click sorting, names quoted by the plugin; empty for no terms. */
   "table.orderBy": { params: { readonly terms: readonly OrderTerm[] }; result: string };
   /** The statements `edits.submit` would run, in order, without running them. */

@@ -73,6 +73,7 @@ function fakeEngine() {
           pluginName: "fake",
           capabilities: ["sql", "transactions", "explain", "explainAnalyze"],
           serverVersion: "1",
+          namespace: null,
         };
         return Promise.resolve(opened);
       }

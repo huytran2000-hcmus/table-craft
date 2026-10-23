@@ -50,6 +50,7 @@ function fakeClient(datasourceId: string, options: { openFails?: EngineError } =
           pluginName: datasourceId,
           capabilities: ["sql"],
           serverVersion: `${datasourceId} 1.0`,
+          namespace: null,
         };
         return Promise.resolve(opened);
       }

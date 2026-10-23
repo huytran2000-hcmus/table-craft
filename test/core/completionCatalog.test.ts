@@ -60,6 +60,12 @@ describe("completionCatalog", () => {
     expect((await catalog.namespaces()).map((namespace) => namespace.name)).toEqual(["public", "archive"]);
   });
 
+  it("givenCurrentOption_whenBuilt_thenOverridesListing", async () => {
+    const catalog = await completionCatalog(new CatalogCache(introspector(0)), { current: ARCHIVE });
+
+    expect(catalog.current).toEqual(ARCHIVE);
+  });
+
   it("givenUndescribedNamespace_whenCompleting_thenDescribesWithinDeadline", async () => {
     const fake = introspector(5);
     const cache = new CatalogCache(fake);

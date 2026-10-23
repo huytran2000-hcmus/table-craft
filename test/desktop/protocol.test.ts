@@ -99,7 +99,9 @@ describe("engine protocol", () => {
   });
 
   it("givenExecutedStatement_whenComparedWithCoreSummary_thenCarriesEveryField", () => {
-    expectTypeOf<Omit<protocol.ExecutedStatement, "firstWindow" | "transactionOpen">>().toEqualTypeOf<ResultSummary>();
+    expectTypeOf<
+      Omit<protocol.ExecutedStatement, "firstWindow" | "transactionOpen" | "namespace">
+    >().toEqualTypeOf<ResultSummary>();
   });
 
   it("givenScriptTypes_whenComparedWithPluginApi_thenIdentical", () => {

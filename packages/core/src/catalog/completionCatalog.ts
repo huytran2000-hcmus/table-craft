@@ -6,6 +6,11 @@ export const COMPLETION_DESCRIBE_DEADLINE_MS = 1_500;
 
 export interface CompletionCatalogOptions {
   readonly deadlineMs?: number;
+  /**
+   * The namespace the console's session is in (decision 048), which wins over the one the cached
+   * listing marks: that listing is the catalog session's, which no `USE` in a console moves.
+   */
+  readonly current?: readonly string[];
 }
 
 const TIMED_OUT = Symbol("timedOut");
@@ -40,7 +45,7 @@ export async function completionCatalog(
     return listed === TIMED_OUT ? [] : listed;
   }
 
-  const current = (await namespaces()).find((namespace) => namespace.current)?.path ?? null;
+  const current = options.current ?? (await namespaces()).find((namespace) => namespace.current)?.path ?? null;
 
   async function relations(path: readonly string[]): Promise<readonly Relation[]> {
     const fallback = (): readonly Relation[] => cache.cached(path)?.catalog.relations ?? [];

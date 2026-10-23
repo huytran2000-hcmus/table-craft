@@ -43,6 +43,7 @@ import {
 import type {
   ClassifiedStatement,
   ConditionColumn,
+  CurrentNamespace,
   DatasourceConfig,
   EngineError,
   EngineMethod,
@@ -459,9 +460,11 @@ export function createEngine(options: EngineOptions, now: () => number = Date.no
    * Completion and navigation read the catalog cache through the introspection session, never a
    * console's (decision 028). When that session cannot open they answer from no catalog at all.
    */
-  async function completionCatalogOf(): Promise<CompletionCatalog> {
+  async function completionCatalogOf(current: readonly string[] | undefined): Promise<CompletionCatalog> {
     const open = await catalog().catch(() => null);
-    return open === null ? EMPTY_COMPLETION_CATALOG : completionCatalog(open.cache);
+    if (open === null)
+      return current === undefined ? EMPTY_COMPLETION_CATALOG : { ...EMPTY_COMPLETION_CATALOG, current };
+    return completionCatalog(open.cache, current === undefined ? {} : { current });
   }
 
   function checkedOffset(text: string, offset: number): void {
@@ -474,16 +477,16 @@ export function createEngine(options: EngineOptions, now: () => number = Date.no
     }
   }
 
-  async function complete(request: CompletionRequest): Promise<CompletionResult> {
+  async function complete(request: CompletionRequest, current?: readonly string[]): Promise<CompletionResult> {
     checkedOffset(request.text, request.offset);
     const language = sqlLanguage();
-    return language.complete(request, await completionCatalogOf());
+    return language.complete(request, await completionCatalogOf(current));
   }
 
-  async function resolve(request: ResolveRequest): Promise<Declaration | null> {
+  async function resolve(request: ResolveRequest, current?: readonly string[]): Promise<Declaration | null> {
     checkedOffset(request.text, request.offset);
     const language = sqlLanguage();
-    return language.resolve(request, await completionCatalogOf());
+    return language.resolve(request, await completionCatalogOf(current));
   }
 
   const tasks = exportTasks(log === null ? {} : { log: log.child("export") });
@@ -732,6 +735,23 @@ export function createEngine(options: EngineOptions, now: () => number = Date.no
       return session;
     }
 
+    /**
+     * What the session reports as its namespace now (decision 048), or undefined when the plugin
+     * cannot say or the read fails: the console then keeps what it had.
+     */
+    async function namespaceOf(open: OpenSession): Promise<CurrentNamespace | undefined> {
+      if (!open.capabilities.includes("currentNamespace") || open.session.currentNamespace === undefined) {
+        return undefined;
+      }
+      return open.session.currentNamespace().catch(() => undefined);
+    }
+
+    /** A statement that switches namespaces, or ends a transaction that may have, is followed by a read. */
+    function movesNamespace(sql: string): boolean {
+      const statement = sqlLanguage().classify(sql);
+      return statement.setsNamespace === true || statement.kind === "transaction";
+    }
+
     function ownedHandle(handle: string): string {
       if (!handles.has(handle)) {
         throw new CoreError(
@@ -774,10 +794,13 @@ export function createEngine(options: EngineOptions, now: () => number = Date.no
         handles.set(summary.handle, sessionId);
         statements.set(summary.handle, sql);
         if (summary.cursorOpen) cursors.set(sessionId, summary.handle);
+        // An open cursor keeps the session busy, and no statement that switches returns rows.
+        const namespace = !summary.cursorOpen && movesNamespace(bound.sql) ? await namespaceOf(open) : undefined;
         return {
           ...summary,
           firstWindow: results.window(summary.handle, 0),
           transactionOpen: open.session.transactions?.open ?? false,
+          ...(namespace === undefined ? {} : { namespace }),
         };
       } finally {
         open.running -= 1;
@@ -913,7 +936,12 @@ export function createEngine(options: EngineOptions, now: () => number = Date.no
       } catch (cause) {
         throw new EngineFailure({ code: "statementFailed", message: messageOf(cause), hint }, cause);
       }
-      return { mode: transactions.mode, transactionOpen: transactions.open };
+      const namespace = await namespaceOf(open);
+      return {
+        mode: transactions.mode,
+        transactionOpen: transactions.open,
+        ...(namespace === undefined ? {} : { namespace }),
+      };
     }
 
     const routes: { [M in EngineMethod]: (request: RequestOf<M>) => Promise<ResultOf<M>> } = {
@@ -921,12 +949,15 @@ export function createEngine(options: EngineOptions, now: () => number = Date.no
         const session = await connectDatasource(options);
         const { manifest, plugin } = loadedPlugin(options.plugins, options.datasource.pluginId);
         const sessionId = `${SESSION_PREFIX}${nextSession++}`;
-        sessions.set(sessionId, { session, capabilities: plugin.capabilities, running: 0 });
+        const open: OpenSession = { session, capabilities: plugin.capabilities, running: 0 };
+        const namespace = (await namespaceOf(open)) ?? null;
+        sessions.set(sessionId, open);
         return {
           sessionId,
           pluginName: manifest.name,
           capabilities: plugin.capabilities,
           serverVersion: session.serverVersion,
+          namespace,
         };
       },
       "session.close": async ({ sessionId }) => {
@@ -1024,9 +1055,9 @@ export function createEngine(options: EngineOptions, now: () => number = Date.no
         introspect(({ session }) => session.introspector?.qualifiedName(path, name) ?? name),
       "catalog.definition": ({ path, name }) => definitionOf(path, name),
       "sql.generate": ({ path, name, statement }) => generate(path, name, statement),
-      "completion.complete": ({ text, offset, scope }) =>
-        complete(scope === undefined ? { text, offset } : { text, offset, scope }),
-      "navigation.resolve": ({ text, offset }) => resolve({ text, offset }),
+      "completion.complete": ({ text, offset, scope, current }) =>
+        complete(scope === undefined ? { text, offset } : { text, offset, scope }, current),
+      "navigation.resolve": ({ text, offset, current }) => resolve({ text, offset }, current),
       "table.query": (request) => queryTable(request),
       "table.count": ({ path, relation, where }) => countRows(path, relation, where),
       "table.condition": ({ handle, rows, columns }) => Promise.resolve(condition(handle, rows, columns)),

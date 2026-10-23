@@ -42,6 +42,7 @@ function tableEngine(options: EngineOptions = {}) {
           pluginName: "fake",
           capabilities: ["sql"],
           serverVersion: "1",
+          namespace: null,
         };
         return Promise.resolve(opened);
       }

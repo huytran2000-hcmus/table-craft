@@ -43,6 +43,7 @@ function catalogClient(describe: () => Promise<DescribedCatalog> = () => Promise
           pluginName: "PostgreSQL",
           capabilities: ["sql", "schemaTree"],
           serverVersion: "17",
+          namespace: null,
         };
         return Promise.resolve(opened);
       }
