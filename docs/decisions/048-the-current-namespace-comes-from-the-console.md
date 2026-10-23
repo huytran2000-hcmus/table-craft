@@ -1,6 +1,7 @@
 # 048: The current namespace comes from the console
 
-Status: Proposed. Amends 028.
+Status: Proposed. Amends 028. Amended by 060: the toolbar label is a dropdown that switches the
+console's namespace, and the statement targets complete namespaces.
 
 ## Decision
 

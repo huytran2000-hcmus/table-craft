@@ -68,3 +68,4 @@ started, not when it is merged.
 | 057 | [Submit preempts Run in a grid with pending edits](057-submit-preempts-run-in-a-grid-with-pending-edits.md)                                                            |
 | 058 | [A closing result holds the session](058-a-closing-result-holds-the-session.md)                                                                                        |
 | 059 | [Tab replaces and Enter inserts a completion](059-tab-replaces-and-enter-inserts-a-completion.md)                                                                      |
+| 060 | [The plugin writes the console's namespace switch](060-the-plugin-writes-the-console-namespace-switch.md)                                                              |

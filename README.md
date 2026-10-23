@@ -215,7 +215,10 @@ opens it anywhere. `Enter` inserts the selected option and keeps the rest of the
 caret; `Tab` replaces the whole word, as in DataGrip. `⌘B` (Go to Declaration) on an alias moves the caret to where it is defined, and
 on a table opens its DDL. Completion follows `USE` and `SET search_path`: once one runs, the
 console's toolbar shows the database or schema it is in and unqualified names complete there; a
-`USE` above the caret in a script counts even before it runs.
+`USE` above the caret in a script counts even before it runs. After `USE `, `SET search_path TO `
+or `SET SCHEMA ` completion offers the databases or schemas themselves. Click the database or
+schema in the toolbar to switch the console to another one; it runs the `USE` or
+`SET search_path` for you.
 
 ![Completion and navigation](docs/media/completion.gif)
 
