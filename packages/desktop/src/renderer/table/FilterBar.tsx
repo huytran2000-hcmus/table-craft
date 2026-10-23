@@ -29,8 +29,8 @@ export interface FilterBarProps {
 
 /**
  * One line of SQL sent verbatim after `WHERE` or `ORDER BY` (plan 008 decision 4): Enter applies,
- * Escape puts back what the rows were read with. While the completion popup is open, Enter and
- * Escape are its own.
+ * Escape puts back what the rows were read with. While the completion popup is open, Enter, Tab
+ * and Escape are its own.
  */
 export function FilterBar({
   label,

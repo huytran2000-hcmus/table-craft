@@ -13,6 +13,7 @@ import type {
   CurrentNamespace,
   EngineCalls,
 } from "@table-craft/desktop/engine/protocol.js";
+import { tabAcceptsCompletion } from "@table-craft/desktop/renderer/console/completionKeys.js";
 import { renderCompletionGlyph } from "@table-craft/desktop/renderer/console/completionGlyphs.js";
 import { connectionOf, useDatasources } from "@table-craft/desktop/renderer/state/datasources.js";
 
@@ -112,13 +113,16 @@ export function connectedEngine(datasourceId: () => string | undefined): () => C
   };
 }
 
-/** Autocompletion with the engine source, the app's glyphs and the typing delay. */
+/** Autocompletion with the engine source, the app's glyphs, the typing delay and Tab to accept. */
 export function completion(target: CompletionTarget): Extension {
-  return autocompletion({
-    override: [engineCompletionSource(target)],
-    icons: false,
-    activateOnTypingDelay: COMPLETION_TYPING_DELAY_MS,
-    compareCompletions: compareByEngineOrder,
-    addToOptions: [{ render: renderCompletionGlyph, position: GLYPH_POSITION }],
-  });
+  return [
+    autocompletion({
+      override: [engineCompletionSource(target)],
+      icons: false,
+      activateOnTypingDelay: COMPLETION_TYPING_DELAY_MS,
+      compareCompletions: compareByEngineOrder,
+      addToOptions: [{ render: renderCompletionGlyph, position: GLYPH_POSITION }],
+    }),
+    tabAcceptsCompletion,
+  ];
 }
