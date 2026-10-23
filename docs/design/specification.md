@@ -377,12 +377,15 @@ handles belong to the port that created them and are released when it closes.
 | `transaction.commit`    | `sessionId`                                                                                       | `{ mode, transactionOpen, namespace? }`; a no-op when nothing is open                                                                    |
 | `transaction.rollback`  | `sessionId`                                                                                       | `{ mode, transactionOpen, namespace? }`; a no-op when nothing is open                                                                    |
 | `statement.cancel`      | `sessionId`                                                                                       | `null`; stops the running statement, a no-op when idle                                                                                   |
-| `result.window`         | `handle`, `offset`, `limit`                                                                       | `{ offset, rows }`, at most `RESULT_WINDOW_ROWS` rows                                                                                    |
+| `result.window`         | `handle`, `offset`, `limit`                                                                       | `{ offset, rows, matches? }`, at most `RESULT_WINDOW_ROWS` shown rows; `matches` are `[row, column]` pairs                               |
 | `result.release`        | `handle`                                                                                          | `null`; releasing twice is not an error                                                                                                  |
 | `result.fetchMore`      | `handle`, `all`, `pageRows`, `fetchAllCap`                                                        | `ResultState { rowCount, complete, cursorOpen }`; one page, or up to `fetchAllCap`                                                       |
 | `result.stopFetch`      | `handle`                                                                                          | `ResultState`; stops a running fetch, the cursor stays open                                                                              |
 | `result.sort`           | `handle`, `keys: { column, direction }[]`                                                         | `ResultState`; windows read through the new order, `[]` restores it                                                                      |
-| `result.extract`        | `handle`, `extractor`, `rows: { from, to }[]`, `columns`                                          | the text, rows in sorted order                                                                                                           |
+| `result.extract`        | `handle`, `extractor`, `rows: { from, to }[]`, `columns`                                          | the text, rows in sorted order; with a local filter, `rows` count shown rows                                                             |
+| `result.view`           | `handle`, `spec: ViewSpec \| null`                                                                | `ViewState { shown, filtered, sources, matches, error }`; sets find and local filter (decision 050), `null` drops them                   |
+| `result.viewState`      | `handle`                                                                                          | `ViewState` after a fetch or sort recomputed the view                                                                                    |
+| `result.findMatch`      | `handle`, `from: { row, column } \| null`, `backward`                                             | `{ index, row, column }` of the next match after `from`, wrapping, or `null`                                                             |
 | `export.start`          | `source`, `format`, `path`, `stallSeconds`                                                        | `ExportTask`; starts a background export (decision 040); `path` must be absolute                                                         |
 | `export.cancel`         | `taskId`                                                                                          | `null`; the task ends `cancelled` and its `.part` file is removed                                                                        |
 | `export.retry`          | `taskId`, `stallSeconds`                                                                          | a new `ExportTask` from row 0; only a re-run or table export is retryable                                                                |
@@ -536,6 +539,21 @@ run either.
 | `grid.sort`, `grid.clearSort`            | Sort, Clear Sort                      |          |                        |
 | `grid.hideColumn`, `grid.showAllColumns` | Hide Column, Show All Columns         |          |                        |
 | `grid.copyColumnName`                    | Copy Column Name                      |          |                        |
+| `grid.find`                              | Find in Result                        | `⌘F` ⁵   | `Ctrl+F` ⁵             |
+| `grid.findNext`                          | Find Next                             | `↩` ⁶    | `Enter` ⁶              |
+| `grid.findPrevious`                      | Find Previous                         | `⇧↩` ⁶   | `Shift+Enter` ⁶        |
+| `grid.closeFind`                         | Close Find                            | `⎋` ⁶    | `Escape` ⁶             |
+| `grid.findMatchCase`                     | Match Case                            |          |                        |
+| `grid.findRegex`                         | Regular Expression                    |          |                        |
+| `grid.findWholeCell`                     | Whole Cell                            |          |                        |
+| `grid.filterRows`                        | Filter Rows                           |          |                        |
+| `grid.searchAll`                         | Search All Rows                       |          |                        |
+| `grid.filterByValue`                     | Local Filter: This Value              |          |                        |
+| `grid.excludeValue`                      | Local Filter: Exclude This Value      |          |                        |
+| `grid.filterIsNull`                      | Local Filter: Is NULL                 |          |                        |
+| `grid.filterIsNotNull`                   | Local Filter: Is Not NULL             |          |                        |
+| `grid.removeFilter`                      | Remove Local Filter                   |          |                        |
+| `grid.clearFilters`                      | Clear Local Filters                   |          |                        |
 | `tab.close`                              | Close Tab                             | `⌘W`     | `Ctrl+W`               |
 | `tab.closeOthers`                        | Close Other Tabs                      |          |                        |
 | `tab.closeAll`                           | Close All Tabs                        |          |                        |
@@ -595,6 +613,9 @@ tool window, else on the active console's datasource. `console.new` opens on tha
 Collapse All (decision 027).
 ⁴ Not a keymap chord: main watches a lone Alt press in `before-input-event` and pops the menu
 itself. Main Menu is available on Windows and Linux with the custom title bar only.
+⁵ With focus in a result grid or its find bar (regions `grid`, `gridFind`); in the SQL editor ⌘F
+stays CodeMirror's search.
+⁶ Only with focus in the find bar (region `gridFind`), so `⇧↩` in the grid is still Value Panel.
 
 Shortcuts are declared as platform-neutral chords (`Mod+Shift+A`, `Shift Shift`) and dispatched by
 one capture-phase `keydown` listener on the window. A chord whose action is disabled reaches the
@@ -745,13 +766,14 @@ header and row-number gutter, virtualized rows, and an optional value panel on t
 open cursor (decision 025). The toolbar reads, left to right: Fetch Next Page, Fetch All, Rerun, Cancel fetch
 while a fetch runs, the state label, then the extractor select, Copy, Export Data… and Value Panel.
 
-| Label                               | When                                                           |
-| ----------------------------------- | -------------------------------------------------------------- |
-| `5,000 rows`                        | Everything was read                                            |
-| `500+ rows`                         | The cursor is open; Fetch Next Page and Fetch All are enabled  |
-| `500+ rows · fetching stopped`      | Something closed the cursor first; Rerun runs it again         |
-| `100,000+ rows · fetch cap reached` | Fetch All stopped at Settings' Fetch All limit                 |
-| `… · sorted locally`                | Appended while a local sort is on a result not completely read |
+| Label                                    | When                                                           |
+| ---------------------------------------- | -------------------------------------------------------------- |
+| `5,000 rows`                             | Everything was read                                            |
+| `500+ rows`                              | The cursor is open; Fetch Next Page and Fetch All are enabled  |
+| `500+ rows · fetching stopped`           | Something closed the cursor first; Rerun runs it again         |
+| `100,000+ rows · fetch cap reached`      | Fetch All stopped at Settings' Fetch All limit                 |
+| `… · sorted locally`                     | Appended while a local sort is on a result not completely read |
+| `1,284 of 5,000 rows · filtered locally` | A local filter hides rows (decision 050)                       |
 
 **Columns.** The header shows the column name with a type glyph (number, text, date, bool, json,
 bytes) from core's `typeClass`; a column the driver did not type takes the class of its first
@@ -768,6 +790,28 @@ the column as the next key or cycles it in place, and the header shows its arrow
 numbers and decimal text numerically and exactly, booleans false first, everything else by code
 point; `NULL` sorts last ascending and first descending. Rows fetched later take their sorted
 places.
+
+**Find and local filter.** Plan 023, decision 050. `grid.find` (⌘F with focus in the grid) opens a
+find bar under the toolbar: the query, Match Case, Regular Expression and Whole Cell toggles, the
+count (`3 of 1,284`, `No matches`, or `Invalid regular expression: <reason>`), previous and next,
+Filter Rows and Close. Typing settles for 120 ms, then the renderer sends a `ViewSpec` (query,
+`rowsOnly`, chips, the visible columns in drawing order, Group digits) with `result.view`. The
+engine matches each cell's display text, the text the grid draws without the NULL text: the
+database's text, digits grouped when the setting is on; a `NULL` cell never matches find. It walks
+the held rows once, in sort order, keeping the shown rows' sources and the matched cells; windows
+then read through that view and carry their `[row, column]` matches, highlighted with
+`bg-search-match` (the current one bold, scrolled into view in both directions). `↩`/`⇧↩` in the
+bar, or the arrows, ask `result.findMatch` from the focused cell and wrap. The header menu's Local
+filter section adds chips from the focused row's value: equals or excludes its database text, Is
+NULL, Is Not NULL; chips always hide rows, Filter Rows hides rows without a match only while the
+bar is open. Both cover the fetched rows only: the state label reads `1,284 of 5,000 rows ·
+filtered locally` (`+` while the cursor is open), the bar says `Searched 500 fetched rows` or that
+the fetch cap is reached, and **Search All Rows** is Fetch All, after which the view covers every
+fetched row. Fetching, sorting, hiding a searched column and Rerun (when the layout is kept)
+recompute the view. Copy and Select All take shown rows; Export asks "Visible rows only (N)" or
+"Whole result" when a filter hides rows, the first written from memory in the grid's order. In the
+table editor the chips read `Local filter (fetched rows):` beside the server-side WHERE bar, and
+pending edits keep naming held rows through `ViewState.sources`.
 
 **Selection and copy.** Click, shift-click, drag, the arrows (shift extends), Page Up/Down,
 Home/End select a rectangle; the gutter selects rows, ⌘-click on a header a column, `grid.selectAll`

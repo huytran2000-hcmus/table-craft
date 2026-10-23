@@ -221,6 +221,14 @@ straight to disk, so a multi-gigabyte export uses flat memory, shows its progres
 in Services, and never leaves a half-written file behind when the network drops, the disk fills or
 you cancel.
 
+**Find in Result** (`⌘F` in the grid) searches the fetched rows as the grid draws them, with Match
+Case, Regular Expression and Whole Cell toggles; `↩` and `⇧↩` step through the matches and
+**Filter Rows** hides the rows without one. A column header's menu filters by the focused row's
+value, excludes it, or keeps `NULL` or non-`NULL` cells, as removable chips. Both run on the rows
+already fetched and say so; **Search All Rows** fetches the rest. Copy takes the rows you see, and
+Export asks whether to write the visible rows or the whole result. In the table editor the local
+filter sits beside the `WHERE` bar, which still filters on the server.
+
 ![Result grid](docs/media/grid.gif)
 
 See [Result grid](docs/design/specification.md#result-grid).
@@ -345,6 +353,7 @@ See [App log and diagnostics](docs/design/specification.md#app-log-and-diagnosti
 | Query History…            | `⌥⌘E`   | `Ctrl+Alt+E`           |
 | Preview Pending Changes   | `⇧⌘P`   | `Ctrl+Shift+P`         |
 | Submit                    | `⌘↩`    | `Ctrl+Enter`           |
+| Find in Result            | `⌘F`    | `Ctrl+F`               |
 | Settings…                 | `⌘,`    | `Ctrl+,`               |
 | Increase Editor Font Size | `⌘=`    | `Ctrl+=`               |
 | Decrease Editor Font Size | `⌘-`    | `Ctrl+-`               |

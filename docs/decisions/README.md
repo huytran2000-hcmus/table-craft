@@ -59,5 +59,6 @@ started, not when it is merged.
 | 046 | [Imports stream into a plugin-owned bulk insert as background tasks](046-imports-stream-into-a-plugin-owned-bulk-insert-as-background-tasks.md)                        |
 | 047 | [PostgreSQL imports use COPY through `pg-copy-streams`](047-postgresql-imports-use-copy-through-pg-copy-streams.md)                                                    |
 | 048 | [The current namespace comes from the console](048-the-current-namespace-comes-from-the-console.md)                                                                    |
+| 050 | [Find and the local filter run in the engine, on display text](050-find-and-local-filter-run-in-the-engine-on-display-text.md)                                         |
 | 054 | [The engine keeps sessions alive, times statements out and reconnects](054-the-engine-keeps-sessions-alive-times-statements-out-and-reconnects.md)                     |
 | 055 | [Connection URLs are manifest data](055-connection-urls-are-manifest-data.md)                                                                                          |
