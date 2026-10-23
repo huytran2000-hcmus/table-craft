@@ -212,6 +212,34 @@ describe.runIf(DATABASES_ENABLED)("namespace switcher and USE completion live te
   );
 
   it(
+    "givenCaretInsideUseTarget_whenTabThenEnter_thenTabReplacesEnterInserts",
+    async () => {
+      const page = await launch(MYSQL, "table_craft");
+      const typed = "USE arcxyz";
+      const caretBack = "xyz".length;
+
+      for (const [key, expected] of [
+        ["Tab", "USE archive"],
+        ["Enter", "USE archivexyz"],
+      ] as const) {
+        await sqlEditor(page).fill(typed);
+        await expect.poll(() => editorText(page)).toBe(typed);
+        await page.keyboard.press("Escape");
+        await pressChord(page, "End");
+        for (let step = 0; step < caretBack; step += 1) await page.keyboard.press("ArrowLeft");
+        await page.keyboard.press(BASIC_COMPLETION);
+        await popup(page).getByRole("option").first().waitFor({ timeout: LAUNCH_TIMEOUT_MS });
+        expect(await popup(page).locator(".cm-completionLabel").allTextContents()).toEqual(["archive"]);
+        await expect.poll(() => page.evaluate<boolean>(ACCEPTABLE), { timeout: LAUNCH_TIMEOUT_MS }).toBe(true);
+        await page.keyboard.press(key);
+        await expect.poll(() => editorText(page)).toBe(expected);
+      }
+      await captureWindow(page, "02b-mysql-use-tab-replaces-enter-inserts");
+    },
+    SCENARIO_TIMEOUT_MS,
+  );
+
+  it(
     "givenPostgresSearchPath_whenCompleting_thenSchemasNoKeywords",
     async () => {
       const page = await launch(POSTGRES, "public");
