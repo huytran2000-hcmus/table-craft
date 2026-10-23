@@ -61,10 +61,14 @@ const RENDERER_FENCE_RULE =
   "The renderer is a pure view. Reach the engine over the port; import types from @table-craft/desktop/engine/protocol.js.";
 
 /**
- * Theme and settings data that main and the renderer both import (decision 032): it must load in
- * either process, so it touches neither Node, electron, zod nor the DOM.
+ * Theme, settings and log-record modules that main and the renderer both import (decision 032,
+ * plan 017): each must load in either process, so it touches neither Node, electron, zod nor the DOM.
  */
-const SHARED_FILES = ["packages/desktop/src/appearance/**/*.ts", "packages/desktop/src/settings/**/*.ts"];
+const SHARED_FILES = [
+  "packages/desktop/src/appearance/**/*.ts",
+  "packages/desktop/src/settings/**/*.ts",
+  "packages/desktop/src/log/**/*.ts",
+];
 const SHARED_PURITY_IMPORTS = [
   ...CORE_IMPORTS,
   ...ELECTRON_IMPORTS,

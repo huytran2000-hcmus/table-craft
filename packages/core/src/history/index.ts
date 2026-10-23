@@ -6,6 +6,7 @@ export {
   openQueryHistory,
   type HistoryEntry,
   type HistoryOutcome,
+  type HistoryRun,
   type HistorySource,
   type HistoryStatement,
   type QueryHistory,

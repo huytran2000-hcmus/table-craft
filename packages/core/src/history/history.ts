@@ -43,11 +43,23 @@ export interface HistoryStatement {
   readonly runs: number;
 }
 
+/** One run without its statement text or error message, for a diagnostics export (plan 017). */
+export interface HistoryRun {
+  readonly datasourceId: string;
+  readonly startedAt: number;
+  readonly durationMs: number;
+  readonly outcome: HistoryOutcome;
+  readonly rowCount: number | null;
+  readonly source: HistorySource;
+}
+
 export interface QueryHistory {
   record(entry: HistoryEntry): void;
   /** Distinct statements of the datasource containing `query`, case-insensitively, newest first. */
   search(datasourceId: string, query: string, limit?: number): readonly HistoryStatement[];
   clear(datasourceId: string): void;
+  /** The newest runs across every datasource, newest first, metadata only. */
+  recentRuns(limit: number): readonly HistoryRun[];
   close(): void;
   /** Where an unreadable file was moved when this history opened; null when it opened as it was. */
   readonly recoveredFrom: string | null;
@@ -116,6 +128,18 @@ SELECT sql, started_at, duration_ms, outcome, row_count, message, parameters, ru
 FROM matching WHERE recency = 1
 ORDER BY started_at DESC, id DESC
 LIMIT ?`;
+
+const RECENT_RUNS = `SELECT datasource_id, started_at, duration_ms, outcome, row_count, source
+FROM entries ORDER BY started_at DESC, id DESC LIMIT ?`;
+
+interface RunRow {
+  readonly datasource_id: string;
+  readonly started_at: number;
+  readonly duration_ms: number;
+  readonly outcome: HistoryOutcome;
+  readonly row_count: number | null;
+  readonly source: HistorySource;
+}
 
 interface SearchRow {
   readonly sql: string;
@@ -202,6 +226,7 @@ export function openQueryHistory(path: string, options: QueryHistoryOptions = {}
   const prune = database.prepare(PRUNE);
   const clear = database.prepare(CLEAR);
   const search = database.prepare(SEARCH);
+  const recentRuns = database.prepare(RECENT_RUNS);
 
   return {
     recoveredFrom,
@@ -242,6 +267,17 @@ export function openQueryHistory(path: string, options: QueryHistoryOptions = {}
     },
     clear(datasourceId) {
       clear.run(datasourceId);
+    },
+    recentRuns(max) {
+      const rows = recentRuns.all(max) as unknown as RunRow[];
+      return rows.map((row) => ({
+        datasourceId: row.datasource_id,
+        startedAt: row.started_at,
+        durationMs: row.duration_ms,
+        outcome: row.outcome,
+        rowCount: row.row_count,
+        source: row.source,
+      }));
     },
     close() {
       database.close();

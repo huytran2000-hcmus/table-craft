@@ -43,6 +43,20 @@ afterEach(async () => {
 });
 
 describe("query history", () => {
+  it("givenHistory_whenRecentRuns_thenNoSqlOrMessageNewestFirst", () => {
+    const history = open();
+    history.record(entry({ startedAt: 1_000, sql: "SELECT secret_column" }));
+    history.record(entry({ datasourceId: MYSQL, startedAt: 3_000, outcome: "error", message: "boom", rowCount: null }));
+    history.record(entry({ startedAt: 2_000 }));
+
+    const runs = history.recentRuns(2);
+
+    expect(runs).toEqual([
+      { datasourceId: MYSQL, startedAt: 3_000, durationMs: 5, outcome: "error", rowCount: null, source: "console" },
+      { datasourceId: PG, startedAt: 2_000, durationMs: 5, outcome: "success", rowCount: 1, source: "console" },
+    ]);
+  });
+
   it("givenStatementsRecorded_whenSearched_thenNewestFirstAndGroupedByText", () => {
     const history = open();
     history.record(entry({ sql: "SELECT 1", startedAt: 1_000, durationMs: 3 }));
