@@ -21,6 +21,8 @@ export interface EditColumn {
   readonly type: string | null;
   /** The catalog's default expression, for dialects without `SET column = DEFAULT`. */
   readonly default: string | null;
+  /** A console result's computed or repeated column, which no edit may write (decision 056). */
+  readonly readOnly?: boolean;
 }
 
 /** The table a set of edits applies to. */
@@ -83,6 +85,13 @@ export function generateEdits(options: GenerateEditsOptions): string[] {
       .join(" AND ");
   }
 
+  function writable(index: number): void {
+    const column = columnAt(index);
+    if (column.readOnly === true) {
+      refuse(`Column ${column.name} is read-only in this result.`, "Edit only the columns read from the table.");
+    }
+  }
+
   function input(value: CellInput, column: EditColumn): string {
     switch (value.kind) {
       case "text":
@@ -109,9 +118,10 @@ export function generateEdits(options: GenerateEditsOptions): string[] {
         return `DELETE FROM ${table} WHERE ${keyOf(edit.row)}`;
       case "update": {
         if (edit.values.length === 0) refuse(`Row ${String(edit.row + 1)} has an update with no values.`);
-        const assignments = edit.values.map(
-          ({ column, value }) => `${quoted(column)} = ${input(value, columnAt(column))}`,
-        );
+        const assignments = edit.values.map(({ column, value }) => {
+          writable(column);
+          return `${quoted(column)} = ${input(value, columnAt(column))}`;
+        });
         return `UPDATE ${table} SET ${assignments.join(", ")} WHERE ${keyOf(edit.row)}`;
       }
       case "insert": {
@@ -119,6 +129,7 @@ export function generateEdits(options: GenerateEditsOptions): string[] {
           refuse(`An inserted row has ${String(edit.values.length)} values for ${String(columns.length)} columns.`);
         }
         const given = edit.values.flatMap((value, index) => (value.kind === "default" ? [] : [index]));
+        given.forEach(writable);
         if (given.length === 0) return language.emptyInsert(table);
         const names = given.map(quoted).join(", ");
         const values = given.map((index) => input(edit.values[index] ?? { kind: "null" }, columnAt(index))).join(", ");

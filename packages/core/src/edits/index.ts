@@ -16,4 +16,12 @@ export {
   type OrderTerm,
   type TableClauses,
 } from "./query.js";
-export { submitEdits, type SubmittedEdits } from "./submit.js";
+export { submitConsoleEdits, submitEdits, type SubmittedEdits } from "./submit.js";
+export {
+  CONSOLE_READ_ONLY_REASONS,
+  consoleEditable,
+  type ConsoleEditColumn,
+  type ConsoleEditTable,
+  type ConsoleEditable,
+  type ConsoleEditableOptions,
+} from "./console.js";

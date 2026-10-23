@@ -5,7 +5,10 @@ import {
   editableIdentity,
   generateEdits,
   matchCondition,
+  submitConsoleEdits,
   submitEdits,
+  CONSOLE_READ_ONLY_REASONS,
+  consoleEditable,
   tableCount,
   tableSelect,
   type EditColumn,
@@ -14,8 +17,10 @@ import {
 import {
   PluginError,
   type ExecuteResult,
+  type Column,
   type Relation,
   type Row,
+  type SelectSource,
   type Session,
   type SqlLanguage,
   type TransactionMode,
@@ -29,6 +34,7 @@ import {
   sqlGenerator,
   sqlLiteral,
   sqlParameters,
+  sqlSavepoints,
   sqlSplitter,
   classifyTokens,
 } from "@table-craft/plugin-api/sql";
@@ -221,10 +227,13 @@ interface FakeSession extends Session {
 }
 
 /** A session that answers each statement with the next outcome: rows affected, or an error to throw. */
-function fake(outcomes: readonly (number | null | Error)[]): FakeSession {
+function fake(
+  outcomes: readonly (number | null | Error)[],
+  start: { readonly mode: TransactionMode; readonly open: boolean } = { mode: "auto", open: false },
+): FakeSession {
   const log: string[] = [];
-  let mode: TransactionMode = "auto";
-  let open = false;
+  let mode: TransactionMode = start.mode;
+  let open = start.open;
   let next = 0;
   return {
     log,
@@ -342,5 +351,164 @@ describe("submitEdits", () => {
     const target = fake([]);
     expect(await submitEdits(target, [])).toEqual({ statements: [], rowsAffected: 0 });
     expect(target.log).toEqual([]);
+  });
+});
+
+const SAVEPOINT = sqlSavepoints(quoteIdentifierWith('"'));
+
+describe("submitConsoleEdits", () => {
+  it("givenAutoCommitConsole_whenSubmitted_thenCommittedLikeTheTableEditor", async () => {
+    const target = fake([1]);
+    await submitConsoleEdits(target, ["UPDATE a"], SAVEPOINT);
+    expect(target.log).toEqual(["mode manual", "UPDATE a", "commit", "mode auto"]);
+  });
+
+  it("givenOpenManualTransaction_whenSubmitted_thenEditsJoinItUncommitted", async () => {
+    const target = fake([null, 1, 1, null], { mode: "manual", open: true });
+    const submitted = await submitConsoleEdits(target, ["UPDATE a", "DELETE b"], SAVEPOINT);
+    expect(submitted.rowsAffected).toBe(2);
+    expect(target.log).toEqual([
+      'SAVEPOINT "table_craft_edits"',
+      "UPDATE a",
+      "DELETE b",
+      'RELEASE SAVEPOINT "table_craft_edits"',
+    ]);
+    expect(target.transactions?.open).toBe(true);
+  });
+
+  it("givenOpenManualTransaction_whenEditRejected_thenOnlyTheEditsAreUndone", async () => {
+    const target = fake([null, 1, 0, null, null], { mode: "manual", open: true });
+    const failure = await submitConsoleEdits(target, ["UPDATE a", "UPDATE b"], SAVEPOINT).catch(
+      (error: unknown) => error,
+    );
+    expect(failure).toMatchObject({ code: "editRejected", statementIndex: 1, statement: "UPDATE b" });
+    expect((failure as EditRejectedError).hint).toContain("transaction is still open");
+    expect(target.log).toEqual([
+      'SAVEPOINT "table_craft_edits"',
+      "UPDATE a",
+      "UPDATE b",
+      'ROLLBACK TO SAVEPOINT "table_craft_edits"',
+      'RELEASE SAVEPOINT "table_craft_edits"',
+    ]);
+    expect(target.transactions?.open).toBe(true);
+  });
+
+  it("givenPluginWithoutSavepointsAndOpenTransaction_whenSubmitted_thenRefusedBeforeRunning", async () => {
+    const target = fake([], { mode: "manual", open: true });
+    await expect(submitConsoleEdits(target, ["UPDATE a"], undefined)).rejects.toThrow(/cannot undo only the edits/);
+    expect(target.log).toEqual([]);
+  });
+
+  it("givenPluginWithoutSavepointsAndNoTransaction_whenRejected_thenRolledBack", async () => {
+    const target = fake([0], { mode: "manual", open: false });
+    await expect(submitConsoleEdits(target, ["UPDATE a"], undefined)).rejects.toBeInstanceOf(EditRejectedError);
+    expect(target.log).toEqual(["UPDATE a", "rollback"]);
+  });
+});
+
+const ORDERS = relation({ primaryKey: { name: "orders_pk", columns: ["id"] } });
+const QUALIFIED = '"public"."orders"';
+
+function source(columns: readonly (string | null)[]): SelectSource {
+  return { kind: "table", path: ["public"], relation: "orders", columns };
+}
+
+function reported(names: readonly string[], origins?: readonly (string | null)[]): Column[] {
+  return names.map((name, index) => {
+    const table = origins?.[index];
+    if (origins === undefined) return { name, type: "text" };
+    return { name, type: "text", origin: table === null || table === undefined ? null : { table, column: name } };
+  });
+}
+
+function editable(options: { source: SelectSource; result: readonly Column[]; relation?: Relation | null }) {
+  return consoleEditable({
+    source: options.source,
+    relation: options.relation === undefined ? ORDERS : options.relation,
+    qualified: QUALIFIED,
+    result: options.result,
+    readOnly: false,
+    capabilities: ALL,
+  });
+}
+
+describe("consoleEditable", () => {
+  it("givenSingleTableSelectWithKey_whenChecked_thenEditableKeyedByTheKeyColumn", () => {
+    const checked = editable({ source: source(["slug", "id"]), result: reported(["slug", "id"], ["t", "t"]) });
+    expect(checked).toMatchObject({ kind: "editable", table: { table: QUALIFIED, identity: [1] } });
+    if (checked.kind !== "editable") throw new Error("expected editable");
+    expect(checked.table.columns.map((column) => column.readOnly)).toEqual([false, false]);
+    expect(checked.columns.map((column) => column?.name)).toEqual(["slug", "id"]);
+  });
+
+  it("givenExpressionColumn_whenChecked_thenThatColumnAloneIsReadOnly", () => {
+    const checked = editable({ source: source(["id", null]), result: reported(["id", "upper"], ["t", null]) });
+    if (checked.kind !== "editable") throw new Error("expected editable");
+    expect(checked.table.columns.map((column) => column.readOnly)).toEqual([false, true]);
+    expect(checked.columns[1]).toBeNull();
+  });
+
+  it("givenRepeatedColumn_whenChecked_thenItsCopiesAreReadOnly", () => {
+    const checked = editable({ source: source(["id", "slug", "slug"]), result: reported(["id", "slug", "slug"]) });
+    if (checked.kind !== "editable") throw new Error("expected editable");
+    expect(checked.table.columns.map((column) => column.readOnly)).toEqual([false, true, true]);
+  });
+
+  it("givenKeyColumnLeftOut_whenChecked_thenReadOnlyForNoKey", () => {
+    expect(editable({ source: source(["slug"]), result: reported(["slug"]) })).toEqual({
+      kind: "readOnly",
+      reason: CONSOLE_READ_ONLY_REASONS.noKey,
+    });
+  });
+
+  it("givenStatementTheParserRefused_whenChecked_thenItsReasonStands", () => {
+    const refused: SelectSource = { kind: "readOnly", reason: "the result joins two or more tables" };
+    expect(editable({ source: refused, result: reported(["id"]), relation: null })).toEqual({
+      kind: "readOnly",
+      reason: "the result joins two or more tables",
+    });
+  });
+
+  it("givenDriverOriginsFromTwoTables_whenChecked_thenReadOnly", () => {
+    const checked = editable({ source: source(["id", "slug"]), result: reported(["id", "slug"], ["a", "b"]) });
+    expect(checked).toEqual({ kind: "readOnly", reason: CONSOLE_READ_ONLY_REASONS.origins });
+  });
+
+  it("givenDriverSaysAPlainColumnIsComputed_whenChecked_thenReadOnly", () => {
+    const checked = editable({ source: source(["id", "slug"]), result: reported(["id", "slug"], ["t", null]) });
+    expect(checked).toEqual({ kind: "readOnly", reason: CONSOLE_READ_ONLY_REASONS.columns });
+  });
+
+  it("givenResultWiderThanTheStatement_whenChecked_thenReadOnlyAsStale", () => {
+    const checked = editable({ source: source(["id"]), result: reported(["id", "slug"]) });
+    expect(checked).toEqual({ kind: "readOnly", reason: CONSOLE_READ_ONLY_REASONS.columns });
+  });
+
+  it("givenView_whenChecked_thenReadOnlyInConsoleWords", () => {
+    const view = relation({ kind: "view", primaryKey: { name: "pk", columns: ["id"] } });
+    expect(editable({ source: source(["id"]), result: reported(["id"]), relation: view })).toEqual({
+      kind: "readOnly",
+      reason: CONSOLE_READ_ONLY_REASONS.view,
+    });
+  });
+});
+
+describe("generateEdits on a console result", () => {
+  const columns: readonly EditColumn[] = [
+    { name: "id", type: "integer", default: null },
+    { name: "upper", type: "text", default: null, readOnly: true },
+  ];
+  const run = (edits: readonly RowEdit[]) =>
+    generateEdits({ table: TABLE, columns, identity: [0], rows: () => [1, "A"], edits, language: LANGUAGE });
+
+  it("givenUpdateOfReadOnlyColumn_whenGenerated_thenRefused", () => {
+    expect(() => run([{ kind: "update", row: 0, values: [{ column: 1, value: { kind: "null" } }] }])).toThrow(
+      /Column upper is read-only/,
+    );
+  });
+
+  it("givenInsertLeavingReadOnlyColumnDefault_whenGenerated_thenItIsLeftOut", () => {
+    const insert: RowEdit = { kind: "insert", values: [{ kind: "text", text: "7" }, { kind: "default" }] };
+    expect(run([insert])).toEqual([`INSERT INTO ${TABLE} ("id") VALUES ('7')`]);
   });
 });
