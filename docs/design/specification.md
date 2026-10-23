@@ -7,7 +7,7 @@ This document describes what the app does; `docs/decisions/` records why.
 
 v1 is listed in decision 014. In short: PostgreSQL, MySQL and SQLite through built-in runtime
 plugins; connections with encrypted secrets; a database explorer; SQL consoles with autocomplete
-and auto or manual commit; a virtualized result grid with export; a table data editor; DDL;
+and auto or manual commit; a virtualized result grid with export; CSV and TSV import; a table data editor; DDL;
 query history; EXPLAIN; configurable themes, fonts and density.
 
 ## Processes
@@ -19,7 +19,7 @@ its own MessagePort (decision 002).
 
 A plugin is a directory with `table-craft-plugin.json` and an ESM entry exporting a
 `DatasourcePlugin` (decisions 005 to 008). The contract lives in `@table-craft/plugin-api`.
-`API_VERSION` is `0.14.0`; while it is `0.x` the contract is unstable and every minor is a break.
+`API_VERSION` is `0.15.0`; while it is `0.x` the contract is unstable and every minor is a break.
 
 ### Discovery
 
@@ -94,6 +94,7 @@ outside the field's options, lands in `ignored`. A `jdbc:` prefix is dropped, an
 | `explainAnalyze`   | `Session.explain(sql, { analyze: true })` runs the statement and returns actual rows and times; requires `explain`                                     | a read analyses with actual rows on its nodes; where the dialect analyses a write and has `transactions`, an `UPDATE` analysed in manual mode then rolled back leaves `orders` unchanged                                                                                                                                                                                                                                                                                                  |
 | `keepAlive`        | `connect` honours `keepAliveInitialDelayMs`; `Session.ping` answers while idle and rejects `connectionLost` once the connection is gone (decision 054) | `ping` exists exactly when declared; a session connected with a delay pings and runs statements; a closed session's ping rejects `connectionLost`                                                                                                                                                                                                                                                                                                                                         |
 | `currentNamespace` | `Session.currentNamespace` reads the database or schema the session is in; `SqlLanguage.classify` marks `setsNamespace`; requires `sql`                | `currentNamespace` exists exactly when declared; a fresh session reads the fixture's namespace; the fixture's switch statement is classified `setsNamespace` and moves the read to its target; a switch to a missing target rejects and leaves it                                                                                                                                                                                                                                         |
+| `bulkInsert`       | `Session.insertRows` writes a batch of text rows atomically; `language` has `importType` and `createTable`; requires `transactions`                    | `insertRows`, `importType` and `createTable` exist exactly when `bulkInsert` is declared; each `type_probe` row written as the exporter's text into `type_probe_copy` reads back equal; a batch the database refuses leaves none of its rows and the transaction usable; control characters and quotes round-trip; a table created with every import type takes that type's sample text                                                                                                   |
 
 Every plugin, whatever it declares, is checked for a valid schema; for its manifest's connection
 fields agreeing with `connectionSchema` (each field a key the schema accepts, every required key
@@ -141,6 +142,8 @@ interface SqlLanguage {
   format(text: string, options: FormatOptions): string; // { keywordCase, indentWidth, linesBetweenStatements }; throws when it cannot
   parameters(statement: string): readonly SqlParameter[]; // { name, from, to, style }, outside literals and comments
   bind(statement: string, values: Readonly<Record<string, ParameterValue>>): BoundStatement; // { sql, params }
+  importType?(column: InferredColumn): string; // { kind, integerDigits, scale } to a column type; with `bulkInsert`
+  createTable?(qualifiedName: string, columns: readonly NewColumn[]): string; // CREATE TABLE for an import; with `bulkInsert`
 }
 
 interface ExplainOptions {
@@ -170,6 +173,7 @@ interface Session {
   explain?(sql: string, options: ExplainOptions): Promise<ExplainedPlan>; // present exactly when `explain` is declared
   currentNamespace?(): Promise<readonly string[] | null>; // present exactly when `currentNamespace` is declared; never opens a transaction
   ping?(): Promise<void>; // present exactly when `keepAlive` is declared; the host calls it only while idle and bounds the wait
+  insertRows?(target: InsertTarget, rows: readonly InsertRow[]): Promise<void>; // present exactly when `bulkInsert` is declared; all rows or none
   close(): Promise<void>; // settles in bounded time even on a dead network
 }
 
@@ -225,6 +229,15 @@ so the host recognises a `PluginError` with `isPluginError` (by name and code), 
 usable. A read-only session is set up by the plugin as it connects: PostgreSQL
 `SET SESSION CHARACTERISTICS AS TRANSACTION READ ONLY`, MySQL `SET SESSION TRANSACTION READ ONLY`,
 SQLite `PRAGMA query_only = ON`.
+
+`insertRows(target, rows)` (contract 0.15.0, decision 046) takes `target { table, columns }`, the
+table already quoted and each column with its declared type, and rows of text or `NULL` in the
+exporter's spelling: bytes as `0x<hex>`, booleans `true` or `false`. One call is all or nothing:
+inside a transaction the plugin wraps it in a savepoint, so a refused batch rejects
+`statementFailed` and the transaction stays usable; a lost link rejects `connectionFailed`.
+PostgreSQL sends one `COPY … FROM STDIN` per call (`pg-copy-streams`, decision 047), MySQL one
+multi-row `INSERT` whose values the driver escapes, SQLite a prepared multi-row `INSERT`; no value
+is ever spliced into SQL text.
 
 ### SQL language and transactions
 
@@ -374,6 +387,12 @@ handles belong to the port that created them and are released when it closes.
 | `export.cancel`         | `taskId`                                                                                          | `null`; the task ends `cancelled` and its `.part` file is removed                                                                        |
 | `export.retry`          | `taskId`, `stallSeconds`                                                                          | a new `ExportTask` from row 0; only a re-run or table export is retryable                                                                |
 | `export.list`           | none                                                                                              | `ExportTask[]`, every task of the engine                                                                                                 |
+| `import.preview`        | `file`, `format`                                                                                  | `ImportPreview { names, rows, kinds, types, encoding, ragged, size }`, the first 100 rows; see Import                                    |
+| `import.ddl`            | `path`, `relation`, `columns: { name, type, field }[]`                                            | the `CREATE TABLE` a new-table import would run                                                                                          |
+| `import.start`          | `file`, `format`, `target`, `transaction`, `errors`, `stallSeconds`                               | `ImportTask`; starts a background import (decision 046); `file` must be absolute                                                         |
+| `import.cancel`         | `taskId`                                                                                          | `null`; the task rolls back what it has not committed and ends `cancelled`                                                               |
+| `import.resume`         | `taskId`, `stallSeconds`                                                                          | a new `ImportTask` from the first uncommitted row, or from row 1 when nothing was committed                                              |
+| `import.list`           | none                                                                                              | `ImportTask[]`, every import of the engine                                                                                               |
 | `session.close`         | `sessionId`                                                                                       | `null`; releases the session's handles, then closes it                                                                                   |
 | `catalog.namespaces`    | `refresh?`                                                                                        | `Namespace[]`                                                                                                                            |
 | `catalog.describe`      | `path`, `refresh?`                                                                                | `{ catalog, introspectedAt, elapsedMs }`                                                                                                 |
@@ -395,7 +414,9 @@ first (decision 025). `result.fetchMore` calls on one handle run one after anoth
 closes it and answers `statementFailed`. An export runs as a task of the engine, not of the
 request: `export.start` answers at once, and the engine pushes `export.progress` (at most every
 250 ms) and one of `export.done`, `export.failed` or `export.cancelled` to every renderer port,
-each a message with `id: null` carrying the whole `ExportTask`. See Export.
+each a message with `id: null` carrying the whole `ExportTask`. See Export. An import is the same
+kind of task: `import.progress`, `import.done`, `import.failed` and `import.cancelled` carry the
+whole `ImportTask`. See Import.
 A statement still running when its session closes is answered with `unknownSession`.
 `script.split` needs no session; it runs the plugin's `language` in the engine, so the renderer
 never parses SQL (decision 008). `transactionOpen` is `false` on a plugin without `transactions`,
@@ -429,7 +450,10 @@ opens a new session, restores manual mode, and runs the statement there; the res
 `reconnected { namespace, namespaceLost }`. While a statement runs a whole keepalive interval, the
 engine opens a probe connection; one that neither connects nor fails within `PROBE_WINDOW_MS`
 fails the statement `connectionLost` and the next request reconnects. A session lost with a
-transaction open fails `connectionLost` instead of reconnecting silently.
+transaction open fails `connectionLost` instead of reconnecting silently. Exports and imports run
+on sessions of their own with keepalive but outside this watch: no statement timeout, ping, probe
+or reconnect touches them, since a reconnect mid-import would lose its open transaction; only the
+Transfer stall timeout ends one (decisions 040, 046).
 
 | Constant          | Value | Meaning                                                            |
 | ----------------- | ----- | ------------------------------------------------------------------ |
@@ -539,6 +563,8 @@ run either.
 | `explorer.copyName`                      | Copy Qualified Name                   | `⌥⇧⌘C` ¹ | `Ctrl+Alt+Shift+C` ¹   |
 | `explorer.reveal`                        | Select in Database View               |          |                        |
 | `explorer.export`                        | Export Data…                          |          |                        |
+| `explorer.importIntoTable`               | Import Data from File…                |          |                        |
+| `explorer.importNewTable`                | Import Data into New Table…           |          |                        |
 | `history.show`                           | Query History…                        | `⌥⌘E`    | `Ctrl+Alt+E`           |
 | `history.clear`                          | Clear Query History…                  |          |                        |
 | `console.reopen`                         | Open Closed Console…                  |          |                        |
@@ -547,6 +573,10 @@ run either.
 | `export.retry`                           | Retry Export                          |          |                        |
 | `export.reveal`                          | Reveal Exported File                  |          |                        |
 | `export.dismiss`                         | Remove Finished Export                |          |                        |
+| `import.cancel`                          | Cancel Import                         |          |                        |
+| `import.resume`                          | Resume or Retry Import                |          |                        |
+| `import.revealRejected`                  | Reveal Rejected Rows                  |          |                        |
+| `import.dismiss`                         | Remove Finished Import                |          |                        |
 | `services.clearExecutions`               | Clear Executions                      |          |                        |
 | `services.copySql`                       | Copy Execution SQL                    |          |                        |
 | `services.openInConsole`                 | Open Execution in Console             |          |                        |
@@ -773,7 +803,7 @@ file may be many gigabytes at flat memory:
   disk; the finished file is fsynced, renamed over `path` and its folder fsynced. A failed or
   cancelled export removes the part file and leaves an existing `path` untouched. A disk with less
   than 1 GiB free adds a warning; a full disk fails as `diskFull` naming the bytes written.
-- Network. A source that delivers nothing for Settings' Export stall timeout (120 s) fails the task
+- Network. A source that delivers nothing for Settings' Transfer stall timeout (120 s) fails the task
   as `stalled`; its session is closed without waiting, and `Session.close` is bounded even on a
   dead link. A lost connection fails it as `source`. Every failure says how many rows were written
   before it stopped. Nothing resumes; **Retry** runs a re-run or table export again from row 0.
@@ -966,6 +996,49 @@ one filtered to the selected row. Reload, a filter or sort change, Rerun, closin
 disconnecting and quitting with pending changes ask Submit, Discard or Cancel. A connection that
 closes on its own discards pending changes with a notice. The value panel edits text and JSON
 cells; ⌘↵ writes the buffer. There is no manual transaction mode in the editor: `Tx: Auto`.
+
+## Import
+
+Plan 021, decisions 046 and 047. **Import Data from File…** on a table and **Import Data into New
+Table…** on a schema or database read a CSV or TSV file into it as a background task of the engine,
+beside exports. Both need `bulkInsert` and a writable data source; an in-memory SQLite database is
+refused, because the import's own session would see another database.
+
+- Reading. The engine streams the file in 64 KiB chunks through `core/import/` and never holds it
+  whole: a decoder (UTF-8 with or without its BOM, UTF-16 LE or BE by BOM, Windows-1252; Detect
+  sniffs the BOM) and an RFC 4180 reader with a one-character delimiter (`,` `;` tab `|`), a quote
+  (`"`, `'` or none) escaped by doubling or by a backslash, CR, LF or CRLF anywhere, quoted
+  newlines, a header row, Trim spaces and a NULL text. An unquoted field equal to the NULL text
+  (empty by default) is `NULL`; a quoted `""` is the empty string. The TSV preset is the exporter's
+  TSV: tab, no quote, backslash escapes. A field past 16 MiB fails the file (an unterminated
+  quote), a row with the wrong number of fields is a bad row.
+- Dialog. The preview shows the first 100 rows with each column's inferred kind (from the first
+  1,000: `integer`, `bigint`, `decimal`, `double`, `boolean`, `date`, `timestamp` or `text`) and the
+  file's encoding and size, reloading 250 ms after an option changes. Into a table, each column
+  takes the field of the same name (by position without a header) and can be remapped or skipped.
+  Into a new table, the name follows the file, each field can be renamed, retyped (the plugin's
+  `importType`) or left out, and the plugin's `createTable` statement is shown before it runs.
+- Writing. The import opens a writable session of its own, with TCP keepalive, in manual mode, and
+  writes batches of 1,000 rows or 1 MiB through `insertRows`. **All or nothing** (the default)
+  commits once at the end; **Commit every N rows** (10,000) commits as it goes. A new table is
+  created in its own statement first and stays, empty or partial, when the import fails.
+- Bad rows. **Stop at the first** (the default) fails the task naming the row and line. **Skip up
+  to N** retries a refused batch row by row and writes each refused or malformed row with
+  `rejected_line` and `rejected_reason` to `<file>.rejected.csv`; one more than N fails the task.
+  The rejected file is cut back to the last commit when the task fails, so it matches the table.
+- Failure. Cancel, a lost link, a refused row under Stop and a stall longer than Settings' Transfer
+  stall timeout roll back what was not committed and say what was kept: `Nothing was imported: the
+transaction was rolled back.` or `10,000 rows are committed; resume from row 10,001.` When the
+  link dies during a COMMIT the task cannot know, and says the last commit's rows may or may not be
+  there. **Resume** starts a new task from the first uncommitted row, appending to the rejected
+  file; with nothing committed it is **Retry**, from row 1.
+
+The Services tool window lists imports under **Imports** with the file, table, state, rows, bytes
+read of the file's size, rejected rows and time, and **Cancel**, **Resume** or **Retry** and
+**Reveal Rejected Rows**; the status bar shows `Importing N · P%`. A failed import also opens a
+notice. When an import ends the engine's catalog cache and the explorer synchronize the schema.
+The log records `import finished`, `cancelled` or `failed` with counts and timings, never the file,
+the table or a value.
 
 ## Completion and navigation
 

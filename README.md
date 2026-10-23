@@ -157,7 +157,9 @@ Sessions stay healthy on their own. Every connection uses TCP keepalive (30 s by
 Advanced). A console idle that long checks its session before the next Run and reconnects if the
 connection dropped, saying so in Output; a statement running when the network goes away fails
 within one keepalive interval instead of hanging. A **statement timeout** (Settings → Editor →
-Running, or per data source under Advanced) cancels a console statement that runs too long. An
+Running, or per data source under Advanced) cancels a console statement that runs too long; exports
+and imports are not cut by it and are never reconnected mid-way, they stop only when the database
+answers nothing for the Transfer stall timeout (Settings → Data Editor → Export and import). An
 open transaction is never replaced silently: if its connection drops, the error says its changes
 are gone.
 
@@ -234,6 +236,20 @@ edits stay. `⌘B` on a foreign key cell opens the referenced row.
 ![Table data editor](docs/media/table-editor.gif)
 
 See [Table data editor](docs/design/specification.md#table-data-editor).
+
+### Import
+
+**Import Data from File…** on a table, or **Import Data into New Table…** on a schema, reads a CSV
+or TSV file into it. The dialog previews the first rows with the delimiter, quote, encoding
+(UTF-8 or UTF-16, detected by its BOM), header and NULL text you choose, maps columns by name, and
+for a new table infers the column types and shows the `CREATE TABLE` before it runs. The file is
+streamed, so a multi-gigabyte import uses flat memory, and it runs in the background under
+**Imports** in Services. By default it is all or nothing: a bad row, a cancel or a dropped
+connection rolls everything back. Choose **Commit every N rows** to keep what was written and
+**Resume** from the first row that was not, and **Skip** to set bad rows aside in
+`<file>.rejected.csv` with the reason for each.
+
+See [Import](docs/design/specification.md#import).
 
 ### DDL and SQL generation
 
@@ -361,7 +377,7 @@ back to its default without affecting the others.
 | `data.pageRows`                        | 10–10,000                                                          | 500           |
 | `data.fetchAllCap`                     | 1,000–1,000,000, at least `pageRows`                               | 100,000       |
 | `log.level`                            | `info`, `debug`                                                    | `info`        |
-| `data.exportStallSeconds`              | 10–3,600; an export that receives nothing this long fails          | 120           |
+| `data.exportStallSeconds`              | 10–3,600; an export or import the database stalls this long fails  | 120           |
 | `updates.checkAutomatically`           | `true`, `false`; look for a new version after launch and daily     | `true`        |
 
 A theme of your own is a JSON file in `themes/` in the profile folder. It names a built-in theme as
@@ -402,13 +418,15 @@ The manifest declares what the plugin can do, and the UI offers only what it dec
   `USE` and `SET search_path`.
 - `keepAlive`: turns on TCP keepalive when asked and answers a ping, so an idle console notices a
   dropped connection and reconnects.
+- `bulkInsert`: writes batches of rows from an imported file and proposes and creates a table for
+  one; requires `transactions`.
 
 ```json
 {
   "id": "postgres",
   "name": "PostgreSQL",
   "version": "0.0.0",
-  "apiVersion": "0.14.0",
+  "apiVersion": "0.15.0",
   "entry": "index.js",
   "capabilities": [
     "sql",
@@ -419,7 +437,8 @@ The manifest declares what the plugin can do, and the UI offers only what it dec
     "explain",
     "explainAnalyze",
     "currentNamespace",
-    "keepAlive"
+    "keepAlive",
+    "bulkInsert"
   ],
   "highlight": "postgresql",
   "connection": {
@@ -471,7 +490,7 @@ for Updates…**.
 ## Not in v1
 
 - Planned for v1.1: SSH tunnels and saved query files.
-- Later: ER diagrams, schema compare and migrations, data import, a plugin marketplace, Redis and
+- Later: ER diagrams, schema compare and migrations, XLSX and JSON import, a plugin marketplace, Redis and
   MongoDB plugins, a CLI, AI assistance, Git integration, a debugger, notebooks, Docker and
   Kubernetes integration.
 
