@@ -9,7 +9,8 @@ catalog's. Three sources, the first that has an answer wins:
 
 1. The script. The nearest statement before the caret that switches namespace (`USE db` on MySQL;
    `SET [SESSION | LOCAL] search_path`, `SET SCHEMA` and `RESET search_path` on PostgreSQL), run
-   or not, names it: its first target that is an existing database or schema of the right kind.
+   or not, names it: its first target naming an existing top-level namespace (`USE`; MySQL lists
+   its databases as top-level schemas) or schema (a search path).
    The plugin's language recognises these statements through the shared tokenizer
    (`SqlDialectOptions.namespaceStatements`, `namespaceTarget`); `classify` marks them
    `setsNamespace`. The table editor's WHERE and ORDER BY bars skip this step.

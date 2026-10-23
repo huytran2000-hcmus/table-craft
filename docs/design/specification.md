@@ -976,7 +976,8 @@ it.
 Plan 022, decision 048. Unqualified names complete and resolve against the first of:
 
 1. The script: the nearest statement before the caret's statement that switches namespace, run or
-   not; its first target naming an existing database or schema of that kind. A target naming none,
+   not; its first target naming an existing namespace: a top-level one for `USE`, a schema for a
+   search path. A target naming none,
    `DEFAULT` and `RESET` fall through. The WHERE and ORDER BY bars skip this step.
 2. The console: `current` on `completion.complete` and `navigation.resolve`, the namespace the
    console's session last reported.
