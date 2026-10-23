@@ -1,10 +1,14 @@
-import { BYTES_PREVIEW_LENGTH, type WireValue } from "@table-craft/plugin-api";
+import type { WireValue } from "@table-craft/plugin-api";
 
 const CLIPPED_MARK = "…";
+const HEX_DIGITS_PER_BYTE = 2;
 
-/** `0x` and the preview hex, marked when the value is longer than its preview (decision 017). */
+/**
+ * `0x` and the hex, marked when the preview holds less than the value (decision 017); an export
+ * reads values in full, so its hex is never marked (plan 018).
+ */
 export function bytesText(preview: string, length: number): string {
-  return `0x${preview}${length > BYTES_PREVIEW_LENGTH ? CLIPPED_MARK : ""}`;
+  return `0x${preview}${preview.length < length * HEX_DIGITS_PER_BYTE ? CLIPPED_MARK : ""}`;
 }
 
 /** A non-null cell as the text formats write it: the database's own text where it has one. */
