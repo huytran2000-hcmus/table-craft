@@ -161,6 +161,16 @@ export function currentFormatOptions(): FormatOptions {
   return useSettings.getState().settings.editor.format;
 }
 
+/**
+ * The seconds a console statement may run before the engine cancels it: the datasource's own
+ * limit, else Settings → Editor → Running; 0 is none (decision 054).
+ */
+export function statementTimeoutOf(
+  datasource: { readonly statementTimeoutSeconds?: number | undefined } | undefined,
+): number {
+  return datasource?.statementTimeoutSeconds ?? useSettings.getState().settings.console.statementTimeoutSeconds;
+}
+
 /** Whether a run looks for `:name`, `?` and `$1` and asks for their values (plan 019 decision 8). */
 export function detectsParameters(): boolean {
   return useSettings.getState().settings.console.parameters;

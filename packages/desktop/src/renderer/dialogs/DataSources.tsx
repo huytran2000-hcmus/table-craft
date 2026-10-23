@@ -21,6 +21,7 @@ import {
   TextInput,
 } from "@table-craft/desktop/renderer/dialogs/parts.js";
 import {
+  applyParsedUrl,
   draftFromView,
   draftProblems,
   duplicateDraft,
@@ -29,6 +30,7 @@ import {
   toSaveRequest,
   type FormDraft,
 } from "@table-craft/desktop/renderer/model/datasourceForm.js";
+import { useSettings } from "@table-craft/desktop/renderer/state/settings.js";
 import { folderPaths } from "@table-craft/desktop/renderer/model/datasourceTree.js";
 import { useDataSourcesDialog, type DialogTarget } from "@table-craft/desktop/renderer/state/dataSourcesDialog.js";
 import { pluginOf, useDatasources } from "@table-craft/desktop/renderer/state/datasources.js";
@@ -42,6 +44,10 @@ const SECRET_MODE_LABEL: Readonly<Record<SecretMode, string>> = {
   never: "Never",
 };
 const NEW_KEY_PREFIX = "new-";
+const KEEPALIVE_HINT = "Seconds idle before TCP keepalive probes start; 0 turns them off. Blank is 30.";
+const TIMEOUT_HINT =
+  "A console statement running longer is cancelled; 0 waits. Blank follows Settings → Editor → Running.";
+const URL_SEPARATOR = "://";
 const READ_ONLY_HINT = "A guard against accidents, not a security boundary: use a read-only database user for that.";
 
 type TestState = { readonly kind: "testing" } | { readonly kind: "done"; readonly result: ProbeResult };
@@ -122,6 +128,8 @@ interface FieldProps {
   readonly draft: FormDraft;
   readonly encryption: { readonly available: boolean; readonly reason: string | null };
   readonly onChange: (change: Partial<FormDraft>) => void;
+  /** Takes text pasted into the field when it is a connection URL; false leaves the paste alone. */
+  readonly onPasteUrl: (field: ConnectionField, text: string) => boolean;
 }
 
 function SecretField({ field, draft, encryption, onChange }: FieldProps) {
@@ -174,7 +182,7 @@ function SecretField({ field, draft, encryption, onChange }: FieldProps) {
   );
 }
 
-function PlainField({ field, draft, onChange }: FieldProps) {
+function PlainField({ field, draft, onChange, onPasteUrl }: FieldProps) {
   const id = useId();
   const value = draft.values[field.key];
   const set = (next: string | boolean) => onChange({ values: { ...draft.values, [field.key]: next } });
@@ -209,6 +217,9 @@ function PlainField({ field, draft, onChange }: FieldProps) {
         placeholder={field.placeholder}
         value={text}
         onChange={(event) => set(event.target.value)}
+        onPaste={(event) => {
+          if (onPasteUrl(field, event.clipboardData.getData("text"))) event.preventDefault();
+        }}
       />
       {field.kind === "file" ? (
         <Button
@@ -238,6 +249,47 @@ function Fields(props: Omit<FieldProps, "field"> & { readonly fields: readonly C
   );
 }
 
+/** Whether pasted text is one of the plugin's URLs rather than a host name or a plain path. */
+export function looksLikeUrl(spec: NonNullable<PluginInfo["url"]>, text: string): boolean {
+  const lower = text
+    .trim()
+    .toLowerCase()
+    .replace(/^jdbc:/, "");
+  return spec.schemes.some((scheme) =>
+    spec.form === "server" ? lower.startsWith(`${scheme}${URL_SEPARATOR}`) : lower.startsWith(`${scheme}:`),
+  );
+}
+
+/** The field a URL part fills; a URL pasted there is read as a whole URL. */
+function urlFieldKey(spec: NonNullable<PluginInfo["url"]>): string | undefined {
+  return spec.form === "server" ? spec.parts.host : spec.parts.path;
+}
+
+function UrlNoteLine({ draft, fields }: { readonly draft: FormDraft; readonly fields: readonly ConnectionField[] }) {
+  const note = draft.urlNote;
+  if (note === null) return null;
+  if (note.kind === "failed") {
+    return (
+      <p role="alert" data-testid="url-note" className="col-start-2 text-danger">
+        {note.message} <span className="text-ink-muted">{note.hint}</span>
+      </p>
+    );
+  }
+  const saved = note.secrets.map((label) => {
+    const key = fields.find((field) => field.label === label)?.key ?? "";
+    const mode = SECRET_MODE_LABEL[draft.secretModes[key] ?? "never"];
+    return `${label} from the URL; saved with ${mode}.`;
+  });
+  const ignored = note.ignored.length === 0 ? [] : [`Ignored: ${note.ignored.join(", ")}.`];
+  const lines = [...saved, ...ignored];
+  if (lines.length === 0) return null;
+  return (
+    <p data-testid="url-note" className="col-start-2 text-ink-muted">
+      {lines.join(" ")}
+    </p>
+  );
+}
+
 function SectionTitle({ children }: { readonly children: string }) {
   return <h3 className="col-span-2 mt-gap border-b border-line pb-1 font-semibold text-ink-muted">{children}</h3>;
 }
@@ -247,18 +299,32 @@ interface FormProps {
   readonly plugin: PluginInfo | undefined;
   readonly folders: readonly string[];
   readonly onChange: (change: Partial<FormDraft>) => void;
+  readonly onUrl: (url: string) => void;
 }
 
-function DraftForm({ draft, plugin, folders, onChange }: FormProps) {
+function DraftForm({ draft, plugin, folders, onChange, onUrl }: FormProps) {
   const encryption = useDatasources((state) => state.encryption);
+  const appTimeout = useSettings((state) => state.settings.console.statementTimeoutSeconds);
   const nameId = useId();
   const folderId = useId();
   const commentId = useId();
   const foldersId = useId();
+  const urlId = useId();
+  const keepAliveId = useId();
+  const timeoutId = useId();
   const fields = plugin?.fields ?? [];
   const general = fields.filter((field) => field.group !== "advanced");
   const advanced = fields.filter((field) => field.group === "advanced");
-  const fieldProps = { draft, encryption, onChange };
+  const spec = plugin?.url ?? null;
+  const capabilities = plugin?.capabilities ?? [];
+  const keepAlive = capabilities.includes("keepAlive");
+  const timeout = capabilities.includes("cancel");
+  const onPasteUrl = (field: ConnectionField, text: string): boolean => {
+    if (spec === null || urlFieldKey(spec) !== field.key || !looksLikeUrl(spec, text)) return false;
+    onUrl(text);
+    return true;
+  };
+  const fieldProps = { draft, encryption, onChange, onPasteUrl };
   return (
     <fieldset
       disabled={draft.ephemeral}
@@ -301,14 +367,65 @@ function DraftForm({ draft, plugin, folders, onChange }: FormProps) {
         />
       </FieldRow>
       <SectionTitle>General</SectionTitle>
+      {spec === null ? null : (
+        <>
+          <FieldRow label="URL" htmlFor={urlId}>
+            <TextInput
+              id={urlId}
+              className="flex-1"
+              placeholder={`Paste a ${spec.schemes[0] ?? ""}${spec.form === "server" ? URL_SEPARATOR : ":"} URL to fill the fields`}
+              value={draft.url}
+              onChange={(event) => onChange({ url: event.target.value, urlNote: null })}
+              onPaste={(event) => {
+                event.preventDefault();
+                onUrl(event.clipboardData.getData("text"));
+              }}
+              onKeyDown={(event) => {
+                if (event.key === "Enter" && draft.url.trim() !== "") onUrl(draft.url);
+              }}
+            />
+          </FieldRow>
+          <UrlNoteLine draft={draft} fields={fields} />
+        </>
+      )}
       <Fields fields={general} {...fieldProps} />
       {draft.ephemeral || encryption.available ? null : (
         <p className="col-span-2 text-ink-muted">Forever is unavailable: {encryption.reason}</p>
       )}
-      {advanced.length === 0 ? null : (
+      {advanced.length === 0 && !keepAlive && !timeout ? null : (
         <>
           <SectionTitle>Advanced</SectionTitle>
           <Fields fields={advanced} {...fieldProps} />
+          {keepAlive ? (
+            <FieldRow label="Keepalive (s)" htmlFor={keepAliveId}>
+              <TextInput
+                id={keepAliveId}
+                className="w-24"
+                inputMode="numeric"
+                placeholder="30"
+                title={KEEPALIVE_HINT}
+                value={draft.keepAliveSeconds}
+                onChange={(event) => onChange({ keepAliveSeconds: event.target.value })}
+              />
+              <span className="truncate text-ink-muted">0 turns it off</span>
+            </FieldRow>
+          ) : null}
+          {timeout ? (
+            <FieldRow label="Statement timeout (s)" htmlFor={timeoutId}>
+              <TextInput
+                id={timeoutId}
+                className="w-24"
+                inputMode="numeric"
+                placeholder={String(appTimeout)}
+                title={TIMEOUT_HINT}
+                value={draft.statementTimeoutSeconds}
+                onChange={(event) => onChange({ statementTimeoutSeconds: event.target.value })}
+              />
+              <span className="truncate text-ink-muted">
+                {draft.statementTimeoutSeconds.trim() === "" ? "From Settings → Editor → Running; " : ""}0 waits
+              </span>
+            </FieldRow>
+          ) : null}
         </>
       )}
       <SectionTitle>Options</SectionTitle>
@@ -387,6 +504,16 @@ function Editor({ target }: { readonly target: DialogTarget }) {
     const draft = draftOf(key);
     if (draft === undefined) return;
     setState((previous) => ({ ...previous, edits: { ...previous.edits, [key]: { ...draft, ...patch, dirty: true } } }));
+    setFailure(null);
+  }
+
+  async function pasteUrl(draft: FormDraft, url: string): Promise<void> {
+    const draftPlugin = pluginOf(plugins, draft.pluginId);
+    const answer = await bridge().parseDatasourceUrl(draft.pluginId, url);
+    const next = answer.ok
+      ? applyParsedUrl(draft, draftPlugin, answer.value, url)
+      : { ...draft, url: url.trim(), urlNote: { kind: "failed" as const, ...answer.error } };
+    setState((previous) => ({ ...previous, edits: { ...previous.edits, [draft.key]: { ...next, dirty: true } } }));
     setFailure(null);
   }
 
@@ -562,6 +689,7 @@ function Editor({ target }: { readonly target: DialogTarget }) {
                 plugin={plugin}
                 folders={folders}
                 onChange={(patch) => change(current.key, patch)}
+                onUrl={(url) => void pasteUrl(current, url)}
               />
             </>
           )}

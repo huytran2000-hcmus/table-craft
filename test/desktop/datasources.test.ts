@@ -44,6 +44,25 @@ describe("datasource store", () => {
     expect(reloaded).toEqual({ datasources: [LOCAL_PG], warning: null });
   });
 
+  it("givenKeepAliveAndTimeout_whenSavedAndLoaded_thenRoundTrip", async () => {
+    const { files, store: first } = store();
+    const tuned = { ...LOCAL_PG, keepAliveSeconds: 0, statementTimeoutSeconds: 120 };
+    await first.save([tuned]);
+
+    const reloaded = await createDatasourceStore({ directory: DIRECTORY, files }).load();
+
+    expect(reloaded.datasources).toEqual([tuned]);
+  });
+
+  it("givenKeepAliveOutOfRange_whenLoaded_thenNotMisread", async () => {
+    const file = JSON.stringify({ version: 1, datasources: [{ ...LOCAL_PG, keepAliveSeconds: 99_999 }] });
+
+    const loaded = await store(memoryFiles({ [PATH]: file })).store.load();
+
+    expect(loaded.datasources).toEqual([]);
+    expect(loaded.warning).not.toBeNull();
+  });
+
   it("givenCorruptDatasourcesFile_whenLoaded_thenBackedUpAndEmptyListWithWarning", async () => {
     const { files, store: corrupt } = store(memoryFiles({ [PATH]: "{ not json" }));
 

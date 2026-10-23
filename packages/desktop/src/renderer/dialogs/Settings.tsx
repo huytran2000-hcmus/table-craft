@@ -55,6 +55,8 @@ import {
   type NumberRange,
   type Settings,
   type ThemeChoice,
+  STATEMENT_TIMEOUT_SECONDS_RANGE,
+  statementTimeoutSecondsError,
 } from "@table-craft/desktop/settings/settings.js";
 
 const PAGE_TITLES: Readonly<Record<SettingsPage, string>> = {
@@ -545,6 +547,26 @@ function ParametersField() {
   );
 }
 
+function StatementTimeoutField() {
+  const seconds = useSettings((state) => state.settings.console.statementTimeoutSeconds);
+  return (
+    <>
+      <NumberField
+        label="Statement timeout (s)"
+        value={seconds}
+        range={STATEMENT_TIMEOUT_SECONDS_RANGE}
+        check={statementTimeoutSecondsError}
+        onValid={(statementTimeoutSeconds) =>
+          update((current) => ({ ...current, console: { ...current.console, statementTimeoutSeconds } }))
+        }
+      />
+      <p className="col-start-2 text-ink-muted">
+        A console statement running longer is cancelled; 0 waits. A data source can set its own.
+      </p>
+    </>
+  );
+}
+
 function EditorPage() {
   return (
     <>
@@ -559,6 +581,7 @@ function EditorPage() {
       <FormattingFields />
       <SectionTitle>Running</SectionTitle>
       <ParametersField />
+      <StatementTimeoutField />
     </>
   );
 }

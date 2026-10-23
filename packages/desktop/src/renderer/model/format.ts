@@ -1,4 +1,9 @@
-import type { CurrentNamespace, EngineError, StatementKind } from "@table-craft/desktop/engine/protocol.js";
+import type {
+  CurrentNamespace,
+  EngineError,
+  Reconnection,
+  StatementKind,
+} from "@table-craft/desktop/engine/protocol.js";
 import type { DatasourceView } from "@table-craft/desktop/preload/bridge.js";
 import type { ConsoleSession } from "@table-craft/desktop/renderer/state/consoles.js";
 import { ENGINE_EXITED_HINT, type Connection } from "@table-craft/desktop/renderer/state/datasources.js";
@@ -185,6 +190,15 @@ export function tabLabel(title: string, datasourceName: string | undefined): str
  * The console toolbar's namespace label (plan 022): the database or schema itself, with the full
  * dotted path as its tooltip; null hides it.
  */
+/** What Output says when the engine replaced a lost session before a statement (decision 054). */
+export function reconnectedText(reconnected: Reconnection): string {
+  const lost = "Reconnected: the connection had been lost.";
+  const where = namespaceLabel(reconnected.namespace)?.title;
+  if (!reconnected.namespaceLost) return lost;
+  const starts = where === undefined ? "The new session starts" : `The new session starts in ${where}`;
+  return `${lost} ${starts}; the USE or search path set earlier no longer applies.`;
+}
+
 export function namespaceLabel(namespace: CurrentNamespace): { readonly text: string; readonly title: string } | null {
   const text = namespace?.at(-1);
   return namespace === null || text === undefined ? null : { text, title: namespace.join(".") };

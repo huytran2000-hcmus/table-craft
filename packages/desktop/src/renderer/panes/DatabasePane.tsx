@@ -79,6 +79,7 @@ const DATASOURCE_MENU = [
   null,
   ACTION_IDS.datasourceProperties,
   ACTION_IDS.duplicateDatasource,
+  ACTION_IDS.copyDatasourceUrl,
   ACTION_IDS.moveToFolder,
   null,
   ACTION_IDS.deleteDatasource,

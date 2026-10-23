@@ -7,6 +7,7 @@ import {
   type ExecutedStatement,
   type ExportFormat,
   type ExtractorKind,
+  type Reconnection,
   type RowRange,
   type SortKey,
   type TransactionMode,
@@ -15,7 +16,13 @@ import {
 import type { HistoryEntry } from "@table-craft/desktop/preload/bridge.js";
 import type { EngineClient } from "@table-craft/desktop/renderer/engine/client.js";
 import { carriedLayout, type ColumnLayout } from "@table-craft/desktop/renderer/model/columnLayout.js";
-import { executedText, explainedText, exportedText, firstLine } from "@table-craft/desktop/renderer/model/format.js";
+import {
+  executedText,
+  explainedText,
+  exportedText,
+  firstLine,
+  reconnectedText,
+} from "@table-craft/desktop/renderer/model/format.js";
 import { clampSelection, type GridSelection } from "@table-craft/desktop/renderer/model/gridSelection.js";
 import {
   parameterPrompt,
@@ -27,7 +34,7 @@ import {
 import { caretAfterReformat } from "@table-craft/desktop/renderer/model/reformat.js";
 import { statementsToRun, type RunScope, type TextSpan } from "@table-craft/desktop/renderer/model/statementAt.js";
 import { useCatalog } from "@table-craft/desktop/renderer/state/catalog.js";
-import { useDatasources } from "@table-craft/desktop/renderer/state/datasources.js";
+import { datasourceById, useDatasources } from "@table-craft/desktop/renderer/state/datasources.js";
 import { NO_EXPORTS, useExports, type ExportStarter } from "@table-craft/desktop/renderer/state/exports.js";
 import {
   NO_EXECUTION_REPORTER,
@@ -51,6 +58,7 @@ import {
   currentFormats,
   currentPaging,
   detectsParameters,
+  statementTimeoutOf,
 } from "@table-craft/desktop/renderer/state/settings.js";
 
 export {
@@ -325,6 +333,8 @@ export interface ConsolesDependencies {
   readonly record?: (entry: HistoryEntry) => void;
   /** Starts background exports of a result (decision 040). */
   readonly exports?: ExportStarter;
+  /** The statement timeout for the datasource's consoles in seconds, 0 for none (decision 054). */
+  readonly statementTimeout?: (datasourceId: string) => number;
 }
 
 function newConsole(datasourceId: string, name: string, sql: string, connect: boolean): ConsoleSession {
@@ -354,6 +364,13 @@ function newConsole(datasourceId: string, name: string, sql: string, connect: bo
 /** The console patch for a reply that may carry a fresh namespace read; an absent one keeps the last. */
 function namespaceOf(reply: { readonly namespace?: CurrentNamespace }): { namespace?: CurrentNamespace } {
   return reply.namespace === undefined ? {} : { namespace: reply.namespace };
+}
+
+/** The namespace patch for a statement's reply: a reconnect's start, then any read after the statement. */
+function namespaceAfter(reply: { readonly namespace?: CurrentNamespace; readonly reconnected?: Reconnection }): {
+  namespace?: CurrentNamespace;
+} {
+  return { ...namespaceOf(reply.reconnected ?? {}), ...namespaceOf(reply) };
 }
 
 function statementCount(count: number): string {
@@ -387,6 +404,7 @@ export function createConsolesStore(dependencies: ConsolesDependencies) {
     dependencies.askParameters ?? ((request: ParametersRequest) => Promise.resolve(request.initial));
   const executions = dependencies.executions ?? NO_EXECUTION_REPORTER;
   const exports = dependencies.exports ?? NO_EXPORTS;
+  const statementTimeout = dependencies.statementTimeout ?? (() => 0);
   /** The execution each result tab came from, by result id, so fetching more updates its row count. */
   const producedBy = new Map<string, number>();
   /** When each console's current run started; a confirmation restarts it once answered. */
@@ -428,6 +446,20 @@ export function createConsolesStore(dependencies: ConsolesDependencies) {
 
     function logError(id: string, sql: string, error: EngineError): void {
       log(id, { sql, message: error.message, hint: error.hint, tone: "error" });
+      // The engine dropped the session; the next Run opens a new one with no transaction (decision 054).
+      if (error.code === "connectionLost") patch(id, { transactionOpen: false });
+    }
+
+    /** Says the engine replaced a lost session before the statement ran, ahead of the statement's own line. */
+    function logReconnected(id: string, reconnected: Reconnection | undefined): void {
+      if (reconnected !== undefined) log(id, { sql: "", message: reconnectedText(reconnected), tone: "info" });
+    }
+
+    /** The `timeoutSeconds` a console statement sends; nothing when the console has no limit. */
+    function limitOf(id: string): { timeoutSeconds?: number } {
+      const datasourceId = get().consoles[id]?.datasourceId;
+      const seconds = datasourceId === undefined ? 0 : statementTimeout(datasourceId);
+      return seconds > 0 ? { timeoutSeconds: seconds } : {};
     }
 
     /** One statement on its way to the engine: Services lists it now, history once it ends. */
@@ -615,13 +647,15 @@ export function createConsolesStore(dependencies: ConsolesDependencies) {
         try {
           cursorsClosed(id);
           const paging = currentPaging();
-          const { transactionOpen, namespace, ...executed } = await client.call("statement.execute", {
+          const { transactionOpen, namespace, reconnected, ...executed } = await client.call("statement.execute", {
             sessionId,
             sql: statement.sql,
             ...(parameters === undefined ? {} : { parameters }),
             ...paging,
+            ...limitOf(id),
           });
-          const moved = namespaceOf({ namespace });
+          const moved = namespaceAfter({ namespace, ...(reconnected === undefined ? {} : { reconnected }) });
+          logReconnected(id, reconnected);
           const elapsed = dependencies.now() - startedAt;
           ended({ durationMs: elapsed, outcome: "success", rowCount: rowsOf(executed), message: null });
           log(id, { sql, message: executedText(executed, elapsed, statement.kind), tone: "success" });
@@ -794,11 +828,14 @@ export function createConsolesStore(dependencies: ConsolesDependencies) {
       const ended = started(id, statement.sql, explainLabel(statement.sql, analyze));
       const startedAt = dependencies.now();
       try {
-        const { plan, transactionOpen } = await client.call("statement.explain", {
+        const { plan, transactionOpen, reconnected } = await client.call("statement.explain", {
           sessionId,
           sql: statement.sql,
           analyze,
+          ...limitOf(id),
         });
+        logReconnected(id, reconnected);
+        const moved = reconnected === undefined ? {} : namespaceOf(reconnected);
         const elapsed = dependencies.now() - startedAt;
         ended({ durationMs: elapsed, outcome: "success", rowCount: null, message: null, sql: plan.statement });
         log(id, { sql, message: explainedText(analyze, elapsed), tone: "success" });
@@ -808,14 +845,14 @@ export function createConsolesStore(dependencies: ConsolesDependencies) {
           analyze && verdict.writes ? (transactionOpen ? "inTransaction" : "committed") : "none";
         if (replacing === null) {
           const tab = planTabOf(`${id}/plan-${++resultIds}`, statement.sql, plan, effect);
-          patch(id, { results: [...current.results, tab], activeResult: tab.id, transactionOpen });
+          patch(id, { results: [...current.results, tab], activeResult: tab.id, transactionOpen, ...moved });
         } else {
           updatePlan(id, replacing.id, (latest) => ({
             ...planTabOf(latest.id, latest.sql, plan, effect),
             view: latest.view,
             pinned: latest.pinned,
           }));
-          patch(id, { transactionOpen });
+          patch(id, { transactionOpen, ...moved });
         }
         if (analyze && statement.kind === "ddl") {
           if (transactionOpen) pendingDdl.add(id);
@@ -1107,12 +1144,14 @@ export function createConsolesStore(dependencies: ConsolesDependencies) {
             producedBy.set(resultId, ended.executionId);
             statementStartedAt = dependencies.now();
             const paging = currentPaging();
-            const { transactionOpen, namespace, ...executed } = await client.call("statement.execute", {
+            const { transactionOpen, namespace, reconnected, ...executed } = await client.call("statement.execute", {
               sessionId,
               sql: tab.sql,
               ...(parameters === undefined ? {} : { parameters }),
               ...paging,
+              ...limitOf(id),
             });
+            logReconnected(id, reconnected);
             const kind = statement?.kind ?? "read";
             const elapsed = dependencies.now() - statementStartedAt;
             ended({ durationMs: elapsed, outcome: "success", rowCount: rowsOf(executed), message: null });
@@ -1147,7 +1186,10 @@ export function createConsolesStore(dependencies: ConsolesDependencies) {
                 windows: sort.length > 0 ? {} : fresh.windows,
               }));
             }
-            patch(id, { transactionOpen, ...namespaceOf({ namespace }) });
+            patch(id, {
+              transactionOpen,
+              ...namespaceAfter({ namespace, ...(reconnected === undefined ? {} : { reconnected }) }),
+            });
             outcome = "succeeded";
           }
         } catch (cause) {
@@ -1268,6 +1310,7 @@ async function askAnalyse(request: AnalyseRequest): Promise<boolean> {
 export const useConsoles = createConsolesStore({
   connect: (datasourceId) => useDatasources.getState().connect(datasourceId),
   exports: useExports.getState(),
+  statementTimeout: (datasourceId) => statementTimeoutOf(datasourceById(useDatasources.getState(), datasourceId)),
   now: () => performance.now(),
   confirmDestructive: askDestructive,
   confirmAnalyse: askAnalyse,

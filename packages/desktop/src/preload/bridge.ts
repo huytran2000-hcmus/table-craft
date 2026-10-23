@@ -152,7 +152,7 @@ export interface Datasource {
   readonly readOnly: boolean;
   /** Seconds before TCP keepalive and the idle ping (decision 054); absent is 30, 0 is off. */
   readonly keepAliveSeconds?: number | undefined;
-  /** Overrides Settings → Console's statement timeout; absent follows it, 0 is no limit. */
+  /** Overrides Settings → Editor → Running's statement timeout; absent follows it, 0 is no limit. */
   readonly statementTimeoutSeconds?: number | undefined;
   readonly comment: string;
   /** The non-secret connection fields, by key. */

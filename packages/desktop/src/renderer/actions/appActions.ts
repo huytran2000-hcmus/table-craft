@@ -11,10 +11,12 @@ import {
   deleteDatasource,
 } from "@table-craft/desktop/renderer/actions/datasourceCommands.js";
 import { defineAction, type AnyAction } from "@table-craft/desktop/renderer/actions/registry.js";
+import { bridge } from "@table-craft/desktop/renderer/bridge.js";
 import { focusRegion } from "@table-craft/desktop/renderer/shell/focus.js";
 import { canRun, OUTPUT_TAB, useConsoles } from "@table-craft/desktop/renderer/state/consoles.js";
 import { useDataSourcesDialog } from "@table-craft/desktop/renderer/state/dataSourcesDialog.js";
-import { useDatasources } from "@table-craft/desktop/renderer/state/datasources.js";
+import { pluginOf, useDatasources } from "@table-craft/desktop/renderer/state/datasources.js";
+import { useModal } from "@table-craft/desktop/renderer/state/modal.js";
 import { useLayout, type ToolWindowId } from "@table-craft/desktop/renderer/state/layout.js";
 import { usePalette } from "@table-craft/desktop/renderer/state/palette.js";
 import { useTabs } from "@table-craft/desktop/renderer/state/tabs.js";
@@ -45,6 +47,7 @@ export const ACTION_IDS = {
   newDatasource: "datasource.new",
   datasourceProperties: "datasource.properties",
   duplicateDatasource: "datasource.duplicate",
+  copyDatasourceUrl: "datasource.copyUrl",
   deleteDatasource: "datasource.delete",
   connect: "datasource.connect",
   disconnect: "datasource.disconnect",
@@ -82,6 +85,10 @@ const inToolWindow = (context: ActionContext) =>
 const hasTabs = (context: ActionContext) => context.tabs.length > 0;
 const hasDatasource = (context: ActionContext) => context.datasource !== null;
 const isSaved = (context: ActionContext) => context.datasource !== null && !context.datasource.view.ephemeral;
+/** Saved, and its plugin reads connection URLs (decision 055). */
+const hasUrl = (context: ActionContext) =>
+  isSaved(context) &&
+  (pluginOf(useDatasources.getState().plugins, context.datasource?.view.pluginId ?? "")?.url ?? null) !== null;
 const isLive = (context: ActionContext) =>
   context.datasource?.connection.status === "connected" || context.datasource?.connection.status === "connecting";
 
@@ -350,6 +357,26 @@ export const APP_ACTIONS: readonly AnyAction[] = [
     run: (context) => {
       if (context.datasource !== null) {
         useDataSourcesDialog.getState().show({ kind: "duplicate", id: context.datasource.view.id });
+      }
+    },
+  }),
+  defineAction({
+    id: ACTION_IDS.copyDatasourceUrl,
+    title: "Copy as URL",
+    category: "Database",
+    icon: "copy",
+    when: hasUrl,
+    run: async (context) => {
+      if (context.datasource === null) return;
+      const answer = await bridge().datasourceUrl(context.datasource.view.id);
+      if (answer.ok) await navigator.clipboard.writeText(answer.value);
+      else {
+        await useModal.getState().ask({
+          kind: "notice",
+          title: "Could not copy the URL",
+          message: answer.error.message,
+          hint: answer.error.hint,
+        });
       }
     },
   }),

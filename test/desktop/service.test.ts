@@ -166,6 +166,58 @@ describe("datasource service", () => {
     expect(bootedConfig(dependencies)).toMatchObject({ readOnly: true });
   });
 
+  it("givenKeepAliveAndTimeout_whenSavedAndConnected_thenStoredAndKeepAliveBooted", async () => {
+    const { files, dependencies, service: datasources } = await service();
+    const saved = await datasources.save(
+      saving({ ...PG_DRAFT, keepAliveSeconds: 0, statementTimeoutSeconds: 45 }, SECRET),
+    );
+
+    await datasources.connect(saved.id, {}, WINDOW);
+
+    expect(JSON.parse(files.contents.get(`${DIRECTORY}/${DATASOURCES_FILE}`) ?? "")).toMatchObject({
+      datasources: [{ keepAliveSeconds: 0, statementTimeoutSeconds: 45 }],
+    });
+    expect(bootedConfig(dependencies)).toMatchObject({ keepAliveSeconds: 0 });
+  });
+
+  it("givenNoKeepAlive_whenConnected_thenDefaultBooted", async () => {
+    const { dependencies, service: datasources } = await service();
+    const saved = await datasources.save(saving(PG_DRAFT, SECRET));
+
+    await datasources.connect(saved.id, {}, WINDOW);
+
+    expect(bootedConfig(dependencies)).toMatchObject({ keepAliveSeconds: 30 });
+  });
+
+  it("givenPastedUrl_whenParsed_thenFieldsAndPasswordReturnedAndNothingSaved", async () => {
+    const { files, service: datasources } = await service();
+
+    const parsed = datasources.parseUrl("postgres", `postgresql://alice:${SECRET}@db:6543/sales?sslmode=require`);
+
+    expect(parsed).toEqual({
+      values: { host: "db", port: 6543, database: "sales", user: "alice", sslMode: "require" },
+      secrets: { password: SECRET },
+      ignored: [],
+    });
+    expect(files.contents.size).toBe(0);
+  });
+
+  it("givenBadUrl_whenParsed_thenDatasourceErrorWithHint", async () => {
+    const { service: datasources } = await service();
+
+    expect(() => datasources.parseUrl("postgres", "mysql://h/db")).toThrow(DatasourceError);
+  });
+
+  it("givenSavedDatasourceWithSecret_whenCopiedAsUrl_thenNoPassword", async () => {
+    const { service: datasources } = await service();
+    const saved = await datasources.save(saving(PG_DRAFT, SECRET));
+
+    const url = datasources.url(saved.id);
+
+    expect(url).toBe("postgresql://table_craft@127.0.0.1:55432/table_craft");
+    expect(url).not.toContain(SECRET);
+  });
+
   it("givenEditedDatasourceWithBlankSecret_whenTested_thenStoredSecretMergedInMain", async () => {
     const { dependencies, service: datasources } = await service();
     const saved = await datasources.save(saving(PG_DRAFT, SECRET));

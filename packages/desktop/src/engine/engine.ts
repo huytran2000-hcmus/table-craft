@@ -305,7 +305,7 @@ function timedOut(seconds: number): EngineFailure {
   return new EngineFailure({
     code: "statementTimedOut",
     message: `The statement timed out after ${String(seconds)} s and was cancelled.`,
-    hint: "Raise the statement timeout in the data source's Advanced settings, or in Settings → Console.",
+    hint: "Raise the statement timeout in the data source's Advanced settings, or in Settings → Editor → Running.",
   });
 }
 

@@ -93,6 +93,12 @@ function fakeEngine() {
         const sql = String(params.sql);
         executed.push(sql);
         bound.push(params.parameters);
+        if (sql.includes("LOST")) {
+          open = false;
+          return Promise.reject(
+            new EngineRequestError({ code: "connectionLost", message: "The connection was lost.", hint: "Run again." }),
+          );
+        }
         if (sql.includes("FAIL")) {
           return Promise.reject(
             new EngineRequestError({ code: "statementFailed", message: "syntax error", hint: "Fix the SQL." }),
@@ -116,6 +122,7 @@ function fakeEngine() {
           firstWindow: { offset: 0, rows: reads ? [[sql]] : [] },
           transactionOpen: open,
           ...(uses ? { namespace } : {}),
+          ...(sql.includes("RECONNECT") ? { reconnected: { namespace: ["public"], namespaceLost: true } } : {}),
         };
         return Promise.resolve(result);
       }
@@ -148,6 +155,7 @@ function harness(
     confirm?: boolean;
     record?: (entry: HistoryEntry) => void;
     values?: Readonly<Record<string, string | null>> | null;
+    statementTimeout?: number;
   } = {},
 ) {
   const engine = fakeEngine();
@@ -170,6 +178,7 @@ function harness(
     onDdl,
     executions: executions.getState(),
     record: options.record ?? ((entry) => recorded.push(entry)),
+    statementTimeout: () => options.statementTimeout ?? 0,
   });
   const session = () => {
     const current = store.getState().consoles.c1;
@@ -362,6 +371,46 @@ describe("console runs", () => {
     expect(session().transactionOpen).toBe(false);
     expect(session().status).toBe("disconnected");
     expect(messages().at(-1)).toBe("The session closed; its open transaction was rolled back.");
+  });
+});
+
+describe("console connection health", () => {
+  it("givenReconnectedReply_whenRun_thenOutputSaysSoAndNamespaceIsTheNewSessions", async () => {
+    const { store, session, messages } = await opened("USE archive;\nSELECT RECONNECT;");
+
+    await store.getState().run("c1", "all");
+
+    expect(messages().slice(1)).toEqual([
+      "Reconnected: the connection had been lost. The new session starts in public; the USE or search path set earlier no longer applies.",
+      "1 row retrieved in 5 ms",
+    ]);
+    expect(session().namespace).toEqual(["public"]);
+  });
+
+  it("givenOpenTransaction_whenConnectionLost_thenTransactionClosed", async () => {
+    const { store, session, messages } = await opened("BEGIN;\nSELECT LOST;");
+
+    await store.getState().run("c1", "all");
+
+    expect(messages().at(-1)).toBe("The connection was lost.");
+    expect(session().transactionOpen).toBe(false);
+  });
+
+  it("givenStatementTimeout_whenRun_thenSentWithTheStatement", async () => {
+    const { store, call } = await opened("SELECT 1;", { statementTimeout: 30 });
+
+    await store.getState().run("c1", "all");
+
+    expect(call).toHaveBeenCalledWith("statement.execute", expect.objectContaining({ timeoutSeconds: 30 }));
+  });
+
+  it("givenNoStatementTimeout_whenRun_thenNoneSent", async () => {
+    const { store, call } = await opened("SELECT 1;");
+
+    await store.getState().run("c1", "all");
+
+    const params = call.mock.calls.find(([type]) => type === "statement.execute")?.[1];
+    expect(params).not.toHaveProperty("timeoutSeconds");
   });
 });
 
