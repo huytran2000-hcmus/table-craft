@@ -1282,14 +1282,50 @@ window controls at once. In the SQL editor `⌘=`, `⌘-` and `⌘0` change the 
 NULL text and Group digits change what the grid draws and measures, nothing else (decision 032).
 The page size and Fetch All limit travel with each request (see Renderer to engine).
 
-The Settings dialog (`⌘,`; the macOS app menu's Settings…, File → Settings… elsewhere) has three
+The Settings dialog (`⌘,`; the macOS app menu's Settings…, File → Settings… elsewhere) has four
 pages: Appearance (theme, Reload Themes, Open Themes Folder, density, UI font, and under Window,
 Use system title bar with "Takes effect after restart." and a Restart Now button, `app.relaunch`,
 shown while the choice differs from the running window; it asks to close dirty tabs first, as Quit
 does, then relaunches), Editor (editor
 font, the zoom chords) and Data Editor (grid font, NULL text, Group digits, page size, Fetch All
-limit). Each page has Restore Defaults; a value outside its range is refused inline and not saved.
+limit) and Advanced (Debug logging, `log.level`, see App log and diagnostics). Each page has
+Restore Defaults; a value outside its range is refused inline and not saved.
 Keymap editing and date and time formats are not settings in v1.
+
+## App log and diagnostics
+
+Plan 017, decision 038. Main is the only writer of `<userData>/logs/table-craft.log`: one JSON
+object per line, `{ ts, level, process, scope, msg, ...fields, err? }`, where `process` is `main`,
+`renderer`, `engine:<datasourceId>` or `probe:<datasourceId>` and `err` carries name, message,
+code, stack and up to five causes. At 5 MB the file rotates to `table-craft.1.log`, keeping four older files up to `table-craft.4.log`.
+Levels are `error`, `warn`, `info` and `debug`; `log.level` (`info` by default, `debug` with
+Settings → Advanced → Debug logging) is applied by main at once, so engines and renderers send
+every record and main drops what is below the level.
+
+The engine posts `engine.log` messages over its parent port; its stdout and stderr are piped and
+logged line by line under scope `stdio`. The renderer batches records for 500 ms or 100 records
+and sends them on `log.write`, validated, each capped at 16 KB (a longer one keeps its `msg` and
+gains `truncated: true`). A request's id (`requestId`) appears on the renderer's failure and the
+engine's record for it, so one id follows a request across processes.
+
+At `info` the log has the launch (versions, platform, locale, packaged, profile folder), plugins
+loaded or unavailable, engine hosts started and exited with code and uptime, connects with the
+non-secret target fields, each statement's kind, row count, duration and outcome, transactions,
+exports, edits, Test Connection, diagnostics exports and every failure with its error chain. At
+`debug` it adds one record per engine request with its type and elapsed time. It never holds a
+password, a secret, a row value or SQL text: main redacts keys that name a secret, URL userinfo
+and every secret value it handed to an engine, in every record from every process. A database's
+own error message can still quote a value from the statement.
+
+Help → Show Log opens the Log tool window on the right stripe: the last 2,000 records newest first
+with live tail, filters for level, scope and text, Copy on each record and Reveal Log File. An
+error notice from a request has Show in Log, which opens the window filtered to that request id
+(or the message text when there is none). Help → Reveal Log File shows the file in the file
+manager. Help → Export Diagnostics… lists what it will include, asks for a place and writes
+`table-craft-diagnostics-<yyyyMMdd-HHmmss>.zip`: `logs/` (every log file), `about.json`
+(versions, platform, plugins with version and API version), `settings.json`, `datasources.json`
+without credentials and `history.json` (the last 50 runs: datasource, outcome, rows, duration,
+time, without SQL or messages). The zip writer is in-house over `node:zlib`.
 
 ## Packaging
 

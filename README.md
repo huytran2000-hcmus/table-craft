@@ -231,13 +231,25 @@ See [Shell and actions](docs/design/specification.md#shell-and-actions).
 
 ### Settings and appearance
 
-**Settings…** (`⌘,`) has pages for Appearance, Editor and Data Editor. Themes and density change
+**Settings…** (`⌘,`) has pages for Appearance, Editor, Data Editor and Advanced. Themes and density change
 live; Follow system picks Dark, Light or High contrast from the operating system. `⌘=`, `⌘-` and
 `⌘0` zoom the editor font.
 
 ![Settings and appearance](docs/media/settings.gif)
 
 See [Settings and appearance](docs/design/specification.md#settings-and-appearance).
+
+### App log and diagnostics
+
+TableCraft keeps a log of what it does: launches, connections, statements by kind, row count and
+duration, exports, engine restarts and errors. It records no passwords, no row values and no SQL
+text. **Help → Show Log** opens the Log tool window, newest first, with filters for level, scope
+and text; an error notice's **Show in Log** opens it on the records of that request. **Help →
+Export Diagnostics…** saves a zip with the logs, versions, settings, data sources without
+credentials and recent run metadata, for attaching to a bug report. Turn on **Debug logging** in
+Settings → Advanced to record every request while reproducing a problem.
+
+See [App log and diagnostics](docs/design/specification.md#app-log-and-diagnostics).
 
 ## Keyboard shortcuts
 
@@ -299,6 +311,7 @@ back to its default without affecting the others.
 | `data.groupDigits`                     | `true`, `false`                                                    | `false`       |
 | `data.pageRows`                        | 10–10,000                                                          | 500           |
 | `data.fetchAllCap`                     | 1,000–1,000,000, at least `pageRows`                               | 100,000       |
+| `log.level`                            | `info`, `debug`                                                    | `info`        |
 
 A theme of your own is a JSON file in `themes/` in the profile folder. It names a built-in theme as
 its base and overrides any of its colour tokens; it then appears as `user:<file stem>`, here
@@ -373,10 +386,11 @@ Everything is stored in one profile folder:
 | `consoles/`        | One folder per data source with its console files                         |
 | `history.sqlite`   | Query history                                                             |
 | `settings.json`    | [Settings](#settings)                                                     |
+| `logs/`            | The app log, `table-craft.log` and up to four older files of 5 MB each    |
 | `themes/`          | Your themes                                                               |
 | `plugins/`         | Your plugins                                                              |
 
-Passwords are never written to `datasources.json` or to logs, and there is no plaintext fallback:
+Passwords are never written to `datasources.json` or to the log, and there is no plaintext fallback:
 where the keychain cannot encrypt, _Forever_ is disabled. TableCraft sends nothing anywhere
 except to the databases you connect to.
 
