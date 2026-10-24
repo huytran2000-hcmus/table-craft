@@ -1,4 +1,4 @@
-import type { FormatOptions, SqlLanguage } from "@table-craft/plugin-api";
+import { FORMAT_STYLES, type FormatOptions, type SqlLanguage } from "@table-craft/plugin-api";
 import mysqlPlugin from "@table-craft/plugin-mysql";
 import postgresPlugin from "@table-craft/plugin-postgres";
 import sqlitePlugin from "@table-craft/plugin-sqlite";
@@ -68,5 +68,16 @@ describe("format (standard style)", () => {
     const script = "DELIMITER //\nCREATE PROCEDURE p() BEGIN SELECT 1; END //\nDELIMITER ;";
     expect(() => mysql.format(script, DEFAULTS)).toThrow(/DELIMITER/);
     expect(mysql.format("select 'DELIMITER //'", DEFAULTS)).toBe("SELECT\n  'DELIMITER //'");
+  });
+});
+
+describe("format: optimizer hints", () => {
+  const HINTED =
+    "select /*+ USE_INDEX(saga_context_202601, saga_context_app_id) */ * from saga_context_202601 limit 10";
+
+  it.each(FORMAT_STYLES)("given%sStyle_whenHintedSelectFormatted_thenHintStaysRightAfterTheVerb", (style) => {
+    expect(mysql.format(HINTED, { ...DEFAULTS, style })).toMatch(
+      /^SELECT\s+\/\*\+ USE_INDEX\(saga_context_202601, saga_context_app_id\) \*\//,
+    );
   });
 });
