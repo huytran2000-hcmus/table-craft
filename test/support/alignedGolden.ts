@@ -18,7 +18,7 @@ export const GOLDEN = lines(
   "       JSON_EXTRACT(reason_status, '$.metadata.bc_code')                      AS bc_code,",
   "       JSON_EXTRACT(reason_status, '$.metadata.bc_trans_status')              AS bc_trans_status,",
   "       JSON_EXTRACT(reason_status, '$.metadata.bc_trans_id')                  AS bc_trans_id,",
-  "       JSON_UNQUOTE(JSON_EXTRACT(extra_data, '$.initiator.zalopay_id'))       AS zalopay_id,",
+  "       JSON_UNQUOTE(JSON_EXTRACT(extra_data, '$.initiator.account_id'))       AS account_id,",
   "       created_at,",
   "       updated_at",
   "FROM saga_context_202607 USE INDEX (saga_context_created_at_idx)",
@@ -42,7 +42,7 @@ export const GOLDEN_ONE_LINE =
   "JSON_EXTRACT(reason_status, '$.metadata.bc_code') as bc_code, " +
   "JSON_EXTRACT(reason_status, '$.metadata.bc_trans_status') as bc_trans_status, " +
   "JSON_EXTRACT(reason_status, '$.metadata.bc_trans_id') as bc_trans_id, " +
-  "JSON_UNQUOTE(JSON_EXTRACT(extra_data, '$.initiator.zalopay_id')) as zalopay_id, " +
+  "JSON_UNQUOTE(JSON_EXTRACT(extra_data, '$.initiator.account_id')) as account_id, " +
   "created_at, updated_at from saga_context_202607 use index (saga_context_created_at_idx) " +
   "where created_at > '2026-07-09 03:00:00' and created_at < '2026-07-09 03:45:00' " +
   "and status not in ('SUCCESS') and (JSON_EXTRACT(extra_data, '$.sources[0].asset_type') in " +
@@ -56,7 +56,7 @@ export const GOLDEN_MESSY = lines(
   "JSON_EXTRACT(extra_data, '$.order.order_amount') as amount, JSON_UNQUOTE(JSON_EXTRACT(extra_data, '$.order.app_trans_id')) as app_trans_id,",
   "status, trans_status, reason_status, JSON_EXTRACT(reason_status, '$.metadata.pe_code') as pe_code,",
   "JSON_EXTRACT(reason_status, '$.metadata.bc_code') as bc_code, JSON_EXTRACT(reason_status, '$.metadata.bc_trans_status') as bc_trans_status,",
-  "JSON_EXTRACT(reason_status, '$.metadata.bc_trans_id') as bc_trans_id, JSON_UNQUOTE(JSON_EXTRACT(extra_data, '$.initiator.zalopay_id')) as zalopay_id,",
+  "JSON_EXTRACT(reason_status, '$.metadata.bc_trans_id') as bc_trans_id, JSON_UNQUOTE(JSON_EXTRACT(extra_data, '$.initiator.account_id')) as account_id,",
   "created_at, updated_at",
   "from saga_context_202607 use index(saga_context_created_at_idx)",
   "where created_at > '2026-07-09 03:00:00'",
